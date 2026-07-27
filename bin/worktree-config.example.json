@@ -1,0 +1,46 @@
+{
+  "repos": {
+    "myapp": {
+      "name": "My App",
+      "repo_path": "/Users/you/Projects/myapp",
+      "worktree_base": "/Users/you/Projects/myapp-worktrees",
+      "default_branch": "main",
+      "setup": {
+        "copy_files": [
+          ".env.development",
+          ".mcp.json",
+          "CLAUDE.md"
+        ],
+        "copy_directories": [
+          {
+            "path": ".claude",
+            "exclude": [
+              "worktrees"
+            ]
+          },
+          ".run"
+        ],
+        "dependencies": {
+          "command": "npm install",
+          "description": "Installing dependencies..."
+        }
+      }
+    },
+    "otherrepo": {
+      "name": "Other Repo",
+      "repo_path": "/Users/you/Projects/otherrepo",
+      "worktree_base": "/Users/you/Projects/otherrepo-worktrees",
+      "default_branch": "main",
+      "setup": {
+        "copy_files": [],
+        "copy_directories": []
+      }
+    }
+  },
+  "dual": {
+    "repos": [
+      "myapp",
+      "otherrepo"
+    ]
+  }
+}

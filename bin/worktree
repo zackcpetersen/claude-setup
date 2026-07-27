@@ -1,0 +1,633 @@
+#!/bin/bash
+
+# Unified Git Worktree Management Script
+# Manages worktrees across multiple repositories with configuration-driven setup.
+#
+# SETUP:
+#   1. Copy worktree-config.example.json to .worktree-config.json next to this
+#      script and edit it: one entry per repo (paths, default branch, and which
+#      untracked files/directories to copy into each new worktree).
+#   2. (Optional) To use the `cleanup` command, wire up your ticketing system -
+#      see the TICKETING INTEGRATION comment in cleanup_worktrees below.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/.worktree-config.json"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Helper functions
+error() { echo -e "${RED}Error: $1${NC}" >&2; exit 1; }
+success() { echo -e "${GREEN}✅ $1${NC}"; }
+info() { echo -e "${BLUE}$1${NC}"; }
+warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
+# Normalize branch name for use as worktree directory name (e.g., chore/foo → chore-foo)
+normalize_worktree_name() { echo "${1//\//-}"; }
+
+# Load configuration
+load_config() {
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        error "Configuration file not found: $CONFIG_FILE"
+    fi
+    
+    if ! command -v jq >/dev/null 2>&1; then
+        error "jq is required but not installed. Please install jq to use this script."
+    fi
+}
+
+# Show help
+show_help() {
+    cat << EOF
+Usage: $0 <repo|command> [action] <branch-name> [custom-worktree-name]
+
+Repository Commands (repo names come from .worktree-config.json):
+  <repo> <branch-name>                Create a worktree for <repo> from branch
+  <repo> remove <worktree-name>       Remove a worktree for <repo>
+  dual <branch-name>                  Create worktrees for the repos listed in config "dual.repos"
+  dual remove <worktree-name>         Remove worktrees from the "dual" repos
+
+General Commands:
+  list                       List all worktrees across all repositories
+  cleanup [--apply] [--all]  Clean up worktrees whose tickets are done (needs ticketing integration)
+  help                       Show this help message
+
+Examples:
+  $0 myapp PROJ-123                   # Create worktree named "PROJ-123" from branch "PROJ-123"
+  $0 myapp feature-auth               # Create worktree named "feature-auth" from branch "feature-auth"
+  $0 dual PROJ-123                    # Create worktrees for the "dual" repos from branch "PROJ-123"
+  $0 myapp main hotfix                # Create worktree named "hotfix" from branch "main"
+  $0 dual remove PROJ-123             # Remove "PROJ-123" worktrees from the "dual" repos
+  $0 list                             # List all worktrees
+
+EOF
+}
+
+# List all worktrees
+list_worktrees() {
+    info "📋 All Git Worktrees:"
+    echo
+    
+    local repos=($(jq -r '.repos | keys[]' "$CONFIG_FILE"))
+    for repo in "${repos[@]}"; do
+        local repo_path=$(jq -r ".repos[\"$repo\"].repo_path" "$CONFIG_FILE")
+        local worktree_base=$(jq -r ".repos[\"$repo\"].worktree_base" "$CONFIG_FILE")
+        local repo_name=$(jq -r ".repos[\"$repo\"].name" "$CONFIG_FILE")
+        
+        if [[ -d "$repo_path" ]]; then
+            echo "🏢 $repo_name ($repo):"
+            cd "$repo_path"
+            if git worktree list --porcelain 2>/dev/null | grep -q "worktree"; then
+                git worktree list | while read line; do
+                    if [[ $line == *"$worktree_base"* ]]; then
+                        echo "  $line"
+                    fi
+                done
+            else
+                echo "  No worktrees found"
+            fi
+            echo
+        fi
+    done
+}
+
+# Clean up worktrees whose tickets are Done
+cleanup_worktrees() {
+    local apply=false
+    local all=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --apply) apply=true; shift ;;
+            --all)   all=true; shift ;;
+            *)       error "Unknown option: $1" ;;
+        esac
+    done
+
+    # TICKETING INTEGRATION - how to hook up your ticketing system:
+    #
+    # `cleanup` decides whether a worktree is removable by asking your ticket
+    # tracker for the ticket's status. It shells out to a helper script named
+    # `ticket-status` in the same directory as this script, with the contract:
+    #
+    #     ticket-status status <TICKET-KEY>     # e.g. ticket-status status PROJ-123
+    #
+    # The helper must print the ticket's status name (e.g. "Done", "In Progress")
+    # to stdout and exit 0. A worktree is offered for removal when the status is
+    # exactly "Done" - adjust the comparison below if your tracker uses different
+    # terminal states (e.g. "Closed", "Resolved").
+    #
+    # Worktree directory names must look like ticket keys (PROJ-123) to be
+    # checked; anything else is skipped.
+    #
+    # Example helper for Jira (save as ticket-status, chmod +x, and export
+    # JIRA_EMAIL + JIRA_API_KEY in your shell profile):
+    #
+    #     #!/bin/bash
+    #     set -e
+    #     JIRA_BASE_URL="https://yourcompany.atlassian.net"   # FILL IN
+    #     : "${JIRA_EMAIL:?JIRA_EMAIL is not set}"
+    #     : "${JIRA_API_KEY:?JIRA_API_KEY is not set}"
+    #     [[ "$1" == "status" && -n "$2" ]] || { echo "Usage: $0 status <TICKET-KEY>" >&2; exit 1; }
+    #     curl -s -f -u "$JIRA_EMAIL:$JIRA_API_KEY" -H "Accept: application/json" \
+    #         "$JIRA_BASE_URL/rest/api/3/issue/$2?fields=status" | jq -r '.fields.status.name'
+    #
+    # For other trackers (Linear, GitHub Issues, etc.), any script that satisfies
+    # the same "print the status name" contract works - e.g. GitHub Issues:
+    #     gh issue view "$2" --json state -q .state
+    # (then treat "CLOSED" as done in the comparison below).
+
+    if [[ ! -x "$SCRIPT_DIR/ticket-status" ]]; then
+        error "cleanup requires a ticket-status helper at $SCRIPT_DIR/ticket-status - see the TICKETING INTEGRATION comment in this script"
+    fi
+
+    info "🔍 Scanning worktrees for done tickets..."
+    echo
+
+    local done_worktrees=()
+    local active_worktrees=()
+    local skipped_worktrees=()
+    local error_worktrees=()
+
+    local repos=($(jq -r '.repos | keys[]' "$CONFIG_FILE"))
+    for repo in "${repos[@]}"; do
+        local repo_path=$(jq -r ".repos[\"$repo\"].repo_path" "$CONFIG_FILE")
+        local worktree_base=$(jq -r ".repos[\"$repo\"].worktree_base" "$CONFIG_FILE")
+        local repo_name=$(jq -r ".repos[\"$repo\"].name" "$CONFIG_FILE")
+
+        [[ -d "$repo_path" ]] || continue
+
+        cd "$repo_path"
+
+        # Parse porcelain output for worktree paths under the worktree base
+        local wt_path=""
+        while IFS= read -r line; do
+            if [[ "$line" == "worktree "* ]]; then
+                wt_path="${line#worktree }"
+            elif [[ -z "$line" ]]; then
+                # End of worktree block — process if it's under worktree_base
+                if [[ -n "$wt_path" && "$wt_path" == "$worktree_base"/* ]]; then
+                    local wt_name
+                    wt_name=$(basename "$wt_path")
+
+                    # Extract ticket ID: prefer directory name, fall back to branch
+                    local ticket=""
+                    if [[ "$wt_name" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]]; then
+                        ticket="$wt_name"
+                    fi
+
+                    if [[ -z "$ticket" ]]; then
+                        skipped_worktrees+=("$repo|$wt_name|not a ticket")
+                        wt_path=""
+                        continue
+                    fi
+
+                    # Query ticket status via the ticket-status helper (see
+                    # TICKETING INTEGRATION comment above)
+                    local status
+                    status=$("$SCRIPT_DIR/ticket-status" status "$ticket" 2>/dev/null) || status="ERROR"
+
+                    # Adjust "Done" if your tracker's terminal status differs
+                    if [[ "$status" == "Done" ]]; then
+                        done_worktrees+=("$repo|$wt_name|$ticket|$status")
+                    elif [[ "$status" == "ERROR" ]]; then
+                        error_worktrees+=("$repo|$wt_name|$ticket|$status")
+                    else
+                        active_worktrees+=("$repo|$wt_name|$ticket|$status")
+                    fi
+                fi
+                wt_path=""
+            fi
+        done < <(git worktree list --porcelain 2>/dev/null; echo)
+    done
+
+    # Report results
+    if [[ ${#done_worktrees[@]} -gt 0 ]]; then
+        echo -e "${GREEN}Done (removable):${NC}"
+        for entry in "${done_worktrees[@]}"; do
+            IFS='|' read -r repo wt_name ticket status <<< "$entry"
+            echo "  $repo/$wt_name  ($ticket → $status)"
+        done
+        echo
+    fi
+
+    if [[ ${#active_worktrees[@]} -gt 0 ]]; then
+        echo -e "${BLUE}Active (keeping):${NC}"
+        for entry in "${active_worktrees[@]}"; do
+            IFS='|' read -r repo wt_name ticket status <<< "$entry"
+            echo "  $repo/$wt_name  ($ticket → $status)"
+        done
+        echo
+    fi
+
+    if [[ ${#skipped_worktrees[@]} -gt 0 ]]; then
+        echo -e "${YELLOW}Skipped (not a ticket):${NC}"
+        for entry in "${skipped_worktrees[@]}"; do
+            IFS='|' read -r repo wt_name reason <<< "$entry"
+            echo "  $repo/$wt_name  ($reason)"
+        done
+        echo
+    fi
+
+    if [[ ${#error_worktrees[@]} -gt 0 ]]; then
+        echo -e "${RED}Errors (kept, could not check):${NC}"
+        for entry in "${error_worktrees[@]}"; do
+            IFS='|' read -r repo wt_name ticket status <<< "$entry"
+            echo "  $repo/$wt_name  ($ticket → $status)"
+        done
+        echo
+    fi
+
+    if [[ ${#done_worktrees[@]} -eq 0 ]]; then
+        info "No done worktrees found. Nothing to clean up."
+        return 0
+    fi
+
+    if [[ "$apply" != true ]]; then
+        echo "Found ${#done_worktrees[@]} done worktree(s). Run with --apply to remove."
+        return 0
+    fi
+
+    # --apply mode: remove done worktrees
+    if [[ "$all" == true ]]; then
+        echo -n "Remove all ${#done_worktrees[@]} done worktree(s)? [y/N] "
+        read -r confirm
+        if [[ "$confirm" != [yY] ]]; then
+            info "Aborted."
+            return 0
+        fi
+
+        for entry in "${done_worktrees[@]}"; do
+            IFS='|' read -r repo wt_name ticket status <<< "$entry"
+            remove_worktree "$repo" "$wt_name"
+            echo
+        done
+    else
+        # Interactive: prompt for each
+        for entry in "${done_worktrees[@]}"; do
+            IFS='|' read -r repo wt_name ticket status <<< "$entry"
+            echo -n "Remove $repo/$wt_name ($ticket → $status)? [y/N] "
+            read -r confirm
+            if [[ "$confirm" == [yY] ]]; then
+                remove_worktree "$repo" "$wt_name"
+            else
+                info "Skipping $repo/$wt_name"
+            fi
+            echo
+        done
+    fi
+
+    success "Cleanup complete."
+}
+
+# Get repository configuration
+get_repo_config() {
+    local repo=$1
+    jq -r ".repos[\"$repo\"] // empty" "$CONFIG_FILE"
+}
+
+# Copy files and directories for worktree setup
+setup_worktree_files() {
+    local repo=$1
+    local repo_path=$2
+    local worktree_path=$3
+    
+    info "Setting up environment..."
+    
+    # Copy files
+    local copy_files=$(jq -r ".repos[\"$repo\"].setup.copy_files[]? // empty" "$CONFIG_FILE")
+    while IFS= read -r file_spec; do
+        [[ -z "$file_spec" ]] && continue
+        
+        if [[ "$file_spec" == *":"* ]]; then
+            # Handle source:destination format
+            local src="${file_spec%:*}"
+            local dest="${file_spec#*:}"
+            local dest_path="$worktree_path/$dest"
+        else
+            # Single file, same location
+            local src="$file_spec"
+            local dest_path="$worktree_path/$file_spec"
+        fi
+        
+        if [[ -f "$repo_path/$src" ]]; then
+            mkdir -p "$(dirname "$dest_path")"
+            cp "$repo_path/$src" "$dest_path"
+        fi
+    done <<< "$copy_files"
+    
+    # Copy directories
+    local num_dirs=$(jq -r ".repos[\"$repo\"].setup.copy_directories | length // 0" "$CONFIG_FILE")
+    for ((i=0; i<num_dirs; i++)); do
+        local entry=$(jq -r ".repos[\"$repo\"].setup.copy_directories[$i]" "$CONFIG_FILE")
+        local dir
+        local excludes=()
+
+        if [[ $(echo "$entry" | jq -r 'type') == "object" ]]; then
+            dir=$(echo "$entry" | jq -r '.path')
+            while IFS= read -r exc; do
+                [[ -n "$exc" ]] && excludes+=(--exclude "$exc")
+            done < <(echo "$entry" | jq -r '.exclude[]? // empty')
+        else
+            dir="$entry"
+        fi
+
+        [[ -z "$dir" ]] && continue
+        if [[ -d "$repo_path/$dir" ]]; then
+            local target_path="$worktree_path/$dir"
+
+            # Remove existing directory if it exists (to overwrite)
+            if [[ -d "$target_path" ]]; then
+                rm -rf "$target_path"
+            fi
+
+            # Copy the directory (use rsync if excludes, cp otherwise)
+            mkdir -p "$worktree_path/$(dirname "$dir")"
+            if [[ ${#excludes[@]} -gt 0 ]]; then
+                rsync -a "${excludes[@]}" "$repo_path/$dir/" "$worktree_path/$dir/"
+            else
+                cp -r "$repo_path/$dir" "$worktree_path/$dir"
+            fi
+        fi
+    done
+    
+    # Fix PyCharm/JetBrains run configurations for the worktree: run configs
+    # reference the project module by name, which matches the main repo's
+    # directory name - rewrite it to the worktree's name
+    if [[ -d "$worktree_path/.run" ]]; then
+        local worktree_name=$(basename "$worktree_path")
+        local main_module=$(basename "$repo_path")
+        find "$worktree_path/.run" -name "*.xml" -type f -exec sed -i '' "s/<module name=\"$main_module\"/<module name=\"$worktree_name\"/g" {} \;
+        info "Updated PyCharm run configurations for worktree module: $worktree_name"
+    fi
+}
+
+# Install dependencies for worktree
+install_dependencies() {
+    local repo=$1
+    local worktree_path=$2
+    
+    local dep_command=$(jq -r ".repos[\"$repo\"].setup.dependencies.command // empty" "$CONFIG_FILE")
+    local dep_desc=$(jq -r ".repos[\"$repo\"].setup.dependencies.description // empty" "$CONFIG_FILE")
+    
+    if [[ -n "$dep_command" ]]; then
+        if [[ -n "$dep_desc" ]]; then
+            info "$dep_desc"
+        fi
+        cd "$worktree_path"
+        eval "$dep_command"
+    fi
+}
+
+
+# Create worktree for a single repository
+create_worktree() {
+    local repo=$1
+    local worktree_name=$2
+    local source_branch=$3
+    
+    local config=$(get_repo_config "$repo")
+    if [[ -z "$config" ]]; then
+        error "Unknown repository: $repo"
+    fi
+    
+    local repo_path=$(jq -r ".repos[\"$repo\"].repo_path" "$CONFIG_FILE")
+    local worktree_base=$(jq -r ".repos[\"$repo\"].worktree_base" "$CONFIG_FILE")
+    local default_branch=$(jq -r ".repos[\"$repo\"].default_branch" "$CONFIG_FILE")
+    local repo_name=$(jq -r ".repos[\"$repo\"].name" "$CONFIG_FILE")
+    
+    source_branch="${source_branch:-$default_branch}"
+    local worktree_path="$worktree_base/$worktree_name"
+    
+    if [[ ! -d "$repo_path" ]]; then
+        error "Repository directory does not exist: $repo_path"
+    fi
+    
+    # Create base directory if needed
+    mkdir -p "$worktree_base"
+    
+    # Check if worktree already exists
+    if [[ -d "$worktree_path" ]]; then
+        error "Worktree directory already exists: $worktree_path"
+    fi
+    
+    info "📁 Creating $repo_name worktree: $worktree_name from branch: $source_branch"
+
+    cd "$repo_path"
+
+    # Fetch latest from origin
+    git fetch origin
+
+    # Check if the source branch exists locally or remotely
+    if git show-ref --verify --quiet "refs/heads/$source_branch"; then
+        # Local branch exists, use it
+        git worktree add "$worktree_path" "$source_branch"
+    elif git show-ref --verify --quiet "refs/remotes/origin/$source_branch"; then
+        # Remote branch exists, create worktree tracking it
+        git worktree add "$worktree_path" "$source_branch"
+    else
+        # Branch doesn't exist, create new branch from origin/default_branch
+        info "Branch '$source_branch' doesn't exist, creating from origin/$default_branch..."
+        git worktree add -b "$source_branch" "$worktree_path" "origin/$default_branch"
+    fi
+    
+    setup_worktree_files "$repo" "$repo_path" "$worktree_path"
+    install_dependencies "$repo" "$worktree_path"
+    
+    success "Worktree '$worktree_name' created successfully!"
+    echo
+    echo "Worktree location: $worktree_path"
+}
+
+# Remove worktree for a single repository
+remove_worktree() {
+    local repo=$1
+    local worktree_name=$2
+    
+    local config=$(get_repo_config "$repo")
+    if [[ -z "$config" ]]; then
+        error "Unknown repository: $repo"
+    fi
+    
+    local repo_path=$(jq -r ".repos[\"$repo\"].repo_path" "$CONFIG_FILE")
+    local worktree_base=$(jq -r ".repos[\"$repo\"].worktree_base" "$CONFIG_FILE")
+    local repo_name=$(jq -r ".repos[\"$repo\"].name" "$CONFIG_FILE")
+    local worktree_path="$worktree_base/$worktree_name"
+    
+    # Safety checks to prevent accidental deletion of main repo
+    if [[ "$worktree_name" == *".."* ]]; then
+        error "Worktree name cannot contain '..' for security reasons"
+    fi
+    
+    if [[ "$worktree_path" == "$repo_path" ]]; then
+        error "Cannot remove main repository directory: $repo_path"
+    fi
+    
+    # Ensure worktree_path is actually under worktree_base
+    if [[ "$(realpath "$worktree_path")" != "$(realpath "$worktree_base")"/* ]]; then
+        error "Worktree path must be within worktree base directory"
+    fi
+    
+    if [[ ! -d "$repo_path" ]]; then
+        error "Repository directory does not exist: $repo_path"
+    fi
+    
+    if [[ ! -d "$worktree_path" ]]; then
+        error "Worktree directory does not exist: $worktree_path"
+    fi
+    
+    info "🗑️  Removing $repo_name worktree: $worktree_name"
+    cd "$repo_path"
+    git worktree remove -f "$worktree_path"
+    
+    # Clean up any remaining directory after git removes the worktree
+    if [[ -d "$worktree_path" ]]; then
+        rm -r "$worktree_path"
+        info "Cleaned up remaining directory: $worktree_path"
+    fi
+    
+    success "Worktree '$worktree_name' removed successfully!"
+}
+
+# Handle dual repository operations
+handle_dual() {
+    local action=$1
+    local worktree_name=$2
+    local source_branch=$3
+    
+    local dual_repos=($(jq -r '.dual.repos[]' "$CONFIG_FILE"))
+    
+    if [[ "$action" == "remove" ]]; then
+        info "🗑️  Removing dual worktrees: $worktree_name"
+        echo
+        
+        local results=()
+        for repo in "${dual_repos[@]}"; do
+            if remove_worktree "$repo" "$worktree_name" 2>/dev/null; then
+                results+=("$repo:success")
+            else
+                results+=("$repo:failed")
+                warn "Failed to remove $repo worktree (may not exist)"
+            fi
+            echo
+        done
+        
+        # Summary
+        local success_count=0
+        for result in "${results[@]}"; do
+            if [[ "$result" == *":success" ]]; then
+                ((success_count++))
+            fi
+        done
+        
+        if [[ $success_count -eq ${#dual_repos[@]} ]]; then
+            success "All worktrees removed successfully!"
+        elif [[ $success_count -gt 0 ]]; then
+            warn "Partial removal completed ($success_count/${#dual_repos[@]} repos)"
+        else
+            error "No worktrees were removed"
+        fi
+    else
+        # Create action
+        info "📁 Creating dual worktrees: $worktree_name from branch: ${source_branch:-main}"
+        echo
+        
+        for repo in "${dual_repos[@]}"; do
+            if ! create_worktree "$repo" "$worktree_name" "$source_branch"; then
+                error "Failed to create $repo worktree"
+            fi
+            echo
+        done
+        
+        success "All worktrees created successfully!"
+        echo
+        echo "Worktree locations:"
+        for repo in "${dual_repos[@]}"; do
+            local worktree_base=$(jq -r ".repos[\"$repo\"].worktree_base" "$CONFIG_FILE")
+            echo "  $repo: $worktree_base/$worktree_name"
+        done
+        echo
+        echo "To remove both worktrees:"
+        echo "  $0 dual remove $worktree_name"
+    fi
+}
+
+# Main script logic
+main() {
+    load_config
+    
+    if [[ $# -eq 0 ]] || [[ "$1" == "help" ]] || [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        show_help
+        exit 0
+    fi
+    
+    if [[ "$1" == "list" ]]; then
+        list_worktrees
+        exit 0
+    fi
+
+    if [[ "$1" == "cleanup" ]]; then
+        shift
+        cleanup_worktrees "$@"
+        exit 0
+    fi
+    
+    local repo_or_cmd=$1
+    
+    if [[ "$repo_or_cmd" == "dual" ]]; then
+        local action_or_branch="$2"
+        local worktree_name="$3"
+        
+        if [[ "$action_or_branch" == "remove" ]]; then
+            # Remove action: dual remove <worktree-name>
+            if [[ -z "$worktree_name" ]]; then
+                error "worktree-name required for remove"
+            fi
+            handle_dual "remove" "$worktree_name" ""
+        else
+            # Create action: dual <branch-name> [custom-worktree-name]
+            local branch_name="$action_or_branch"
+            local custom_worktree_name="$worktree_name"
+            
+            if [[ -z "$branch_name" ]]; then
+                error "branch-name required"
+            fi
+            
+            # Use branch name as worktree name unless custom name provided
+            local final_worktree_name="${custom_worktree_name:-$(normalize_worktree_name "$branch_name")}"
+            handle_dual "create" "$final_worktree_name" "$branch_name"
+        fi
+    else
+        # Single repository
+        local repo="$repo_or_cmd"
+        local action_or_branch="$2"
+        local worktree_name="$3"
+        
+        if [[ "$action_or_branch" == "remove" ]]; then
+            # Remove action: repo remove <worktree-name>
+            if [[ -z "$worktree_name" ]]; then
+                error "worktree-name required for remove"
+            fi
+            remove_worktree "$repo" "$worktree_name"
+        else
+            # Create action: repo <branch-name> [custom-worktree-name]
+            local branch_name="$action_or_branch"
+            local custom_worktree_name="$worktree_name"
+            
+            if [[ -z "$branch_name" ]]; then
+                error "branch-name required"
+            fi
+            
+            # Use branch name as worktree name unless custom name provided
+            local final_worktree_name="${custom_worktree_name:-$(normalize_worktree_name "$branch_name")}"
+            create_worktree "$repo" "$final_worktree_name" "$branch_name"
+        fi
+    fi
+}
+
+main "$@"
