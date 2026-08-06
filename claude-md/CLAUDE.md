@@ -41,8 +41,8 @@
 These tools are available globally. Use them proactively when relevant - don't wait for the user to invoke the slash command.
 
 ### Database Access
-Use `~/bin/query_db <db> <env> "<sql>"` to query databases (read-only).
-<!-- FILL IN: list your db names, env names, and the default env here. Discover schema via information_schema before querying. -->
+Use `~/bin/query_db <env-file> "<sql>"` to query databases (read-only). Credentials live in each repo as gitignored `.env.db.<env>` files at the repo root; run from the repo root, e.g. `query_db .env.db.local "SELECT ..."`. Discover schema via information_schema before querying.
+<!-- FILL IN: note per-repo specifics (which .env.db.* files exist, which envs are production) here or in the repo's own CLAUDE.md. -->
 
 ### Start Ticket (`/start-ticket`)
 Fetches ticket context from the issue tracker and creates an implementation plan. Usage: `/start-ticket <ticket-number>`

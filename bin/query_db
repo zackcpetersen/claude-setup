@@ -1,69 +1,62 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# query_db - read-only Postgres queries against named databases/environments.
+# query_db - read-only Postgres queries, credentials supplied per-repo.
 #
-# SETUP (see SETUP.md in this repo):
-#   1. Edit the DBS and ENVS arrays below to match your databases and environments.
-#   2. For each db/env pair, create an env file at ~/bin/env_files/.env.<db>.<env>
-#      containing:
-#        DATABASE_HOST=...
-#        DATABASE_PORT=5432        # optional, defaults to 5432
-#        DATABASE_USER=...
-#        DATABASE_PASSWORD=...
-#        DATABASE_NAME=...
-#      Keep env_files out of any git repo - these are credentials.
-#   3. All queries run with default_transaction_read_only=on, so writes fail.
-
-ENV_DIR="$HOME/bin/env_files"
-
-# FILL IN: your database names and environment names
-DBS=(app warehouse)
-ENVS=(dev staging prod)
+# Usage: query_db <env-file> "<sql>"
+#
+#   env-file: path to a file containing:
+#               DATABASE_HOST=...
+#               DATABASE_PORT=5432        # optional, defaults to 5432
+#               DATABASE_USER=...
+#               DATABASE_PASSWORD=...
+#               DATABASE_NAME=...
+#   sql:      SQL query string (required)
+#
+# Convention: each repo keeps its own env files at the repo root, named
+# .env.db.<env> (e.g. .env.db.local, .env.db.cloud). They hold credentials -
+# make sure the repo's .gitignore covers them before creating one.
+#
+# All queries run with default_transaction_read_only=on, so writes fail.
 
 usage() {
   cat <<EOF
-Usage: query_db <db> <env> "<sql>"
-
-  db:   ${DBS[*]}
-  env:  ${ENVS[*]}
-  sql:  SQL query string (required)
+Usage: query_db <env-file> "<sql>"
 
 Examples:
-  query_db app staging "SELECT count(*) FROM users"
-  query_db warehouse prod "SELECT * FROM some_table LIMIT 10"
+  query_db .env.db.local "SELECT count(*) FROM users"
+  query_db .env.db.cloud "SELECT * FROM some_table LIMIT 10"
+
+The env file must define DATABASE_HOST, DATABASE_USER, DATABASE_PASSWORD,
+DATABASE_NAME (and optionally DATABASE_PORT, default 5432).
 
 All queries run in read-only mode.
 EOF
   exit 1
 }
 
-[[ $# -lt 3 ]] && usage
+[[ $# -lt 2 ]] && usage
 
-DB="$1"
-ENV="$2"
-SQL="$3"
-
-matches() {
-  local needle="$1"; shift
-  for item in "$@"; do [[ "$item" == "$needle" ]] && return 0; done
-  return 1
-}
-
-matches "$DB" "${DBS[@]}" || { echo "Error: db must be one of: ${DBS[*]} (got '$DB')" >&2; exit 1; }
-matches "$ENV" "${ENVS[@]}" || { echo "Error: env must be one of: ${ENVS[*]} (got '$ENV')" >&2; exit 1; }
-
-ENV_FILE="$ENV_DIR/.env.$DB.$ENV"
+ENV_FILE="$1"
+SQL="$2"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Error: env file not found: $ENV_FILE" >&2
-  echo "Create it with DATABASE_HOST/PORT/USER/PASSWORD/NAME (see setup notes at top of this script)." >&2
+  echo "Create it with DATABASE_HOST/PORT/USER/PASSWORD/NAME (see usage notes at top of this script)." >&2
   exit 1
 fi
 
 set -a
+# shellcheck disable=SC1090
 source "$ENV_FILE"
 set +a
+
+for var in DATABASE_HOST DATABASE_USER DATABASE_PASSWORD DATABASE_NAME; do
+  if [[ -z "${!var:-}" ]]; then
+    echo "Error: $var is not set in $ENV_FILE" >&2
+    exit 1
+  fi
+done
 
 HOST="$DATABASE_HOST"
 PORT="${DATABASE_PORT:-5432}"
@@ -74,5 +67,13 @@ export PGPASSWORD="$DATABASE_PASSWORD"
 # Read-only enforcement
 export PGOPTIONS='-c default_transaction_read_only=on'
 
-echo "Connecting to $DB ($ENV) at $HOST..."
-psql -h "$HOST" -p "$PORT" -U "$USER" -d "$DBNAME" -c "$SQL"
+# Find psql: PATH first, then Homebrew's keg-only libpq (macOS)
+if ! command -v psql >/dev/null 2>&1; then
+  for p in /opt/homebrew/opt/libpq/bin /usr/local/opt/libpq/bin; do
+    [[ -x "$p/psql" ]] && { PATH="$p:$PATH"; break; }
+  done
+fi
+command -v psql >/dev/null 2>&1 || { echo "Error: psql not found. Install it (e.g. 'brew install libpq')." >&2; exit 1; }
+
+echo "Connecting to $DBNAME at $HOST (via $ENV_FILE)..." >&2
+psql -X -v ON_ERROR_STOP=1 -h "$HOST" -p "$PORT" -U "$USER" -d "$DBNAME" -c "$SQL"

@@ -41,7 +41,7 @@ Work through these once per machine:
 
 ### `~/.claude/CLAUDE.md`
 `install.sh` copies the starter file only if you don't already have one. Open it and fill in every `FILL IN` comment:
-- Database names/envs for the query_db section
+- Per-repo notes for the query_db section (which `.env.db.*` files exist, which envs are production)
 - Any other machine-specific tools (log search, tracker MCP, etc.)
 - The Repo Conventions table (one row per repo: default branch, test command, lint command)
 
@@ -52,9 +52,11 @@ Work through these once per machine:
 - Needs your issue tracker's MCP tools available (e.g. install the Atlassian plugin for Jira, or your tracker's equivalent). No file edits required.
 
 ### `bin/query_db`
-- Edit the `DBS` and `ENVS` arrays at the top of the script.
-- For each db/env pair, create `~/bin/env_files/.env.<db>.<env>` with `DATABASE_HOST`, `DATABASE_PORT` (optional), `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_NAME`.
-- **Never commit `env_files` anywhere** - they are credentials. They live outside this repo by design.
+- No script edits needed - it's fully generic: `query_db <env-file> "<sql>"`.
+- In each repo you want to query, create gitignored `.env.db.<env>` files at the repo root (e.g. `.env.db.local`, `.env.db.cloud`) with `DATABASE_HOST`, `DATABASE_PORT` (optional, default 5432), `DATABASE_USER`, `DATABASE_PASSWORD`, `DATABASE_NAME`.
+- **Verify the repo's `.gitignore` covers them** (`git check-ignore .env.db.local`) before creating them - they are credentials. Never commit them.
+- All queries run with `default_transaction_read_only=on`, so writes fail.
+- To let Claude Code run it without prompting, add `"Bash(query_db:*)"` (plus the `~/bin/query_db` and absolute-path variants) to the `permissions.allow` list in `~/.claude/settings.json`.
 
 ### `bin/worktree`
 - Copy `bin/worktree-config.example.json` to `~/bin/.worktree-config.json` (the script looks for its config next to wherever it's invoked from, which is `~/bin` with the symlink layout). Edit it: one entry per repo with `repo_path`, `worktree_base`, `default_branch`, and which untracked files/dirs to copy into each new worktree (`copy_files` / `copy_directories`), plus an optional `dependencies.command` to run after checkout. The config stays in `~/bin`, outside this repo, since it's machine-specific.
