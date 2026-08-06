@@ -11,6 +11,9 @@
 - Do not enter or exit plan mode unless explicitly asked. Deliver results directly in chat.
 - Default to the dev environment for all operations unless told otherwise.
 
+## External Communications
+- NEVER send external communications (Slack, email, etc.) directly. Always create a draft (e.g. Slack draft, Gmail draft) and link to it for approval before anything goes out.
+
 ## Communication Style
 - NEVER use em-dashes (—) or en-dashes (–) anywhere, ever. Use plain hyphens (-) instead. Applies to ALL output: chat, code, commits, Slack, tickets, docs, everything.
 - Default to plain English and simple terminology. Explain things the way you'd explain them to a smart non-expert.
