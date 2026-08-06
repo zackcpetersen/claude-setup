@@ -1,6 +1,6 @@
 # Setup on a New Machine
 
-Everything in this repo is generic - nothing references a specific company, repo, or tracker. Anywhere something machine- or employer-specific is needed, it's marked `FILL IN`. This file walks through all of them.
+Everything in this repo is generic - nothing references a specific company, repo, or tracker. (One exception: `skills/write-as-zack/` is personal by nature - it hardcodes the Notion soul-page URL and needs the Notion MCP connector to pull it live; without Notion it falls back to the rules baked into the skill.) Anywhere something machine- or employer-specific is needed, it's marked `FILL IN`. This file walks through all of them.
 
 ## What's in here
 
@@ -10,6 +10,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `commands/babysit-pr.md` | `/babysit-pr` - unblock all open PRs (CI, comments, conflicts) | `~/.claude/commands/` (symlink) |
 | `commands/self-review.md` | `/self-review` - subagent review of a plan or implementation | `~/.claude/commands/` (symlink) |
 | `commands/start-ticket.md` | `/start-ticket` - fetch ticket, produce implementation plan | `~/.claude/commands/` (symlink) |
+| `skills/write-as-zack/` | `/write-as-zack` - write in Zack's voice, pulled live from the Notion soul page | `~/.claude/skills/` (symlink) |
 | `bin/query_db` | Read-only Postgres query helper | `~/bin/` (symlink) |
 | `bin/worktree` | Multi-repo git worktree manager | `~/bin/` (symlink) |
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |

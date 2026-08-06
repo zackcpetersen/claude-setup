@@ -28,6 +28,13 @@ for f in "$REPO_DIR"/commands/*.md; do
   link "$f" "$HOME/.claude/commands/$(basename "$f")"
 done
 
+echo "Installing Claude Code skills to ~/.claude/skills ..."
+mkdir -p "$HOME/.claude/skills"
+for d in "$REPO_DIR"/skills/*/; do
+  d="${d%/}"
+  link "$d" "$HOME/.claude/skills/$(basename "$d")"
+done
+
 echo "Installing helper scripts to ~/bin ..."
 mkdir -p "$HOME/bin"
 for f in "$REPO_DIR"/bin/query_db "$REPO_DIR"/bin/worktree; do
