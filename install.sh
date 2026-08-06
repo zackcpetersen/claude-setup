@@ -35,6 +35,12 @@ for d in "$REPO_DIR"/skills/*/; do
   link "$d" "$HOME/.claude/skills/$(basename "$d")"
 done
 
+echo "Installing Claude Code output styles to ~/.claude/output-styles ..."
+mkdir -p "$HOME/.claude/output-styles"
+for f in "$REPO_DIR"/output-styles/*.md; do
+  link "$f" "$HOME/.claude/output-styles/$(basename "$f")"
+done
+
 echo "Installing helper scripts to ~/bin ..."
 mkdir -p "$HOME/bin"
 for f in "$REPO_DIR"/bin/query_db "$REPO_DIR"/bin/worktree; do

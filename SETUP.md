@@ -11,6 +11,9 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `commands/self-review.md` | `/self-review` - subagent review of a plan or implementation | `~/.claude/commands/` (symlink) |
 | `commands/start-ticket.md` | `/start-ticket` - fetch ticket, produce implementation plan | `~/.claude/commands/` (symlink) |
 | `skills/write-as-zack/` | `/write-as-zack` - write in Zack's voice, pulled live from the Notion soul page | `~/.claude/skills/` (symlink) |
+| `output-styles/direct.md` | "Direct" output style - answer first, plain english, no hedging | `~/.claude/output-styles/` (symlink) |
+| `output-styles/momentum.md` | "Momentum" output style - Direct plus progress tracking and one next action | `~/.claude/output-styles/` (symlink) |
+| `output-styles/tldr.md` | "TLDR" output style - 1-3 sentences, expands only on request | `~/.claude/output-styles/` (symlink) |
 | `bin/query_db` | Read-only Postgres query helper | `~/bin/` (symlink) |
 | `bin/worktree` | Multi-repo git worktree manager | `~/bin/` (symlink) |
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
@@ -76,4 +79,4 @@ And install the plugins you use via `/plugin` (at minimum, your tracker's plugin
 
 ## 5. Sanity check
 
-Open Claude Code anywhere and run `/pr`, `/babysit-pr`, `/self-review`, or `/start-ticket` - they should appear in the slash-command list. `worktree help` and `query_db` with no args should both print usage.
+Open Claude Code anywhere and run `/pr`, `/babysit-pr`, `/self-review`, or `/start-ticket` - they should appear in the slash-command list. `/output-style` should list Direct, Momentum, and TLDR. `worktree help` and `query_db` with no args should both print usage.
