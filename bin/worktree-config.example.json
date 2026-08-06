@@ -8,6 +8,8 @@
       "setup": {
         "copy_files": [
           ".env.development",
+          ".env.db.local",
+          ".env.db.cloud",
           ".mcp.json",
           "CLAUDE.md"
         ],
