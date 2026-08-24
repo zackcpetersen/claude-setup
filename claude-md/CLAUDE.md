@@ -26,6 +26,11 @@
 ## Plan Review
 - After drafting any implementation plan, run `/self-review` before presenting. Always include the self-review output so the user can see it was done.
 
+## Model discipline
+- Agent dispatches must pass an explicit model - sonnet for mechanical work (renames, test fixes, doc edits, batch operations), opus for complex implementation, exploration, planning, verification, and code review - unless the agent's definition pins a model in its frontmatter (then omit it; an explicit arg would override the pin). The top session model is for orchestration, judgment, and reviewing returned work only. Enforced by the agent-model-guard PreToolUse hook (see SETUP.md).
+- Start mostly-mechanical sessions (PR babysitting, /loop polling, spec repairs, doc passes) on opus (`claude --model opus` or `/model` first); reserve the top model for architecture, triage, security judgment, and planning sessions.
+- Delegate tool-heavy loops (serial test runs, migration batches, CI polling) to background sonnet agents so their tool output never enters the main loop's context.
+
 ## CI/CD Policy
 - Do NOT run tests or linters locally unless explicitly asked. Push and let CI handle verification.
 - The "Before Submitting Work" checklist is for final pre-PR review only, not after every edit.

@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# PreToolUse hook for the Agent tool: on Fable sessions, deny subagent
+# dispatches that omit `model` when the agent definition has no model pin.
+# Unpinned dispatches silently inherit the (expensive) session model.
+#
+# Wire-up lives in ~/.claude/settings.json (machine-local); see SETUP.md.
+# This hook must never brick dispatching: every error path exits 0 (allow).
+
+set -u
+
+allow() { exit 0; }
+
+command -v jq >/dev/null 2>&1 || allow
+
+input=$(cat) || allow
+
+subagent_type=$(printf %s "$input" | jq -r '.tool_input.subagent_type // empty' 2>/dev/null) || allow
+model=$(printf %s "$input" | jq -r '.tool_input.model // empty' 2>/dev/null) || allow
+transcript=$(printf %s "$input" | jq -r '.transcript_path // empty' 2>/dev/null) || allow
+
+# Explicit model given: fine.
+[[ -n "$model" ]] && allow
+
+# Forks always run on the parent model and ignore overrides; requiring a
+# model here would teach a false rule.
+[[ "$subagent_type" == "fork" ]] && allow
+
+# Only police Fable sessions. On opus/sonnet sessions, omitting `model` is
+# harmless inheritance. Fail open if the transcript can't be read.
+[[ -z "$transcript" || ! -r "$transcript" ]] && allow
+session_model=$(tail -50 "$transcript" 2>/dev/null \
+  | jq -rs '[.[] | select(.type == "assistant") | .message.model // empty] | last // empty' 2>/dev/null) || allow
+[[ "$session_model" == claude-fable* ]] || allow
+
+# Namespaced plugin agent types (contain ":") can't be resolved by path;
+# pass them through rather than guess.
+[[ "$subagent_type" == *:* ]] && allow
+
+# Pinned agent definitions are authoritative; an explicit model arg would
+# OVERRIDE the pin, so omitting it there is correct.
+for dir in "${CLAUDE_PROJECT_DIR:-}" "$HOME/.claude"; do
+  [[ -n "$dir" && -f "$dir/.claude/agents/$subagent_type.md" ]] \
+    && grep -q '^model:' "$dir/.claude/agents/$subagent_type.md" 2>/dev/null && allow
+  [[ -n "$dir" && -f "$dir/agents/$subagent_type.md" ]] \
+    && grep -q '^model:' "$dir/agents/$subagent_type.md" 2>/dev/null && allow
+done
+
+# Built-in types (general-purpose, Explore, Plan, claude, absent) and
+# unpinned custom agents land here: deny with guidance.
+cat <<'JSON'
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Pass an explicit model (sonnet=mechanical, opus=complex/review) - unpinned dispatches inherit Fable. Omit model only for agents whose definition pins one."}}
+JSON
+exit 0

@@ -75,6 +75,26 @@ Work through these once per machine:
 }
 ```
 
+### agent-model-guard hook (model discipline)
+
+`bin/agent-model-guard` (symlinked to `~/bin` by install.sh) denies Agent dispatches that omit `model` on Fable sessions when the agent definition has no `model:` pin - unpinned dispatches silently inherit the expensive session model. The hook wiring is machine-local; add it to `hooks.PreToolUse` in `~/.claude/settings.json`:
+
+```json
+{
+  "matcher": "Agent|Task",
+  "hooks": [
+    {
+      "type": "command",
+      "command": "bash \"$HOME/bin/agent-model-guard\"",
+      "timeout": 15,
+      "statusMessage": "Checking subagent model discipline"
+    }
+  ]
+}
+```
+
+Without this snippet the guard script exists but never runs.
+
 And install the plugins you use via `/plugin` (at minimum, your tracker's plugin for `/start-ticket`).
 
 ## 5. Sanity check

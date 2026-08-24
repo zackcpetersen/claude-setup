@@ -43,7 +43,7 @@ done
 
 echo "Installing helper scripts to ~/bin ..."
 mkdir -p "$HOME/bin"
-for f in "$REPO_DIR"/bin/query_db "$REPO_DIR"/bin/worktree; do
+for f in "$REPO_DIR"/bin/query_db "$REPO_DIR"/bin/worktree "$REPO_DIR"/bin/agent-model-guard; do
   chmod +x "$f"
   link "$f" "$HOME/bin/$(basename "$f")"
 done
