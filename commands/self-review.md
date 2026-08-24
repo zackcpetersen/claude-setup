@@ -3,7 +3,7 @@ description: Self-review a plan or implementation for pattern violations, unnece
 allowed-tools: Agent, Bash, Read
 ---
 
-Dispatch a subagent to run this review. The subagent starts fresh -- it hasn't seen the conversation and won't be biased toward the work it's reviewing.
+Dispatch a subagent to run this review. The subagent starts fresh -- it hasn't seen the conversation and won't be biased toward the work it's reviewing. Dispatch it with `model: "opus"` (omitting the model on unpinned agent types inherits the session model).
 
 **Review mode:** If `$ARGUMENTS` is provided, treat it as the review scope (e.g., "plan", "implementation", or a specific focus area). Otherwise infer from context -- if there's a diff on the branch, it's implementation review; if there's an unexecuted plan, it's plan review.
 
