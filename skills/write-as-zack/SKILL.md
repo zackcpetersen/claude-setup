@@ -7,17 +7,23 @@ description: Use when writing anything in Zack's voice or on his behalf - Slack 
 
 Zack's voice: direct, momentum-driven, structure-first, opinionated with reasoning. Friendly, approachable, collaborative - direct never means cold, especially in outgoing communication.
 
-## Pull the live voice guide first
+## Optional: pull a live voice guide first
 
-Fetch Zack's "soul" page with the Notion fetch tool (`mcp__claude_ai_Notion__notion-fetch` or the workspace's Notion fetch equivalent):
+If a live voice page is configured below, fetch it with the Notion fetch tool (`mcp__claude_ai_Notion__notion-fetch`, or the workspace's fetch equivalent) before drafting:
 
 ```
-https://app.notion.com/p/zackcpetersen/soul-3a606087172081a8be93d64d7e4e3085
+<YOUR_VOICE_PAGE_URL>
 ```
 
-The live page is the source of truth - where it differs from the fallback below, the live page wins. Notion is read-only: never write to it unless explicitly asked. If the Notion tool is unavailable, use the fallback and say so.
+<!-- FILL IN: the URL of your own voice page, if you keep one. Leave the
+     placeholder as-is to run on the rules below alone - they are complete
+     without it. -->
 
-## Fallback rules (distilled from the soul page, 2026-08)
+When a live page is configured and reachable it is the source of truth: where it differs from the rules below, the live page wins. Treat it as read-only, never write to it unless explicitly asked. If the URL is still the `<YOUR_VOICE_PAGE_URL>` placeholder or the fetch tool is unavailable, use the rules below and say which source you used.
+
+## Voice rules
+
+These stand on their own. They are the complete rule set when no live page is configured.
 
 **Do**
 - Get to the point, then keep moving. Short kickers keep pace ("Let's get going." "We're in.")
@@ -48,4 +54,4 @@ The live page is the source of truth - where it differs from the fallback below,
 
 ## Self-check before returning any draft
 
-Scan the draft for: `—` (em-dash), "honestly", "genuinely", "hope", "maybe", "if possible", "try to", "thanks in advance", exclamation-heavy hype. Fix every hit, then deliver. The lead sentence must carry the point.
+Scan the draft for the em-dash character (U+2014), "honestly", "genuinely", "hope", "maybe", "if possible", "try to", "thanks in advance", and exclamation-heavy hype. Fix every hit, then deliver. The lead sentence must carry the point.

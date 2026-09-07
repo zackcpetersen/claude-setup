@@ -43,7 +43,7 @@ As part of the plan, include a **Test Strategy** section. Determine what testing
 The test strategy should cover:
 - **Unit/integration tests** to add or update
 - **Manual verification steps** to confirm the change works end-to-end
-- **Test data setup** needed (e.g., finding a suitable claim or record)
+- **Test data setup** needed (e.g., finding a suitable existing record)
 
 Include relevant skills or tools when they apply:
 - `query_db` — if the ticket involves database changes, migrations, or data validation, include read-only queries to verify data correctness

@@ -1,0 +1,21 @@
+# Claude Code settings are machine-local and can hold secrets (tokens in the
+# env block), so they are never committed here. See SETUP.md.
+settings.json
+settings.local.json
+.claude/settings.json
+.claude/settings.local.json
+
+# Credentials. query_db reads these; they must never be committed.
+.env
+.env.*
+!.env.example
+
+# Machine-local worktree config (real repo paths). Commit the .example instead.
+.worktree-config.json
+bin/.worktree-config.json
+
+# install.sh backs up displaced files as <name>.bak
+*.bak
+
+# OS noise
+.DS_Store

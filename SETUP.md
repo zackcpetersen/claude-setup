@@ -1,6 +1,6 @@
 # Setup on a New Machine
 
-Everything in this repo is generic - nothing references a specific company, repo, or tracker. (One exception: `skills/write-as-zack/` is personal by nature - it hardcodes the Notion soul-page URL and needs the Notion MCP connector to pull it live; without Notion it falls back to the rules baked into the skill.) Anywhere something machine- or employer-specific is needed, it's marked `FILL IN`. This file walks through all of them.
+Everything in this repo is generic - nothing references a specific company, repo, or tracker. Anywhere something machine- or employer-specific is needed, it's marked `FILL IN`. This file walks through all of them.
 
 ## What's in here
 
@@ -10,7 +10,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `commands/babysit-pr.md` | `/babysit-pr` - unblock all open PRs (CI, comments, conflicts) | `~/.claude/commands/` (symlink) |
 | `commands/self-review.md` | `/self-review` - subagent review of a plan or implementation | `~/.claude/commands/` (symlink) |
 | `commands/start-ticket.md` | `/start-ticket` - fetch ticket, produce implementation plan | `~/.claude/commands/` (symlink) |
-| `skills/write-as-zack/` | `/write-as-zack` - write in Zack's voice, pulled live from the Notion soul page | `~/.claude/skills/` (symlink) |
+| `skills/write-as-zack/` | `write-as-zack` skill - writing-voice rules, with an optional live voice page | `~/.claude/skills/` (symlink) |
 | `output-styles/direct.md` | "Direct" output style - answer first, plain english, no hedging | `~/.claude/output-styles/` (symlink) |
 | `output-styles/momentum.md` | "Momentum" output style - Direct plus progress tracking and one next action | `~/.claude/output-styles/` (symlink) |
 | `output-styles/tldr.md` | "TLDR" output style - 1-3 sentences, expands only on request | `~/.claude/output-styles/` (symlink) |
@@ -53,6 +53,9 @@ Work through these once per machine:
 
 ### `commands/start-ticket.md`
 - Needs your issue tracker's MCP tools available (e.g. install the Atlassian plugin for Jira, or your tracker's equivalent). No file edits required.
+
+### `skills/write-as-zack/SKILL.md`
+- One `FILL IN`: `<YOUR_VOICE_PAGE_URL>`, an optional link to a voice guide the skill fetches with the Notion MCP tool before drafting. Leave the placeholder alone to run on the rules written into the skill, which are complete on their own. The rules are Zack's; edit them to describe your own voice.
 
 ### `bin/query_db`
 - No script edits needed - it's fully generic: `query_db <env-file> "<sql>"`.
