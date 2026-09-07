@@ -95,9 +95,9 @@ Once the PR is created, automatically monitor it until CI is green. Do not retur
 3. Repeat until the loop terminates via one of the conditions above.
 
 **Rules for the loop:**
-- Wait for the full CI run to settle before invoking /babysit-pr — pushing fixes while other required checks are still pending wastes a CI cycle.
+- Wait for the full CI run to settle before invoking /babysit-pr - pushing fixes while other required checks are still pending wastes a CI cycle.
 - Required checks are typically `test`, `integration-test`, `lint`, `types`, and `review`. Treat anything marked required by branch protection as required.
-- Never merge automatically, even when CI is green — surface "ready to merge" to the user.
+- Never merge automatically, even when CI is green - surface "ready to merge" to the user.
 - Never force-push or skip checks; defer to /babysit-pr's safety rules.
 
 ## Quality Checks
@@ -109,7 +109,7 @@ Before committing, verify:
 - Commit message follows the required format
 - No sensitive information (secrets, API keys) is being committed
 - Changes are logically grouped and atomic
-- **NEVER stage or commit lock files (`poetry.lock`, `package-lock.json`, `Gemfile.lock`, etc.) or `.gitignore`** unless the user explicitly asked for it — skip these files when staging even if they appear in `git status`
+- **NEVER stage or commit lock files (`poetry.lock`, `package-lock.json`, `Gemfile.lock`, etc.) or `.gitignore`** unless the user explicitly asked for it - skip these files when staging even if they appear in `git status`
 
 Before creating PR:
 - Branch is pushed to remote

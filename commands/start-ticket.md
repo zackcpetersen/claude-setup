@@ -46,11 +46,11 @@ The test strategy should cover:
 - **Test data setup** needed (e.g., finding a suitable existing record)
 
 Include relevant skills or tools when they apply:
-- `query_db` — if the ticket involves database changes, migrations, or data validation, include read-only queries to verify data correctness
-- Any project-specific E2E testing skills — if the ticket touches features they cover
-- Log search tooling — if the ticket is a bug fix or requires verifying runtime behavior after deploy
+- `query_db` - if the ticket involves database changes, migrations, or data validation, include read-only queries to verify data correctness
+- Any project-specific E2E testing skills - if the ticket touches features they cover
+- Log search tooling - if the ticket is a bug fix or requires verifying runtime behavior after deploy
 
-Only reference skills that are relevant to the specific ticket — not every ticket needs all of them.
+Only reference skills that are relevant to the specific ticket - not every ticket needs all of them.
 
 ### Step 4: Exit Plan Mode
 
