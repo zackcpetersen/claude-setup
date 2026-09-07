@@ -62,3 +62,13 @@ If the review finds issues:
 
 **Plan phase:** fix the plan before presenting. Note what the self-review caught and what changed.
 **Implementation phase:** fix the code before presenting. Note what was caught and changed, or flag items that need discussion.
+
+## Plan-gate marker (plan reviews only)
+
+A PreToolUse hook blocks ExitPlanMode unless a self-review has been recorded. After completing a **plan** review (findings applied or none found), unlock the gate by running:
+
+```bash
+mkdir -p ~/.claude/plan-reviews && touch ~/.claude/plan-reviews/"$(printf %s "$PWD" | shasum -a 256 | cut -c1-16)"
+```
+
+The marker is consumed by the next ExitPlanMode and expires after 2 hours, so each new plan needs a fresh review. Skip this step for implementation reviews.

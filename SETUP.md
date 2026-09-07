@@ -98,6 +98,26 @@ Work through these once per machine:
 
 Without this snippet the guard script exists but never runs.
 
+### Plan gate hook (self-review before any plan)
+
+`/self-review` records a marker file under `~/.claude/plan-reviews/` when a plan review completes. This hook denies `ExitPlanMode` unless a marker exists for the current project and is under two hours old, then consumes it, so every new plan needs a fresh review. Add it to `hooks.PreToolUse` in `~/.claude/settings.json`:
+
+```json
+{
+  "matcher": "ExitPlanMode",
+  "hooks": [
+    {
+      "type": "command",
+      "command": "input=$(cat); cwd=$(printf %s \"$input\" | jq -r '.cwd // empty'); h=$(printf %s \"$cwd\" | shasum -a 256 | cut -c1-16); d=\"$HOME/.claude/plan-reviews\"; f=\"$d/$h\"; find \"$d\" -type f -mmin +120 -delete 2>/dev/null; if [ -n \"$cwd\" ] && [ -f \"$f\" ]; then rm -f \"$f\"; else echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Plan gate: no /self-review pass recorded for this project. Run /self-review on the plan, apply the findings, then call ExitPlanMode again.\"}}'; fi",
+      "timeout": 15,
+      "statusMessage": "Checking for a self-review pass"
+    }
+  ]
+}
+```
+
+Requires `jq`. The marker is keyed on a hash of the project directory, so one review unlocks one plan in one project.
+
 And install the plugins you use via `/plugin` (at minimum, your tracker's plugin for `/start-ticket`).
 
 ## 5. Sanity check
