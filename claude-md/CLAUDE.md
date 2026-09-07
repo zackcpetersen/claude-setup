@@ -15,7 +15,7 @@
 - NEVER send external communications (Slack, email, etc.) directly. Always create a draft (e.g. Slack draft, Gmail draft) and link to it for approval before anything goes out.
 
 ## Communication Style
-- NEVER use em-dashes ( - ) or en-dashes (–) anywhere, ever. Use plain hyphens (-) instead. Applies to ALL output: chat, code, commits, Slack, tickets, docs, everything.
+- NEVER use em-dashes or en-dashes anywhere, ever. Use plain hyphens (-) instead. Applies to ALL output: chat, code, commits, Slack, tickets, docs, everything.
 - Default to plain English and simple terminology. Explain things the way you'd explain them to a smart non-expert.
 - "Dumb things down" by default - favor short, clear sentences over jargon-heavy or deeply technical explanations.
 - When a technical term is unavoidable, briefly say what it means in everyday language.

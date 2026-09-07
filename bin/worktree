@@ -170,7 +170,7 @@ cleanup_worktrees() {
             if [[ "$line" == "worktree "* ]]; then
                 wt_path="${line#worktree }"
             elif [[ -z "$line" ]]; then
-                # End of worktree block — process if it's under worktree_base
+                # End of worktree block - process if it's under worktree_base
                 if [[ -n "$wt_path" && "$wt_path" == "$worktree_base"/* ]]; then
                     local wt_name
                     wt_name=$(basename "$wt_path")
