@@ -1,0 +1,15 @@
+{
+  "name": "claude-setup",
+  "owner": {
+    "name": "Zack Petersen",
+    "url": "https://github.com/zackcpetersen"
+  },
+  "description": "Zack Petersen's personal Claude Code plugins, from the claude-setup repo.",
+  "plugins": [
+    {
+      "name": "model-discipline",
+      "source": "./plugins/model-discipline",
+      "description": "Keeps expensive-model spend on judgment work: a PreToolUse guard that denies unpinned subagent dispatches, an always-on session rules block, and a playbook skill for dispatch and session hygiene."
+    }
+  ]
+}

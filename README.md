@@ -1,6 +1,6 @@
 # claude-setup
 
-My personal [Claude Code](https://claude.com/claude-code) setup, kept in one repo so it is portable to any machine: slash commands, a writing skill, output styles, helper scripts, a PreToolUse hook, and a generic user-level `CLAUDE.md`. Everything here is generic - machine-, employer-, and person-specific values are marked `FILL IN` rather than baked in, so it is meant to be cloned and adapted, not used verbatim.
+My personal [Claude Code](https://claude.com/claude-code) setup, kept in one repo so it is portable to any machine: slash commands, a writing skill, output styles, helper scripts, a plugin, and a generic user-level `CLAUDE.md`. Everything here is generic - machine-, employer-, and person-specific values are marked `FILL IN` rather than baked in, so it is meant to be cloned and adapted, not used verbatim.
 
 **To set up a new machine, follow [SETUP.md](SETUP.md).** It covers prerequisites, the install script, and every `FILL IN` in order.
 
@@ -43,7 +43,11 @@ Symlinked into `~/bin`, so keep `~/bin` on your `PATH`.
 
 - **`query_db`** - Read-only Postgres queries: `query_db <env-file> "<sql>"`. Credentials are supplied per repo through a gitignored `.env.db.<env>` file rather than being stored here, and every query runs with `default_transaction_read_only=on`, so writes fail rather than needing to be trusted not to happen.
 - **`worktree`** - Git worktree manager across several repos, driven by a machine-local `.worktree-config.json` (start from [bin/worktree-config.example.json](bin/worktree-config.example.json)). It creates and removes worktrees, copies the untracked files a fresh checkout needs (env files, `.mcp.json`, `.claude/`), runs your dependency install, and can clean up worktrees whose tickets are done once you supply a `ticket-status` helper for your tracker.
-- **`agent-model-guard`** - A PreToolUse hook for the Agent tool. On sessions running an expensive model, it denies subagent dispatches that omit `model` when the agent's own definition has no `model:` pin, because an unpinned dispatch silently inherits the expensive session model. It fails open on every error path, so it cannot break dispatching. The hook only runs once you wire it into `hooks.PreToolUse` in `~/.claude/settings.json`; the snippet is in [SETUP.md](SETUP.md).
+- **`agent-model-guard`** - No longer symlinked from here. It ships as part of the `model-discipline` plugin; see [Plugin (`plugins/`)](#plugin-plugins) below.
+
+## Plugin (`plugins/`)
+
+- **`model-discipline`** - Keeps expensive-model spend on judgment work. It bundles the `agent-model-guard` PreToolUse hook (denies subagent dispatches that omit `model` on an expensive session when the agent definition has no pin), a short rules block injected at session start, and a `playbook` skill with the full dispatch-and-session reference. Installed with `/plugin install model-discipline@claude-setup` rather than by `install.sh`. Full description: [plugins/model-discipline/README.md](plugins/model-discipline/README.md).
 
 ## Templates (`claude-md/`)
 
@@ -52,7 +56,7 @@ Symlinked into `~/bin`, so keep `~/bin` on your `PATH`.
 
 ## A note on settings
 
-`~/.claude/settings.json` is deliberately not in this repo. It can hold secrets in its `env` block, and its hook wiring is machine-local. [SETUP.md](SETUP.md) lists the pieces worth recreating by hand.
+`~/.claude/settings.json` is deliberately not in this repo. It can hold secrets in its `env` block, and values like the session model are machine-local. The model-discipline hooks now come from the plugin, so nothing needs pasting for those; the plan-gate hook is still a settings.json snippet. [SETUP.md](SETUP.md) lists the pieces worth recreating by hand.
 
 ## License
 

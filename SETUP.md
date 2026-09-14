@@ -17,6 +17,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `bin/query_db` | Read-only Postgres query helper | `~/bin/` (symlink) |
 | `bin/worktree` | Multi-repo git worktree manager | `~/bin/` (symlink) |
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
+| `plugins/model-discipline/` | `model-discipline` plugin - the agent-model-guard hook, a SessionStart rules block, and the `playbook` skill | `/plugin install`, see section 4 |
 | `claude-md/CLAUDE.md` | Generic user-level Claude Code preferences | copied to `~/.claude/CLAUDE.md` if absent |
 | `install.sh` | Does the linking/copying above | - |
 
@@ -78,25 +79,33 @@ Work through these once per machine:
 }
 ```
 
-### agent-model-guard hook (model discipline)
+### model-discipline plugin (the agent-model-guard hook)
 
-`bin/agent-model-guard` (symlinked to `~/bin` by install.sh) denies Agent dispatches that omit `model` on Fable sessions when the agent definition has no `model:` pin - unpinned dispatches silently inherit the expensive session model. The hook wiring is machine-local; add it to `hooks.PreToolUse` in `~/.claude/settings.json`:
+The guard is a PreToolUse hook on the `Agent` tool. On a session running an expensive model, it denies subagent dispatches that omit `model` when the agent definition has no `model:` pin - an unpinned dispatch silently inherits the expensive session model. It ships as a plugin, so there is no hook JSON to paste. Full description: [plugins/model-discipline/README.md](plugins/model-discipline/README.md).
 
-```json
-{
-  "matcher": "Agent|Task",
-  "hooks": [
-    {
-      "type": "command",
-      "command": "bash \"$HOME/bin/agent-model-guard\"",
-      "timeout": 15,
-      "statusMessage": "Checking subagent model discipline"
-    }
-  ]
-}
+Install it from GitHub:
+
+```
+/plugin marketplace add zackcpetersen/claude-setup
+/plugin install model-discipline@claude-setup
 ```
 
-Without this snippet the guard script exists but never runs.
+Or from your local clone, if you are testing your own edits:
+
+```
+/plugin marketplace add ~/Projects/claude-setup
+/plugin install model-discipline@claude-setup
+```
+
+Restart Claude Code afterwards - hooks load at session start.
+
+Notes:
+
+- **Remove any hand-pasted `Agent|Task` entry from `hooks.PreToolUse` in `~/.claude/settings.json`.** Earlier versions of this file told you to wire the guard in by hand. A plugin hook and an identical settings.json hook both fire, so leaving the old entry runs the guard twice.
+- `CLAUDE_EXPENSIVE_MODEL_PREFIX` sets which session model the guard polices. Default `claude-fable`; set it to `claude-opus` if opus is your top tier.
+- **The session model is a user-settings value; no plugin can set it.** If you want the top model by default, put `"model": "claude-fable-5-1[1m]"` in `~/.claude/settings.json` yourself.
+- Both the local-path and GitHub registrations use the marketplace name `claude-setup`, so run `/plugin marketplace remove claude-setup` before switching between them.
+- Installed plugins are cached copies under `~/.claude/plugins/cache/`, not live links. After editing the guard, run `/plugin marketplace update claude-setup` and reinstall - or run `claude --plugin-dir ~/Projects/claude-setup/plugins/model-discipline` while you iterate.
 
 ### Plan gate hook (self-review before any plan)
 
@@ -123,3 +132,11 @@ And install the plugins you use via `/plugin` (at minimum, your tracker's plugin
 ## 5. Sanity check
 
 Open Claude Code anywhere and run `/pr`, `/babysit-pr`, `/self-review`, or `/start-ticket` - they should appear in the slash-command list. `/output-style` should list Direct, Momentum, and TLDR. `worktree help` and `query_db` with no args should both print usage.
+
+For the plugin, open a fresh session and check:
+
+- `/plugin list` shows `model-discipline` enabled, and the session's context includes the model-discipline rules block.
+- On a session running the expensive model, an `Agent` dispatch with no `model` is denied with the guard's message; `model: "sonnet"` goes through.
+- `bash plugins/model-discipline/tests/agent-model-guard.test.sh` prints `5/5 passed.`
+
+If you set this repo up before the plugin existed, delete the leftover `~/bin/agent-model-guard` symlink by hand - `install.sh` no longer creates it, but it also never removes links it has stopped iterating over.

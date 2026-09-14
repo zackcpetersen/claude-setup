@@ -1,0 +1,11 @@
+{
+  "name": "model-discipline",
+  "description": "Keeps expensive-model spend on judgment work: a PreToolUse guard that denies unpinned subagent dispatches, an always-on session rules block, and a playbook skill for dispatch and session hygiene.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Zack Petersen"
+  },
+  "homepage": "https://github.com/zackcpetersen/claude-setup",
+  "repository": "https://github.com/zackcpetersen/claude-setup",
+  "license": "MIT"
+}

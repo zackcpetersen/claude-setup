@@ -43,7 +43,7 @@ done
 
 echo "Installing helper scripts to ~/bin ..."
 mkdir -p "$HOME/bin"
-for f in "$REPO_DIR"/bin/query_db "$REPO_DIR"/bin/worktree "$REPO_DIR"/bin/agent-model-guard; do
+for f in "$REPO_DIR"/bin/query_db "$REPO_DIR"/bin/worktree; do
   chmod +x "$f"
   link "$f" "$HOME/bin/$(basename "$f")"
 done
@@ -57,3 +57,4 @@ fi
 
 echo
 echo "Done. Remaining manual steps are listed in SETUP.md."
+echo "Install the model-discipline plugin (the agent-model-guard hook): see SETUP.md section 4."

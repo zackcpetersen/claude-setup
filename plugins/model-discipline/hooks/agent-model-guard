@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# PreToolUse hook for the Agent tool: on Fable sessions, deny subagent
-# dispatches that omit `model` when the agent definition has no model pin.
-# Unpinned dispatches silently inherit the (expensive) session model.
+# PreToolUse hook for the Agent tool: on sessions running an expensive model,
+# deny subagent dispatches that omit `model` when the agent definition has no
+# model pin. Unpinned dispatches silently inherit the session model.
 #
-# Wire-up lives in ~/.claude/settings.json (machine-local); see SETUP.md.
+# Wire-up ships with the model-discipline plugin (hooks/hooks.json); nothing
+# needs to be pasted into settings.json.
+# Set CLAUDE_EXPENSIVE_MODEL_PREFIX to match whichever model your top tier is
+# (default: claude-fable).
 # This hook must never brick dispatching: every error path exits 0 (allow).
 
 set -u
@@ -25,12 +28,13 @@ transcript=$(printf %s "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
 # model here would teach a false rule.
 [[ "$subagent_type" == "fork" ]] && allow
 
-# Only police Fable sessions. On opus/sonnet sessions, omitting `model` is
+# Only police expensive sessions. On cheaper sessions, omitting `model` is
 # harmless inheritance. Fail open if the transcript can't be read.
+prefix="${CLAUDE_EXPENSIVE_MODEL_PREFIX:-claude-fable}"
 [[ -z "$transcript" || ! -r "$transcript" ]] && allow
-session_model=$(tail -50 "$transcript" 2>/dev/null \
+session_model=$(tail -200 "$transcript" 2>/dev/null \
   | jq -rs '[.[] | select(.type == "assistant") | .message.model // empty] | last // empty' 2>/dev/null) || allow
-[[ "$session_model" == claude-fable* ]] || allow
+[[ "$session_model" == "$prefix"* ]] || allow
 
 # Namespaced plugin agent types (contain ":") can't be resolved by path;
 # pass them through rather than guess.
@@ -48,6 +52,6 @@ done
 # Built-in types (general-purpose, Explore, Plan, claude, absent) and
 # unpinned custom agents land here: deny with guidance.
 cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Pass an explicit model (sonnet=mechanical, opus=complex/review) - unpinned dispatches inherit Fable. Omit model only for agents whose definition pins one."}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Pass an explicit model (sonnet=mechanical, opus=complex/review) - unpinned dispatches inherit the session model. Omit model only for agents whose definition pins one."}}
 JSON
 exit 0
