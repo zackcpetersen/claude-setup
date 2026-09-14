@@ -98,6 +98,13 @@ Or from your local clone, if you are testing your own edits:
 ```
 
 Restart Claude Code afterwards - hooks load at session start.
+The same two steps from a plain shell, for scripts or an agent doing the setup for you:
+
+```bash
+claude plugin marketplace add zackcpetersen/claude-setup
+claude plugin install model-discipline@claude-setup
+```
+
 
 Notes:
 

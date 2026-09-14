@@ -30,6 +30,13 @@ Both registrations use the marketplace name `claude-setup`, so run `/plugin mark
 
 **If you previously hand-wired `agent-model-guard` into `~/.claude/settings.json`, remove that `hooks.PreToolUse` entry.** A plugin hook and an identical settings.json hook both fire, so you would get the guard twice.
 
+The same two steps from a plain shell, for scripts or an agent doing the setup for you:
+
+```bash
+claude plugin marketplace add zackcpetersen/claude-setup
+claude plugin install model-discipline@claude-setup
+```
+
 ## Configuration
 
 `CLAUDE_EXPENSIVE_MODEL_PREFIX` sets which session model the guard polices. It defaults to `claude-fable`; set it to `claude-opus` if opus is your top tier.
