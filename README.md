@@ -2,7 +2,7 @@
 
 My personal [Claude Code](https://claude.com/claude-code) setup, kept in one repo so it is portable to any machine: slash commands, a writing skill, output styles, helper scripts, a plugin, and a generic user-level `CLAUDE.md`. Everything here is generic - machine-, employer-, and person-specific values are marked `FILL IN` rather than baked in, so it is meant to be cloned and adapted, not used verbatim.
 
-**To set up a new machine, follow [SETUP.md](SETUP.md).** It covers prerequisites, the install script, and every `FILL IN` in order.
+**To set up a new machine, follow [SETUP.md](SETUP.md).** It covers prerequisites, the install script, and every `FILL IN` in order. Already set up? See "Updating an existing machine" in SETUP.md after each `git pull`.
 
 ## Install
 
@@ -18,7 +18,7 @@ cd claude-setup
 
 Installed to `~/.claude/commands/`, available in every project.
 
-- **`/pr`** - Commits the current work with a `[TICKET] type: description` message, pushes the branch, and opens a pull request filled out from the repo's `.github/pull_request_template.md`. It then polls CI and does not hand back control until the checks have settled, escalating to `/babysit-pr` on failure. It never merges on its own.
+- **`/pr`** - Commits the current work with a `[TICKET] type: description` message, pushes the branch, and opens a pull request filled out from the repo's `.github/pull_request_template.md`. It then runs a self code review of the PR (the built-in `/code-review` skill in a background opus agent, `--review-effort` to change the level) while polling CI, and hands CI failures and review findings to `/babysit-pr` together for one approval and one push. It never merges on its own.
 - **`/babysit-pr`** - Scans all of your open PRs, works out what is blocking each one (failing CI, unresolved review comments including bot reviews, merge conflicts, a stale branch), and fixes what it safely can. Its central rule is to wait for every required check to reach a terminal state before pushing a fix, since each push restarts CI from zero. It asks before merging or force-pushing.
 - **`/self-review`** - Dispatches a fresh subagent to review a plan or an implementation against correctness, existing patterns, simplification, duplication, scope, tradeoffs, and reversibility. The subagent has not seen the conversation, so it is not biased toward the work it is reviewing. It reports only problems.
 - **`/start-ticket`** - Takes a ticket number, pulls the ticket's description and acceptance criteria from your issue tracker's MCP tools, explores the codebase, and produces an implementation plan with a test strategy before presenting it for approval.

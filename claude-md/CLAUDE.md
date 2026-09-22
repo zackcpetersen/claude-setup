@@ -9,10 +9,13 @@
 - Prefer separate Bash tool calls over compound commands (&&, ||, ;). Only chain commands when there's a true dependency (e.g., `cd dir && make`).
 - When asked to install, run, or fix something - do it directly. Don't autonomously explore the codebase or create plans unless asked. Act first, explain briefly after.
 - Do not enter or exit plan mode unless explicitly asked. Deliver results directly in chat.
-- Default to the dev environment for all operations unless told otherwise.
+- Default to dev environment for all operations unless told otherwise.
+<!-- FILL IN: any per-tool exceptions to the default environment, e.g. "database queries default to staging" -->
 
 ## External Communications
-- NEVER send external communications (Slack, email, etc.) directly. Always create a draft (e.g. Slack draft, Gmail draft) and link to it for approval before anything goes out.
+- Slack and email: NEVER send directly. Create a draft (e.g. `slack_send_message_draft`, an email draft) and link to it for approval before anything goes out.
+- GitHub PR comments and issue tracker comments have no draft mechanism: get explicit per-item approval before posting. This covers `/babysit-pr` reply and reminder comments.
+<!-- FILL IN: any pre-approved channels -->
 
 ## Communication Style
 - NEVER use em-dashes or en-dashes anywhere, ever. Use plain hyphens (-) instead. Applies to ALL output: chat, code, commits, Slack, tickets, docs, everything.
@@ -25,6 +28,7 @@
 
 ## Plan Review
 - After drafting any implementation plan, run `/self-review` before presenting. Always include the self-review output so the user can see it was done.
+- Write every plan so it can be executed from a fresh context after clearing: include all interview decisions, exact paths and commands, source locations, what not to touch, and verification steps. Assume the executor has not seen the conversation.
 
 ## Model discipline
 - Agent dispatches must pass an explicit model - sonnet for mechanical work (renames, test fixes, doc edits, batch operations), opus for complex implementation, exploration, planning, verification, and code review - unless the agent's definition pins a model in its frontmatter (then omit it; an explicit arg would override the pin). The top session model is for orchestration, judgment, and reviewing returned work only. Enforced by the model-discipline plugin (SETUP.md section 4).
@@ -51,11 +55,17 @@ These tools are available globally. Use them proactively when relevant - don't w
 Use `~/bin/query_db <env-file> "<sql>"` to query databases (read-only). Credentials live in each repo as gitignored `.env.db.<env>` files at the repo root; run from the repo root, e.g. `query_db .env.db.local "SELECT ..."`. Discover schema via information_schema before querying.
 <!-- FILL IN: note per-repo specifics (which .env.db.* files exist, which envs are production) here or in the repo's own CLAUDE.md. -->
 
+### Issue Tracker
+<!-- FILL IN -->
+- Tracker: <Jira | Linear | GitHub Issues>, via <MCP plugin name>
+- Ticket URL format: <base url>/<TICKET>
+- Write operations (create, update, comment, transition) require user confirmation.
+
 ### Start Ticket (`/start-ticket`)
 Fetches ticket context from the issue tracker and creates an implementation plan. Usage: `/start-ticket <ticket-number>`
 
 ### Finalize PR (`/pr`)
-Commits changes and creates pull requests. Handles commit message formatting (`[TICKET] type: description`), branch management, and PR creation using the repo's PR template.
+Commits changes and creates pull requests. Handles commit message formatting (`[TICKET] type: description`), branch management, and PR creation using the repo's PR template. After the PR is created it runs a self code review (`/code-review` on opus, default `medium`, override with `--review-effort`) in the background while CI runs, then applies CI fixes and review findings together in one approved push.
 
 <!-- FILL IN: add sections for any other machine-specific tools here (log search, ticket tracker MCP, etc.) -->
 

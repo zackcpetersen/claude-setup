@@ -1,12 +1,12 @@
 # Setup on a New Machine
 
-Everything in this repo is generic - nothing references a specific company, repo, or tracker. Anywhere something machine- or employer-specific is needed, it's marked `FILL IN`. This file walks through all of them.
+Everything in this repo is generic - nothing references a specific company, repo, or tracker. Commands are fully generic and read machine-specific values from `~/.claude/CLAUDE.md`. `FILL IN` markers remain only in `claude-md/`, `skills/write-as-zack/`, and `bin/worktree`. This file walks through all of them.
 
 ## What's in here
 
 | Path | What it is | Installed to |
 |---|---|---|
-| `commands/pr.md` | `/pr` - commit, create PR, babysit CI until green | `~/.claude/commands/` (symlink) |
+| `commands/pr.md` | `/pr` - commit, create PR, self code review + babysit CI until green | `~/.claude/commands/` (symlink) |
 | `commands/babysit-pr.md` | `/babysit-pr` - unblock all open PRs (CI, comments, conflicts) | `~/.claude/commands/` (symlink) |
 | `commands/self-review.md` | `/self-review` - subagent review of a plan or implementation | `~/.claude/commands/` (symlink) |
 | `commands/start-ticket.md` | `/start-ticket` - fetch ticket, produce implementation plan | `~/.claude/commands/` (symlink) |
@@ -27,6 +27,7 @@ Symlinks mean edits made on any machine land in this repo's working tree - commi
 
 - Claude Code installed and logged in
 - `gh` CLI installed and authenticated (`gh auth login`) - needed by `/pr` and `/babysit-pr`
+- The built-in `/code-review` skill (ships with Claude Code) - needed by `/pr`'s self review step
 - `jq` - needed by `worktree`
 - `psql` - needed by `query_db`
 - Make sure `~/bin` is on your `PATH`
@@ -39,6 +40,50 @@ cd claude-setup
 ./install.sh
 ```
 
+## Updating an existing machine
+
+Run this after `git pull` whenever commands or CLAUDE.md sections changed.
+
+1. Symlink the commands. `./install.sh` also relinks `~/bin/query_db` and
+   `~/bin/worktree`; if yours are older customized copies, it moves them to
+   `.bak` and replaces them with the generic versions. To link commands only:
+
+   ```bash
+   for f in "$PWD"/commands/*.md; do
+     dest="$HOME/.claude/commands/$(basename "$f")"
+     if [ -e "$dest" ] && [ ! -L "$dest" ]; then mv "$dest" "$dest.bak"; fi
+     ln -sfn "$f" "$dest"
+   done
+   ```
+
+   Regular files are moved to `<name>.bak`. Commands that exist only on this
+   machine are not touched.
+2. Diff `~/.claude/CLAUDE.md` against `claude-md/CLAUDE.md`. Copy over every
+   section the repo has that yours lacks, and fill in each FILL IN with this
+   machine's values. Work through the changelog below for the ones that need
+   action.
+3. Recreate any settings.json snippets from section 4 that you do not have.
+4. Confirm: `ls -la ~/.claude/commands/` shows symlinks into the repo, and
+   `/pr`, `/babysit-pr`, `/self-review`, `/start-ticket` appear exactly once
+   in the slash command list.
+5. For each `.bak`: `diff <name>.bak <name>`. If the `.bak` has anything the
+   repo file lacks, port it into the repo file and commit. Only then delete
+   the `.bak`. Re-running the link step will not create a new `.bak`, so do
+   not delete before diffing.
+
+### Changelog: changes that need per-machine action
+
+Newest first. Only entries that need a manual step; delete entries older
+than 6 months.
+
+- 2026-09-22: CLAUDE.md gained `### Issue Tracker` (tracker, MCP plugin,
+  ticket URL format, write-confirmation rule). `/pr` and `/start-ticket`
+  read it instead of hardcoding values. Add it to your CLAUDE.md.
+- 2026-09-22: `/pr` runs a background self code review (`--review-effort`,
+  default medium, opus). Copy the updated `### Finalize PR (/pr)` paragraph
+  from `claude-md/CLAUDE.md` into yours. Needs the built-in `/code-review`
+  skill (ships with Claude Code). No other setup.
+
 ## 3. Fill-in checklist
 
 Work through these once per machine:
@@ -46,11 +91,9 @@ Work through these once per machine:
 ### `~/.claude/CLAUDE.md`
 `install.sh` copies the starter file only if you don't already have one. Open it and fill in every `FILL IN` comment:
 - Per-repo notes for the query_db section (which `.env.db.*` files exist, which envs are production)
+- The Issue Tracker section (tracker, MCP plugin, ticket URL format)
 - Any other machine-specific tools (log search, tracker MCP, etc.)
 - The Repo Conventions table (one row per repo: default branch, test command, lint command)
-
-### `commands/pr.md`
-- One `FILL IN`: the ticket tracker base URL used in PR descriptions (search for `YOUR_TRACKER_BASE_URL`).
 
 ### `commands/start-ticket.md`
 - Needs your issue tracker's MCP tools available (e.g. install the Atlassian plugin for Jira, or your tracker's equivalent). No file edits required.

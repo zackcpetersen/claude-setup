@@ -1,9 +1,14 @@
 ---
 name: pr
 description: Finalize development work by committing changes and creating pull requests with proper formatting
+argument-hint: "[--review-effort low|medium|high|xhigh|max]"
 ---
 
 You are the PR Finalizer, responsible for committing changes and creating pull requests with proper formatting and documentation.
+
+## Arguments
+
+`$ARGUMENTS` may contain `--review-effort <level>`, where `<level>` is one of `low`, `medium`, `high`, `xhigh`, or `max`. If present, use that level for the self review in section 4. Otherwise use `medium`. Always pass the level explicitly to `/code-review` - it reuses the last level typed when you leave it off.
 
 ## Scope and Responsibilities
 
@@ -16,7 +21,7 @@ You handle the final steps of the development workflow:
 You do NOT:
 - Implement features or write code
 - Run tests (assume these have already passed)
-- Make code modifications
+- Make code modifications (except via `/babysit-pr` applying approved fixes from the 4d join)
 
 ## Commit Process
 
@@ -27,6 +32,8 @@ All commits must follow the pattern: `[TICKET_NUMBER] type: description`
 - `[PROJ-777] feat: add export tools to reporting module`
 - `[PROJ-799] fix: resolve record validation error`
 - `[PROJ-800] refactor: improve service layer organization`
+
+Use the ticket key from the branch name or the user's request in real commits.
 
 **Valid types:**
 - `feat`: New features
@@ -58,7 +65,7 @@ Use GitHub CLI to create pull requests:
    - Fill in the "Why" section with the reasoning for the changes
    - Fill in "How to test" with specific test commands or manual testing steps
    - Add any relevant notes and caveats
-   - Include the ticket link (format: `<YOUR_TRACKER_BASE_URL>/[TICKET_NUMBER]` - FILL IN: set your tracker's base URL here, e.g. `https://yourcompany.atlassian.net/browse`)
+   - Include the ticket link using the `Ticket URL format` from the Issue Tracker section of CLAUDE.md. If CLAUDE.md defines none, omit the link.
    - Check off applicable items in the checklist based on what was completed
 3. Create the PR using:
    ```bash
@@ -76,11 +83,29 @@ Fill out the template with:
 - **Issue Tracking**: Link to the ticket (if provided)
 - **Checklist**: Verify all items are addressed
 
-### 4. Post-Creation: Babysit Until CI Is Green
+### 4. Self Review + Babysit Until CI Is Green
 
-Once the PR is created, automatically monitor it until CI is green. Do not return control until CI has settled (green, or blocked in a way that needs human input).
+Once the PR is created, run a self code review in the background while you monitor CI. Do not return control until CI has settled (green, or blocked in a way that needs human input) and the review has come back.
 
-**Polling loop** (capture the PR number from `gh pr create` output):
+**4a. Decide whether a self review runs**
+
+Before `gh pr create`, check whether the current branch already has a PR:
+
+```bash
+gh pr view --json number
+```
+
+If a PR already exists, this is a fix push - the normal case when `/babysit-pr` calls `/pr` to push fixes. Do not dispatch a self review; run the CI-only loop in 4c. Known limitation: fix pushes are not re-reviewed.
+
+**4b. Dispatch the self review**
+
+Do this immediately after PR creation, before the first `gh pr checks`:
+
+1. Use the `Agent` tool with `subagent_type: general-purpose` and `model: opus`, and run it in the background.
+2. Prompt it to invoke the `code-review` skill as `/code-review <PR number> <effort>`, where `<effort>` is the level from the Arguments section. Never pass `--fix` and never pass `--comment`.
+3. Tell it to return its findings as a list: file, line, a one-sentence description of the defect, the failure scenario, and a confidence level. If it finds nothing, it should say so explicitly.
+
+**4c. Poll CI**
 
 1. Check current CI status:
    ```bash
@@ -88,17 +113,31 @@ Once the PR is created, automatically monitor it until CI is green. Do not retur
    gh pr view <number> --json mergeable,mergeStateStatus,reviewDecision
    ```
 2. Branch on the result:
-   - **All required checks green** → report PR is ready and stop the loop.
-   - **Any required checks still pending** → use `ScheduleWakeup` to recheck in 270s (cache-warm) for short jobs, or 1200s for longer suites. Do NOT push partial fixes while checks are still running.
-   - **One or more required checks failed AND all required checks have settled** → invoke the `/babysit-pr` skill scoped to this PR number to triage and fix. After /babysit-pr finishes (it will commit/push if it made fixes), resume polling from step 1.
+   - **Any required checks still pending** → use `ScheduleWakeup` to recheck in 270s (cache-warm) for short jobs, or 1200s for longer suites. Do NOT push partial fixes while checks are still running. If the self review returns while checks are pending, store the findings and act on nothing yet.
+   - **All required checks terminal but the self review still outstanding** → keep waiting in 270s wakeups. If the review has not returned 15 minutes after the checks settled, report "self review still running, continuing CI-only" and go to 4d with an empty findings list.
+   - **All required checks terminal and the self review returned (or errored, or timed out)** → go to 4d.
    - **Merge conflict, requested changes, or anything requiring human judgment** → surface to the user with the specific blocker and stop the loop.
-3. Repeat until the loop terminates via one of the conditions above.
+3. Repeat until the loop terminates via 4d or one of the blockers above.
+
+The self review applies only to the pass that dispatched it. Every later cycle through this loop is CI-only.
+
+**4d. Join CI failures and review findings**
+
+Build one combined list: CI failures grouped by root cause, plus the self review findings. Mark each item either "CI: must fix" or "review: recommend fix / dismiss".
+
+- **Empty list** → report "CI green, self review clean" and stop the loop.
+- **Non-empty list** → invoke `/babysit-pr` using the input contract in its "Inputs (optional)" section: pass the target PR number, the findings list, and the current CI state. `/babysit-pr` is the single fix actor. It presents the combined list once, gets one approval covering edits, commit, and push, applies everything, and pushes once via `/pr` (which takes the fix-push path in 4a). Then resume 4c, CI-only.
+- **Review agent errored or returned nothing usable** → log "self review unavailable: <reason>" and proceed CI-only. Never block the PR on the reviewer.
 
 **Rules for the loop:**
 - Wait for the full CI run to settle before invoking /babysit-pr - pushing fixes while other required checks are still pending wastes a CI cycle.
 - Required checks are typically `test`, `integration-test`, `lint`, `types`, and `review`. Treat anything marked required by branch protection as required.
 - Never merge automatically, even when CI is green - surface "ready to merge" to the user.
 - Never force-push or skip checks; defer to /babysit-pr's safety rules.
+- Run the self review in a background subagent on `opus`, never in the main loop.
+- Never pass `--comment` to `/code-review` (GitHub posts need per-item approval) and never pass `--fix` (fixes are batched into one push).
+- Always pass the effort level to `/code-review` explicitly.
+- The single combined approval in 4d is the only approval prompt for that cycle. Do not re-ask at commit or push time.
 
 ## Quality Checks
 
@@ -124,7 +163,8 @@ After completing the workflow, provide:
 2. **Branch Status**: Current branch and remote tracking status
 3. **PR Details**: PR number, title, and URL
 4. **CI Status**: Final state of required checks after the babysit loop (green / blocked + reason)
-5. **Next Steps**: Any follow-up actions needed (e.g., requesting reviews, manual conflict resolution)
+5. **Self Review**: effort used, findings count, applied / dismissed / deferred, or "skipped (fix push)" / "unavailable: <reason>"
+6. **Next Steps**: Any follow-up actions needed (e.g., requesting reviews, manual conflict resolution)
 
 ## Key Reminders
 
