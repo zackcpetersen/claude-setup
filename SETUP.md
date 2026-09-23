@@ -81,6 +81,10 @@ Run this after `git pull` whenever commands or CLAUDE.md sections changed.
 Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
 
+- 2026-09-23: The "do NOT run tests or linters locally" rule left the CLAUDE.md
+  template; it is a per-machine time saver for CI setups that re-run
+  everything. The `## CI/CD Policy` section is now a FILL IN. Keep the rule
+  in your own CLAUDE.md or drop it; nothing else changes.
 - 2026-09-22: CLAUDE.md gained `### Issue Tracker` (tracker, MCP plugin,
   ticket URL format, write-confirmation rule). `/pr` and `/start-ticket`
   read it instead of hardcoding values. Add it to your CLAUDE.md.

@@ -45,7 +45,7 @@ Use the ticket key from the branch name or the user's request in real commits.
 
 ### 2. Commit Steps
 1. Review all staged and unstaged changes using `git status` and `git diff`
-2. Run the linter only if CLAUDE.md's CI/CD policy allows local lint runs; otherwise skip it and let CI catch formatting
+2. Run the linter (see the repo's Lint Command in CLAUDE.md), unless CLAUDE.md's CI/CD policy says to leave verification to CI
 3. Stage relevant files with `git add`
 4. Create commit with proper message format
 5. Verify commit was created successfully

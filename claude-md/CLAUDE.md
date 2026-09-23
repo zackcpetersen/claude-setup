@@ -38,7 +38,9 @@
 - Dispatching a subagent on the top model is allowed for genuine judgment calls (security triage, adversarial verification, an architecture review a cheaper model would fumble) - budget is the constraint, not a ban. Upgrading a pinned agent's model for one dispatch is safe; downgrading it is not, because the pin is the author's floor. `fork` always runs on the parent model and ignores any model you pass.
 
 ## CI/CD Policy
-- Do NOT run tests or linters locally unless explicitly asked. Push and let CI handle verification.
+<!-- FILL IN: machine-specific. Leave empty to run tests and lint locally before pushing (the default in "Before Submitting Work" below).
+     If your CI re-runs everything anyway and local runs only cost time, add:
+     "Do NOT run tests or linters locally unless explicitly asked. Push and let CI handle verification." -->
 - The "Before Submitting Work" checklist is for final pre-PR review only, not after every edit.
 
 ## Git and Version Control
