@@ -19,6 +19,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
 | `plugins/model-discipline/` | `model-discipline` plugin - the agent-model-guard hook, a SessionStart rules block, and the `playbook` skill | `/plugin install`, see section 4 |
 | `claude-md/CLAUDE.md` | Generic user-level Claude Code preferences | copied to `~/.claude/CLAUDE.md` if absent |
+| `claude-md/MANIFESTO.md` | "The Ten Laws" design-philosophy template to drop into any repo | copy into a repo by hand, fill in the examples |
 | `install.sh` | Does the linking/copying above | - |
 
 Symlinks mean edits made on any machine land in this repo's working tree - commit and push to back them up.
@@ -44,9 +45,13 @@ cd claude-setup
 
 Run this after `git pull` whenever commands or CLAUDE.md sections changed.
 
-1. Symlink the commands. `./install.sh` also relinks `~/bin/query_db` and
-   `~/bin/worktree`; if yours are older customized copies, it moves them to
-   `.bak` and replaces them with the generic versions. To link commands only:
+1. Relink. Pick one:
+   - `./install.sh` relinks everything: commands, skills, output styles, and
+     the `~/bin` scripts. Existing regular files are moved to `<name>.bak`.
+     If your `~/bin/query_db` or `~/bin/worktree` are older customized copies,
+     this replaces them with the generic versions, so check first.
+   - Or link only the commands (mirror the loop for `skills/*/` and
+     `output-styles/*.md` if those changed too):
 
    ```bash
    for f in "$PWD"/commands/*.md; do
@@ -56,20 +61,20 @@ Run this after `git pull` whenever commands or CLAUDE.md sections changed.
    done
    ```
 
-   Regular files are moved to `<name>.bak`. Commands that exist only on this
-   machine are not touched.
+   Commands that exist only on this machine are not touched either way.
 2. Diff `~/.claude/CLAUDE.md` against `claude-md/CLAUDE.md`. Copy over every
    section the repo has that yours lacks, and fill in each FILL IN with this
    machine's values. Work through the changelog below for the ones that need
    action.
-3. Recreate any settings.json snippets from section 4 that you do not have.
+3. Open section 4 below and compare each snippet against the `hooks` block
+   of `~/.claude/settings.json`. Paste in any that are missing or differ.
 4. Confirm: `ls -la ~/.claude/commands/` shows symlinks into the repo, and
    `/pr`, `/babysit-pr`, `/self-review`, `/start-ticket` appear exactly once
    in the slash command list.
 5. For each `.bak`: `diff <name>.bak <name>`. If the `.bak` has anything the
    repo file lacks, port it into the repo file and commit. Only then delete
-   the `.bak`. Re-running the link step will not create a new `.bak`, so do
-   not delete before diffing.
+   the `.bak`. A `.bak` is only ever written when a regular file is replaced,
+   so once the link exists no later run will recreate it. Diff before deleting.
 
 ### Changelog: changes that need per-machine action
 

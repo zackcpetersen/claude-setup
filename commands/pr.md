@@ -45,7 +45,7 @@ Use the ticket key from the branch name or the user's request in real commits.
 
 ### 2. Commit Steps
 1. Review all staged and unstaged changes using `git status` and `git diff`
-2. Run linter to format code and fix issues (check project for specific linting commands)
+2. Run the linter only if CLAUDE.md's CI/CD policy allows local lint runs; otherwise skip it and let CI catch formatting
 3. Stage relevant files with `git add`
 4. Create commit with proper message format
 5. Verify commit was created successfully
@@ -101,9 +101,10 @@ If a PR already exists, this is a fix push - the normal case when `/babysit-pr` 
 
 Do this immediately after PR creation, before the first `gh pr checks`:
 
-1. Use the `Agent` tool with `subagent_type: general-purpose` and `model: opus`, and run it in the background.
-2. Prompt it to invoke the `code-review` skill as `/code-review <PR number> <effort>`, where `<effort>` is the level from the Arguments section. Never pass `--fix` and never pass `--comment`.
+1. Use the `Agent` tool with `subagent_type: general-purpose` and `model: opus`. Do not wait on it inline; it runs in the background and its result arrives as a task notification while you poll CI.
+2. Prompt it to invoke the `code-review` skill as `/code-review <effort> <PR number>`, where `<effort>` is the level from the Arguments section. The level must come first: the skill reads its first token as the effort level and anything else as the target, so `/code-review 501 high` silently ignores `high`. Never pass `--fix` and never pass `--comment`.
 3. Tell it to return its findings as a list: file, line, a one-sentence description of the defect, the failure scenario, and a confidence level. If it finds nothing, it should say so explicitly.
+4. The skill forks its own background reviewer, and that reviewer's findings may arrive as a task notification to you directly rather than inside the wrapper agent's reply. Treat either as the review result. The reviewer runs on the wrapper's model, so `model: opus` on the wrapper is what puts the review on opus.
 
 **4c. Poll CI**
 
@@ -113,8 +114,8 @@ Do this immediately after PR creation, before the first `gh pr checks`:
    gh pr view <number> --json mergeable,mergeStateStatus,reviewDecision
    ```
 2. Branch on the result:
-   - **Any required checks still pending** → use `ScheduleWakeup` to recheck in 270s (cache-warm) for short jobs, or 1200s for longer suites. Do NOT push partial fixes while checks are still running. If the self review returns while checks are pending, store the findings and act on nothing yet.
-   - **All required checks terminal but the self review still outstanding** → keep waiting in 270s wakeups. If the review has not returned 15 minutes after the checks settled, report "self review still running, continuing CI-only" and go to 4d with an empty findings list.
+   - **Any required checks still pending** → use `ScheduleWakeup` (or the session's equivalent wait tool if that name is unavailable) to recheck in 270s (cache-warm) for short jobs, or 1200s for longer suites. Do NOT push partial fixes while checks are still running. If the self review returns while checks are pending, store the findings and act on nothing yet.
+   - **All required checks terminal but the self review still outstanding** → keep waiting in 270s wakeups. If the review has not returned 15 minutes after the checks settled (measured from CI settle, not from dispatch), report "self review still running, continuing CI-only" and go to 4d with an empty findings list.
    - **All required checks terminal and the self review returned (or errored, or timed out)** → go to 4d.
    - **Merge conflict, requested changes, or anything requiring human judgment** → surface to the user with the specific blocker and stop the loop.
 3. Repeat until the loop terminates via 4d or one of the blockers above.

@@ -7,13 +7,15 @@ description: Use when writing anything in Zack's voice or on his behalf - Slack 
 
 Zack's voice: direct, momentum-driven, structure-first, opinionated with reasoning. Friendly, approachable, collaborative - direct never means cold, especially in outgoing communication.
 
-## Optional: pull a live voice guide first
+## Pull the live voice guide first (when one is configured)
 
-If the user's CLAUDE.md has a `### Writing voice` section with a voice page URL, fetch that page with the Notion fetch tool available in this workspace before drafting.
+If the user's CLAUDE.md has a section whose heading starts with `### Writing voice` and it lists a voice page URL, fetch that page before drafting. Use the Notion fetch tool (its name ends in `notion-fetch`; load it with ToolSearch if it is deferred).
 
 When a live page is configured and reachable it is the source of truth: where it differs from the rules below, the live page wins. Treat it as read-only, never write to it unless explicitly asked. If CLAUDE.md lists no voice page or the fetch tool is unavailable, use the rules below and say which source you used.
 
 ## Voice rules
+
+- Spell out acronyms the first time they appear.
 
 These stand on their own. They are the complete rule set when no live page is configured.
 

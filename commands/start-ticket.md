@@ -34,7 +34,7 @@ Based on the ticket requirements:
 1. Explore relevant areas of the codebase
 2. Identify files that need modification
 3. Design an implementation approach
-4. Write the plan to the plan file
+4. Write the plan to the plan file (the path Claude Code names when plan mode starts)
 
 ### Step 3: Define Test Strategy
 
@@ -49,9 +49,9 @@ Include the verification tools and skills listed in CLAUDE.md's Available Tools 
 
 Only reference skills that are relevant to the specific ticket - not every ticket needs all of them.
 
-### Step 4: Exit Plan Mode
+### Step 4: Self-review, then Exit Plan Mode
 
-Use `ExitPlanMode` to present the plan for user approval.
+Run `/self-review` on the plan first (CLAUDE.md's Plan Review rule) and fold in its findings. Then use `ExitPlanMode` to present the plan for user approval.
 
 ## Error Handling
 
