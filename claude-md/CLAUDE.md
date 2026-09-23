@@ -44,6 +44,7 @@
 - The "Before Submitting Work" checklist is for final pre-PR review only, not after every edit.
 
 ## Git and Version Control
+- Commit message format: `type: description` <!-- FILL IN: e.g. `[TICKET] type: description` if your team prefixes commits with the ticket key -->
 - do not include the claude signature in any commits
 - do not commit files until I have approved them
 - do not include the claude code signature anywhere
@@ -71,7 +72,7 @@ Fetches ticket context from the issue tracker and creates an implementation plan
 - Voice page: <URL>
 
 ### Finalize PR (`/pr`)
-Commits changes and creates pull requests. Handles commit message formatting (`[TICKET] type: description`), branch management, and PR creation using the repo's PR template. After the PR is created it runs a self code review (`/code-review` on opus, default `medium`, override with `--review-effort`) in the background while CI runs, then applies CI fixes and review findings together in one approved push.
+Commits changes and creates pull requests. Handles commit message formatting (per the Git and Version Control section above), branch management, and PR creation using the repo's PR template. After the PR is created it runs a self code review (`/code-review` on opus, default `medium`, override with `--review-effort`) in the background while CI runs, then applies CI fixes and review findings together in one approved push.
 
 <!-- FILL IN: add sections for any other machine-specific tools here (log search, ticket tracker MCP, etc.) -->
 
@@ -91,4 +92,4 @@ Commits changes and creates pull requests. Handles commit message formatting (`[
    - Check for leftover debug code, TODOs, or commented-out code
    - Verify no unintended file changes (migrations, lock files, configs)
    - Confirm tests cover the happy path and at least one edge case
-4. Commit with message format: `[TICKET] description`
+4. Commit using the format from Git and Version Control

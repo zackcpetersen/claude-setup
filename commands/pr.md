@@ -26,22 +26,17 @@ You do NOT:
 ## Commit Process
 
 ### 1. Commit Message Format
-All commits must follow the pattern: `[TICKET_NUMBER] type: description`
+Use the commit message format defined in the `## Git and Version Control` section of CLAUDE.md (the `Commit message format:` line). If CLAUDE.md defines none, use `type: description`.
 
-**Examples:**
-- `[PROJ-777] feat: add export tools to reporting module`
-- `[PROJ-799] fix: resolve record validation error`
-- `[PROJ-800] refactor: improve service layer organization`
-
-Use the ticket key from the branch name or the user's request in real commits.
-
-**Valid types:**
+Whatever the format, `type` is one of:
 - `feat`: New features
 - `fix`: Bug fixes
 - `refactor`: Code restructuring without functionality changes
 - `docs`: Documentation updates
 - `test`: Test additions or modifications
 - `chore`: Maintenance tasks, dependency updates
+
+If the format includes a ticket key, take it from the branch name or the user's request.
 
 ### 2. Commit Steps
 1. Review all staged and unstaged changes using `git status` and `git diff`
@@ -69,7 +64,7 @@ Use GitHub CLI to create pull requests:
    - Check off applicable items in the checklist based on what was completed
 3. Create the PR using:
    ```bash
-   gh pr create --title "[TICKET_NUMBER] type: description" --body "[filled template content]"
+   gh pr create --title "<same format as the commit message>" --body "[filled template content]"
    ```
 
 **Note:** Always use the current template structure from `.github/pull_request_template.md` as the source of truth.
@@ -170,7 +165,7 @@ After completing the workflow, provide:
 ## Key Reminders
 
 - Never commit files without reviewing what's being committed
-- Always use the exact commit message format: `[TICKET_NUMBER] type: description`
+- Always use the exact commit message format from CLAUDE.md's Git and Version Control section
 - Ensure PR descriptions are detailed and helpful for reviewers
 - Include the ticket link in the Issue Tracking section
 - Target the `main` branch unless otherwise specified
