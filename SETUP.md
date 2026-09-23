@@ -21,6 +21,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `claude-md/CLAUDE.md.template` | Generic user-level Claude Code preferences | copied to `~/.claude/CLAUDE.md` if absent |
 | `claude-md/MANIFESTO.md` | "The Ten Laws" design-philosophy template to drop into any repo | copy into a repo by hand, fill in the examples |
 | `install.sh` | Does the linking/copying above | - |
+| `update.sh` | Pulls, re-runs `install.sh`, and prints what needs per-machine action since your last sync | run after the nudge, see "Updating an existing machine" |
 
 Symlinks mean edits made on any machine land in this repo's working tree - commit and push to back them up.
 
@@ -43,7 +44,13 @@ cd claude-setup
 
 ## Updating an existing machine
 
-Run this after `git pull` whenever commands or CLAUDE.md sections changed.
+```bash
+~/Projects/claude-setup/update.sh
+```
+
+That pulls `origin/main`, re-runs `install.sh`, and prints only what changed since the last time it ran: the commits, the changelog entries below that need a manual step, any template sections added since then that your `~/.claude/CLAUDE.md` lacks, leftover `.bak` files, and whether the installed plugin cache has drifted from the repo. It records the synced commit in `~/.claude/.claude-setup-synced`. The SessionStart nudge hook in section 4 tells you when the clone is behind, so you never have to remember to check.
+
+The manual equivalent, and what `update.sh` does under the hood:
 
 1. Relink. Pick one:
    - `./install.sh` relinks everything: commands, skills, output styles, and
@@ -172,6 +179,24 @@ Notes:
 - **The session model is a user-settings value; no plugin can set it.** If you want the top model by default, put `"model": "claude-fable-5-1[1m]"` in `~/.claude/settings.json` yourself.
 - Both the local-path and GitHub registrations use the marketplace name `claude-setup`, so run `/plugin marketplace remove claude-setup` before switching between them.
 - Installed plugins are cached copies under `~/.claude/plugins/cache/`, not live links. After editing the guard, run `/plugin marketplace update claude-setup` and reinstall - or run `claude --plugin-dir ~/Projects/claude-setup/plugins/model-discipline` while you iterate.
+
+### Update nudge hook (tells you when this repo is behind)
+
+Once a day, on session start, this fetches `origin/main` for the clone at `~/Projects/claude-setup` and prints a one-line nudge into the session context if the clone is behind. It prints nothing when current and fails silently offline. Add it to `hooks.SessionStart` in `~/.claude/settings.json` (adjust the path if you cloned elsewhere):
+
+```json
+{
+  "matcher": "startup",
+  "hooks": [
+    {
+      "type": "command",
+      "command": "d=\"$HOME/Projects/claude-setup\"; [ -d \"$d/.git\" ] || exit 0; f=\"$d/.git/FETCH_HEAD\"; if [ ! -f \"$f\" ] || [ -n \"$(find \"$f\" -mmin +1440 2>/dev/null)\" ]; then git -C \"$d\" fetch -q origin main >/dev/null 2>&1 || exit 0; fi; n=$(git -C \"$d\" rev-list --count HEAD..origin/main 2>/dev/null || echo 0); [ \"$n\" -gt 0 ] && echo \"claude-setup is $n commit(s) behind origin/main. Run $d/update.sh to catch up.\"; exit 0",
+      "timeout": 15,
+      "statusMessage": "Checking whether claude-setup is behind"
+    }
+  ]
+}
+```
 
 ### Plan gate hook (self-review before any plan)
 
