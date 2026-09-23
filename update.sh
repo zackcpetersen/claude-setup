@@ -85,7 +85,8 @@ cache="$(ls -d "$HOME"/.claude/plugins/cache/claude-setup/model-discipline/*/ 2>
 if [[ -n "$cache" ]] && ! diff -rq -x .in_use "$cache" "$REPO_DIR/plugins/model-discipline" >/dev/null 2>&1; then
   echo "== model-discipline plugin: installed cache differs from the repo =="
   diff -rq -x .in_use "$cache" "$REPO_DIR/plugins/model-discipline" 2>/dev/null | sed 's/^/  /' || true
-  echo "  -> claude plugin marketplace update claude-setup && claude plugin install model-discipline@claude-setup, then restart Claude Code"
+  echo "  -> claude plugin marketplace update claude-setup && claude plugin uninstall model-discipline@claude-setup && claude plugin install model-discipline@claude-setup, then restart Claude Code"
+  echo "     (plain 'plugin update' and 'plugin install' are no-ops while the version stays 1.0.0)"
   echo
 fi
 

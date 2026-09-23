@@ -178,7 +178,7 @@ Notes:
 - `CLAUDE_EXPENSIVE_MODEL_PREFIX` sets which session model the guard polices. Default `claude-fable`; set it to `claude-opus` if opus is your top tier.
 - **The session model is a user-settings value; no plugin can set it.** If you want the top model by default, put `"model": "claude-fable-5-1[1m]"` in `~/.claude/settings.json` yourself.
 - Both the local-path and GitHub registrations use the marketplace name `claude-setup`, so run `/plugin marketplace remove claude-setup` before switching between them.
-- Installed plugins are cached copies under `~/.claude/plugins/cache/`, not live links. After editing the guard, run `/plugin marketplace update claude-setup` and reinstall - or run `claude --plugin-dir ~/Projects/claude-setup/plugins/model-discipline` while you iterate.
+- Installed plugins are cached copies under `~/.claude/plugins/cache/`, not live links. After editing the guard, run `/plugin marketplace update claude-setup`, then uninstall and reinstall (`/plugin uninstall model-discipline@claude-setup`, `/plugin install model-discipline@claude-setup`) - `plugin update` and a bare `install` are no-ops while the version in `plugin.json` is unchanged. Or run `claude --plugin-dir ~/Projects/claude-setup/plugins/model-discipline` while you iterate. `update.sh` reports when the cache has drifted.
 
 ### Update nudge hook (tells you when this repo is behind)
 
