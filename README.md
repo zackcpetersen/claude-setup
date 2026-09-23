@@ -27,7 +27,7 @@ Installed to `~/.claude/commands/`, available in every project.
 
 Installed to `~/.claude/skills/`.
 
-- **`write-as-zack`** - Writing-voice rules for drafting Slack messages, emails, PR descriptions, and docs meant for humans. The rules in the file are complete on their own; it can also fetch a live voice page over the Notion MCP tool first, if you point `<YOUR_VOICE_PAGE_URL>` at one. The rules describe my voice, so fork them to describe yours.
+- **`write-as-zack`** - Writing-voice rules for drafting Slack messages, emails, PR descriptions, and docs meant for humans. The rules in the file are complete on their own; it can also fetch a live voice page over the Notion MCP tool first, if your `~/.claude/CLAUDE.md` names one in a `### Writing voice` section. The rules describe my voice, so fork them to describe yours.
 
 ## Output styles (`output-styles/`)
 

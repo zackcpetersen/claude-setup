@@ -9,17 +9,9 @@ Zack's voice: direct, momentum-driven, structure-first, opinionated with reasoni
 
 ## Optional: pull a live voice guide first
 
-If a live voice page is configured below, fetch it with the Notion fetch tool (`mcp__claude_ai_Notion__notion-fetch`, or the workspace's fetch equivalent) before drafting:
+If the user's CLAUDE.md has a `### Writing voice` section with a voice page URL, fetch that page with the Notion fetch tool available in this workspace before drafting.
 
-```
-<YOUR_VOICE_PAGE_URL>
-```
-
-<!-- FILL IN: the URL of your own voice page, if you keep one. Leave the
-     placeholder as-is to run on the rules below alone - they are complete
-     without it. -->
-
-When a live page is configured and reachable it is the source of truth: where it differs from the rules below, the live page wins. Treat it as read-only, never write to it unless explicitly asked. If the URL is still the `<YOUR_VOICE_PAGE_URL>` placeholder or the fetch tool is unavailable, use the rules below and say which source you used.
+When a live page is configured and reachable it is the source of truth: where it differs from the rules below, the live page wins. Treat it as read-only, never write to it unless explicitly asked. If CLAUDE.md lists no voice page or the fetch tool is unavailable, use the rules below and say which source you used.
 
 ## Voice rules
 
@@ -55,3 +47,10 @@ These stand on their own. They are the complete rule set when no live page is co
 ## Self-check before returning any draft
 
 Scan the draft for the em-dash character (U+2014), "honestly", "genuinely", "hope", "maybe", "if possible", "try to", "thanks in advance", and exclamation-heavy hype. Fix every hit, then deliver. The lead sentence must carry the point.
+
+## Quick asks to teammates
+
+A quick ask in a thread is one or two casual sentences: what's wrong, what you need, stop. No evidence trail, no options menu, no next-steps plan. A light hedge ("I think I need the Launcher role") is fine here - it reads human. Structured, numbered messages are for announcements and write-ups.
+
+- Too much: "I'm a Viewer on every deployment, so I can't launch runs. Both the UI and a user token come back UnauthorizedError. Two options: 1) grant me Launcher and I'll run the jobs, 2) launch them yourself and I'll pull the logs."
+- Right: "@teammate I don't think I have the permissions to run the jobs - can you update it for me? I think I need Launcher"

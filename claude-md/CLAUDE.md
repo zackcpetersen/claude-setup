@@ -64,6 +64,10 @@ Use `~/bin/query_db <env-file> "<sql>"` to query databases (read-only). Credenti
 ### Start Ticket (`/start-ticket`)
 Fetches ticket context from the issue tracker and creates an implementation plan. Usage: `/start-ticket <ticket-number>`
 
+### Writing voice (`write-as-zack` skill)
+<!-- FILL IN: optional. A page the skill fetches for live voice rules; delete the bullet to run on the skill's built-in rules. -->
+- Voice page: <URL>
+
 ### Finalize PR (`/pr`)
 Commits changes and creates pull requests. Handles commit message formatting (`[TICKET] type: description`), branch management, and PR creation using the repo's PR template. After the PR is created it runs a self code review (`/code-review` on opus, default `medium`, override with `--review-effort`) in the background while CI runs, then applies CI fixes and review findings together in one approved push.
 

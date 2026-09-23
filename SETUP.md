@@ -1,6 +1,6 @@
 # Setup on a New Machine
 
-Everything in this repo is generic - nothing references a specific company, repo, or tracker. Commands are fully generic and read machine-specific values from `~/.claude/CLAUDE.md`. `FILL IN` markers remain only in `claude-md/`, `skills/write-as-zack/`, and `bin/worktree`. This file walks through all of them.
+Everything in this repo is generic - nothing references a specific company, repo, or tracker. Commands are fully generic and read machine-specific values from `~/.claude/CLAUDE.md`. `FILL IN` markers remain only in `claude-md/` and `bin/worktree`. This file walks through all of them.
 
 ## What's in here
 
@@ -79,6 +79,9 @@ than 6 months.
 - 2026-09-22: CLAUDE.md gained `### Issue Tracker` (tracker, MCP plugin,
   ticket URL format, write-confirmation rule). `/pr` and `/start-ticket`
   read it instead of hardcoding values. Add it to your CLAUDE.md.
+- 2026-09-22: CLAUDE.md gained `### Writing voice` (optional voice page URL).
+  The `write-as-zack` skill reads it instead of holding the URL itself, so the
+  skill directory can be symlinked. Add the section if you use a voice page.
 - 2026-09-22: `/pr` runs a background self code review (`--review-effort`,
   default medium, opus). Copy the updated `### Finalize PR (/pr)` paragraph
   from `claude-md/CLAUDE.md` into yours. Needs the built-in `/code-review`
@@ -99,7 +102,7 @@ Work through these once per machine:
 - Needs your issue tracker's MCP tools available (e.g. install the Atlassian plugin for Jira, or your tracker's equivalent). No file edits required.
 
 ### `skills/write-as-zack/SKILL.md`
-- One `FILL IN`: `<YOUR_VOICE_PAGE_URL>`, an optional link to a voice guide the skill fetches with the Notion MCP tool before drafting. Leave the placeholder alone to run on the rules written into the skill, which are complete on their own. The rules are Zack's; edit them to describe your own voice.
+- No file edits. The optional voice page URL lives in the `### Writing voice` section of `~/.claude/CLAUDE.md`; delete that bullet to run on the rules written into the skill, which are complete on their own. The rules are Zack's; edit them to describe your own voice.
 
 ### `bin/query_db`
 - No script edits needed - it's fully generic: `query_db <env-file> "<sql>"`.
