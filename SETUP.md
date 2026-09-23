@@ -18,7 +18,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `bin/worktree` | Multi-repo git worktree manager | `~/bin/` (symlink) |
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
 | `plugins/model-discipline/` | `model-discipline` plugin - the agent-model-guard hook, a SessionStart rules block, and the `playbook` skill | `/plugin install`, see section 4 |
-| `claude-md/CLAUDE.md` | Generic user-level Claude Code preferences | copied to `~/.claude/CLAUDE.md` if absent |
+| `claude-md/CLAUDE.md.template` | Generic user-level Claude Code preferences | copied to `~/.claude/CLAUDE.md` if absent |
 | `claude-md/MANIFESTO.md` | "The Ten Laws" design-philosophy template to drop into any repo | copy into a repo by hand, fill in the examples |
 | `install.sh` | Does the linking/copying above | - |
 
@@ -62,7 +62,7 @@ Run this after `git pull` whenever commands or CLAUDE.md sections changed.
    ```
 
    Commands that exist only on this machine are not touched either way.
-2. Diff `~/.claude/CLAUDE.md` against `claude-md/CLAUDE.md`. Copy over every
+2. Diff `~/.claude/CLAUDE.md` against `claude-md/CLAUDE.md.template`. Copy over every
    section the repo has that yours lacks, and fill in each FILL IN with this
    machine's values. Work through the changelog below for the ones that need
    action.
@@ -97,7 +97,7 @@ than 6 months.
   skill directory can be symlinked. Add the section if you use a voice page.
 - 2026-09-22: `/pr` runs a background self code review (`--review-effort`,
   default medium, opus). Copy the updated `### Finalize PR (/pr)` paragraph
-  from `claude-md/CLAUDE.md` into yours. Needs the built-in `/code-review`
+  from `claude-md/CLAUDE.md.template` into yours. Needs the built-in `/code-review`
   skill (ships with Claude Code). No other setup.
 
 ## 3. Fill-in checklist

@@ -49,10 +49,10 @@ for f in "$REPO_DIR"/bin/query_db "$REPO_DIR"/bin/worktree; do
 done
 
 if [[ ! -f "$HOME/.claude/CLAUDE.md" ]]; then
-  cp "$REPO_DIR/claude-md/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
+  cp "$REPO_DIR/claude-md/CLAUDE.md.template" "$HOME/.claude/CLAUDE.md"
   echo "Copied starter CLAUDE.md to ~/.claude/CLAUDE.md - fill in the FILL IN sections."
 else
-  echo "~/.claude/CLAUDE.md already exists - not touching it. Diff against claude-md/CLAUDE.md manually if you want the generic sections."
+  echo "~/.claude/CLAUDE.md already exists - not touching it. Diff against claude-md/CLAUDE.md.template manually if you want the generic sections."
 fi
 
 echo
