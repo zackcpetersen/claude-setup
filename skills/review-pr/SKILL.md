@@ -27,14 +27,14 @@ Default effort `medium`. The repo comes from the URL, from `--repo`, or from the
    - `medium`: worth fixing, does not block. Posted inline prefixed `nit: `.
    - `low`: dropped. Listed to the user in one line each, never posted.
    - Anything an existing review thread already raised is dropped as a duplicate.
-3. **Present** to the user: PR summary (3 lines), verdict (APPROVE when there are no highs, otherwise COMMENT), the one-line review body, then each comment as `file:line`, severity, the drafted text. Ask for approval; the user can drop or reword any item, post only the highs, or drop the body (an empty `body` is valid).
+3. **Present** to the user: PR summary (3 lines), verdict (APPROVE when there are no highs, otherwise COMMENT), then each comment as `file:line`, severity, the drafted text. Ask for approval; the user can drop or reword any item or post only the highs. No review body (summary comment) is drafted or posted unless the user asks for one; the inline comments carry the review.
 4. **Post** one review with every approved comment in a single call, so the author gets one notification:
 
    ```bash
    gh api repos/<owner>/<repo>/pulls/<n>/reviews --input review.json
    ```
 
-   where `review.json` is `{"event":"APPROVE"|"COMMENT","body":"<review body>","comments":[{"path":"<file>","line":<n>,"side":"RIGHT","body":"<text>"}]}`. `line` is the line number in the new file for `RIGHT`, the old file for `LEFT`. If GitHub rejects a line as outside the diff, fall back to the nearest changed line in that hunk and say so.
+   where `review.json` is `{"event":"APPROVE"|"COMMENT","body":"","comments":[{"path":"<file>","line":<n>,"side":"RIGHT","body":"<text>"}]}`. `body` stays empty unless the user asked for a summary comment. `line` is the line number in the new file for `RIGHT`, the old file for `LEFT`. If GitHub rejects a line as outside the diff, fall back to the nearest changed line in that hunk and say so.
 5. **Verify** with `gh pr view <n> --json reviews,reviewDecision` and report: review id, event, comment count, and the PR link.
 
 ## Comment rules
@@ -44,7 +44,7 @@ Default effort `medium`. The repo comes from the URL, from `--repo`, or from the
 - `nit: ` prefix on every medium.
 - No em-dashes or en-dashes, plain hyphens only. No "honestly", "genuinely", "hope", "maybe", "try", "if possible", "might want to consider". No exclamation hype.
 - Friendly and collaborative. Direct, not brusque.
-- Review body is one line: "LGTM, two small nits inline." or "Two questions inline before I approve, mostly around X." Leave it empty when the user asks for inline comments only.
+- No summary comment by default. When the user asks for one, it is one line: "LGTM, two small nits inline." or "Two questions inline before I approve, mostly around X."
 
 ## Model discipline
 
@@ -61,4 +61,5 @@ Reviewer agent: opus (judgment). The main session never reads the diff itself; i
 | One `gh pr comment` per finding | One review submission, one notification, inline anchors |
 | Reviewing the user's own PR | That is `/pr`'s self review. Stop and say so |
 | Stating findings as facts | Turn every comment into a question or a suggestion before presenting it |
+| Posting a summary comment the user did not ask for | The review body is empty by default. Inline comments only |
 | Waiting on the wrapper agent while `/code-review`'s findings sit in the main session | The forked reviewer reports to the main session. Forward its findings to the wrapper and let it draft |

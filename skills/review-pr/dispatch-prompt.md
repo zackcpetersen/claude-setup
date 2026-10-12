@@ -15,12 +15,12 @@ Steps:
    - Medium comments start with "nit: ".
    - No em-dashes or en-dashes anywhere, plain hyphens only. Never "honestly", "genuinely", "hope", "maybe", "try", "if possible", "might want to consider", no exclamation-heavy hype.
    - Friendly and collaborative, not brusque.
-5. Decide: approve (no highs) or comment-only (any high). Draft a one-line review summary in the same voice, e.g. "LGTM, two small nits inline." or "Two questions inline before I approve, mostly around X."
+5. Decide: approve (no highs) or comment-only (any high). Do not draft a review summary unless this prompt says the user asked for one; if asked, one line in the same voice, e.g. "LGTM, two small nits inline."
 
 Return under 120 lines in this exact shape:
 - PR summary: 3 lines (what it changes, size, CI and existing review state).
 - Verdict: APPROVE or COMMENT, one sentence why.
-- Review summary text: the one-line body for the review.
+- Review summary text: only if asked for, otherwise the word "none".
 - Comments: a numbered list; each item has `file`, `line` (new-file line number from the diff, and the `side` RIGHT/LEFT), `severity` high|medium, `finding` (one sentence, for the user), `comment` (the drafted text to post verbatim).
 - Dropped lows: one line each, finding only, no drafted text.
 - Code review effort used and total findings count.
