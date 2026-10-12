@@ -28,6 +28,7 @@ Installed to `~/.claude/commands/`, available in every project.
 Installed to `~/.claude/skills/`.
 
 - **`write-as-zack`** - Writing-voice rules for drafting Slack messages, emails, PR descriptions, and docs meant for humans. The rules in the file are complete on their own; it can also fetch a live voice page over the Notion MCP tool first, if your `~/.claude/CLAUDE.md` names one in a `### Writing voice` section. The rules describe my voice, so fork them to describe yours.
+- **`board`** - A daily work board in Notion: one row per day with a human-readable "Your view" (needs you, in flight, blocked, pacing, done) and a Claude scratchpad child page. `/board` rebuilds it from the issue tracker, GitHub, Slack, local worktrees, memory and other Claude sessions via read-only sub-agents; `/board start <TICKET>` runs the worktree -> plan -> approve -> implement -> review -> `/pr` flow in background agents. Every machine-specific value (the Notion page, Slack ids, tracker project, repos) comes from the `### Work board` section of `~/.claude/CLAUDE.md`; point it at any empty Notion page and it creates the schema.
 
 ## Output styles (`output-styles/`)
 

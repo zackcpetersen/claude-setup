@@ -67,6 +67,18 @@ Fetches ticket context from the issue tracker and creates an implementation plan
 <!-- FILL IN: optional. A page the skill fetches for live voice rules; delete the bullet to run on the skill's built-in rules. -->
 - Voice page: <URL>
 
+### Work board (`board` skill)
+<!-- FILL IN: every value the board skill needs. Delete this section if you do not use it. -->
+- Board page: <Notion page URL or id; the page holds one inline database>
+- Slack user id: <U0XXXXXXX>
+- Watched channels: <#project-channel C0XXXXXXX, #alerts-channel C0XXXXXXX (alerts), ...> <!-- tag alert channels with (alerts) so the board also scans them for unhandled alerts -->
+- Tracker project: <PROJ>; epics to roll up: <PROJ-100, PROJ-200>
+- GitHub org: <org-name>
+- Worktree config: ~/bin/.worktree-config.json; scripts: ~/bin/worktree, ~/bin/start-ticket
+- Memory dir: <path to the Claude memory directory for this machine>
+- Watch-slack state file: ~/.claude/watch-slack-last-ts.txt <!-- optional -->
+- WIP limits (starting values, tune after a week): max_streams 3, max_needs_you 7, carry_flag_days 3
+
 ### Finalize PR (`/pr`)
 Commits changes and creates pull requests. Handles commit message formatting (per the Git and Version Control section above), branch management, and PR creation using the repo's PR template. After the PR is created it runs a self code review (`/code-review` on opus, default `medium`, override with `--review-effort`) in the background while CI runs, then applies CI fixes and review findings together in one approved push.
 
