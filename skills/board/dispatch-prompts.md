@@ -2,6 +2,20 @@
 
 Every `{{placeholder}}` maps to a key in the `### Work board` section of `~/.claude/CLAUDE.md`. Fill them in before dispatching. Pass `model` on every dispatch. Gatherers use `subagent_type: Explore`; planner, implementer, reviewer and pr agents use `general-purpose`. Never use `isolation: "worktree"`.
 
+## Placeholder sources
+
+| Placeholder | Comes from |
+|---|---|
+| `user_name` | `git config user.name`, or a name line in `~/.claude/CLAUDE.md` if present |
+| `tracker_site`, `tracker_mcp_prefix` | the `### Issue Tracker` section of `~/.claude/CLAUDE.md` |
+| `ticket_url` | that section's ticket URL format |
+| `master_session_name` | this session's name from `ListAgents` |
+| `since_date` | the previous row's Date, else 7 days ago |
+| `today` | local `date +%F` |
+| `approved_files` | the user's ship-it turn |
+| `registry_rows`, `outreach_threads`, peer answers | the previous scratchpad; empty on the first run, which the prompts tolerate |
+| `slack_user_id`, `slack_channels`, `tracker_project`, `tracker_epics`, `github_org`, `worktree_config`, `worktree_script` | the `### Work board` section of `~/.claude/CLAUDE.md` |
+
 Read-only rule, included verbatim in every gatherer prompt:
 
 > READ-ONLY. Never call any tool that sends, posts, drafts, creates, updates, edits, comments, reacts, transitions, commits, pushes, checks out, stashes or deletes. If a step would need one, report what you would have done instead.
@@ -17,7 +31,7 @@ Run these queries (compact view; fields: key, summary, status, priority, issuety
 1. assignee = currentUser() AND statusCategory != Done ORDER BY priority DESC, updated DESC
 2. reporter = currentUser() AND statusCategory != Done AND assignee != currentUser()
 3. parent in ({{tracker_epics}}) ORDER BY status
-4. project = {{tracker_project}} AND status in ("In Review", "Review") AND updated >= -14d
+4. project = {{tracker_project}} AND statusCategory = "In Progress" AND updated >= -14d, then keep only results whose status name contains "review" (case-insensitive). Do not name statuses in JQL; the tracker rejects unknown status names.
 5. assignee = currentUser() AND statusCategory = Done AND resolved >= -14d
 6. watcher = currentUser() AND statusCategory != Done AND assignee != currentUser() AND updated >= -7d
 
@@ -45,7 +59,7 @@ Part 1, GitHub:
 4. Dependabot PRs on the main repos that fix an open security alert: count plus the ones that are major bumps.
 
 Part 2, local checkouts:
-1. `{{worktree_script}} list`, then every git checkout under the project root named in {{worktree_config}} (main repos and each `*-worktrees/*` dir).
+1. `{{worktree_script}} list`, then loop over `.repos[].repo_path` and `.repos[].worktree_base` from the worktree config json ({{worktree_config}}) and scan each git checkout under them (the repo itself, and every directory inside each worktree base).
 2. Per checkout: branch, `git -C <path> status --short | wc -l` plus top files, unpushed commits (`git -C <path> log --oneline @{upstream}..HEAD 2>/dev/null | wc -l`), last commit date, open PR for the branch.
 3. Flag: uncommitted real work (at risk), branches never pushed, stale (PR merged or closed, or no own commits), broken worktrees, files that look like secrets (`.env*` untracked).
 
@@ -65,7 +79,7 @@ Gather:
 1. Each watched channel in {{slack_channels}}: read since {{since_date}}. For every top-level post or thread that names or is addressed to the user, decide whether the user replied after the ask. List unanswered ones: channel, who, when, one-line ask, thread ts.
 2. DMs and group DMs since {{since_date}}: messages from others the user has not answered, with the ask.
 3. Outreach threads the user owns (from the previous scratchpad, passed in below): new replies since last sync, who the ball is with, whether a nudge is due (3 business days of silence), whether a nudge already went out.
-4. Alert channels in {{slack_channels}}: anything in the last 3 days tagged to the user's area that has no recovery or reply.
+4. Only for channels tagged `(alerts)` in {{slack_channels}}: anything in the last 3 days tagged to the user's area that has no recovery or reply. Skip this step for untagged channels.
 5. `from:<@{{slack_user_id}}> after:{{since_date}}`: commitments the user made that are still open.
 
 Outreach threads to check: {{outreach_threads}}
@@ -113,11 +127,13 @@ Return: `git -C {{worktree_path}} status --short`, a diff summary per file (what
 ## Reviewer (model: opus, general-purpose, name `<TICKET>-review`)
 
 ```
-You are a fresh reviewer for ticket {{ticket}}, implemented on branch {{ticket}} in the worktree at {{worktree_path}} (repo {{repo}}). You have not seen the conversation. Use `git -C {{worktree_path}}` for every git command.
+You are a fresh reviewer for ticket {{ticket}}, implemented in the worktree at {{worktree_path}} (repo {{repo}}, branch {{ticket}}). You have not seen the conversation. Use `git -C {{worktree_path}}` for every git command.
+
+Nothing is committed yet, so review the WORKING TREE, not the branch: `git -C {{worktree_path}} diff HEAD` plus the untracked files listed by `git -C {{worktree_path}} status --short` (read each one).
 
 1. Read the ticket ({{ticket_url}}) and the plan at ~/.claude/plans/{{ticket}}.md.
-2. Run `/self-review implementation` against the plan and the ticket's acceptance criteria. Skip the plan-gate marker.
-3. Run `/code-review medium {{ticket}}` (pass the branch, not "the current diff"). Never pass --fix or --comment.
+2. Run `/self-review implementation` on that working-tree diff against the plan and the ticket's acceptance criteria. Skip the plan-gate marker.
+3. Do not run `/code-review` here; the `/pr` step runs it on the real PR.
 4. Do NOT edit, commit or push anything.
 
 Return only problems, each marked must-fix or recommend: file, line, one-sentence defect, failure scenario, confidence. If nothing was found, say what you checked.
@@ -128,9 +144,9 @@ Return only problems, each marked must-fix or recommend: file, line, one-sentenc
 ```
 You are finalizing ticket {{ticket}} in the worktree at {{worktree_path}} (repo {{repo}}, branch {{ticket}}). Use `cd {{worktree_path}} && ...` for every command.
 
-The user has already approved these files for commit: {{approved_files}}. Treat that as the file approval `/pr` needs and as a pre-approved item for `/babysit-pr`'s combined fix list, so do not ask again. Do not stage lock files, .gitignore, or worktree setup noise (CLAUDE.md, AGENTS.md, .claude/ changes).
+The user has approved committing and pushing exactly these files: {{approved_files}}. That approval covers the commit and the push only. Do not stage lock files, .gitignore, or worktree setup noise (CLAUDE.md, AGENTS.md, .claude/ changes).
 
-Run `/pr --review-effort medium`. It commits with the CLAUDE.md commit format, pushes, opens the PR from the repo template, runs the background self code review, and babysits CI. Never merge. If anything needs human judgment (merge conflict, requested changes, a fix that is not straightforward), stop and report it.
+Run `/pr --review-effort medium`. It commits with the CLAUDE.md commit format, pushes, opens the PR from the repo template, runs the background self code review, and watches CI. Never merge. If the self review or CI produces fixes, do NOT apply them and do NOT invoke `/babysit-pr`: report the combined list (CI failures grouped by cause, review findings with file and line) and stop. The master session asks the user and dispatches a fix pass.
 
 Return: commit SHA and message, PR number and URL, final CI state, self review findings and what was applied, and next steps.
 ```

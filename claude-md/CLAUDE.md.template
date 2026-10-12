@@ -71,7 +71,7 @@ Fetches ticket context from the issue tracker and creates an implementation plan
 <!-- FILL IN: every value the board skill needs. Delete this section if you do not use it. -->
 - Board page: <Notion page URL or id; the page holds one inline database>
 - Slack user id: <U0XXXXXXX>
-- Watched channels: <#project-channel C0XXXXXXX, #alerts-channel C0XXXXXXX, ...>
+- Watched channels: <#project-channel C0XXXXXXX, #alerts-channel C0XXXXXXX (alerts), ...> <!-- tag alert channels with (alerts) so the board also scans them for unhandled alerts -->
 - Tracker project: <PROJ>; epics to roll up: <PROJ-100, PROJ-200>
 - GitHub org: <org-name>
 - Worktree config: ~/bin/.worktree-config.json; scripts: ~/bin/worktree, ~/bin/start-ticket

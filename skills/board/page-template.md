@@ -26,7 +26,8 @@ Default view: sorted by Date descending.
 One or two lines. The thing that, if nothing else moves, should.
 
 ## Needs you (decisions, approvals, sends)
-- [ ] <TICKET or topic>: <exact ask> (<holder: session or agent name>) <link>
+- [ ] <TICKET or topic>: <exact ask> (<holder: session or agent name>) <link> (since YYYY-MM-DD)
+The `(since ...)` suffix is added at rollover to every carried line; the carry flag reads it.
 Order: external people waiting > PR and merge gates > sub-agent approvals > housekeeping.
 At most `max_needs_you` lines here; the rest go under Deferred.
 
@@ -38,7 +39,7 @@ Stages: planning / plan-review / awaiting-approval / implementing / code-review 
 ## Blocked / waiting on others
 | What | Waiting on | Since | Nudge due |
 |---|---|---|---|
-Nudge due = since + 3 business days. Nudges are drafts, never sent directly.
+Example row: `| PR 123 review | reviewer name | 2026-01-05 | 2026-01-08 |`. Nudge due = since + 3 business days. Nudges are drafts, never sent directly.
 
 ## Pacing
 - Capacity note: what is reasonable today and what is deliberately deferred.
@@ -65,13 +66,15 @@ Fully rewritten on every sync. The user can read it but does not need to.
 |---|---|---|---|
 Tracker, GitHub, Slack, worktrees, memory, peer sessions (with "as of" when reused).
 
+Row last edited after sync: <the row's Last edited value fetched right after this sync's writes; the next sync compares against it>
+
 ## Raw findings
 Compact dumps per source: ticket keys, PR numbers, thread timestamps, branch names. Enough to reopen any item without re-running the gatherers.
 
 ## Work registry
 | Ticket | Repo | Worktree path | Branch | Stage | Plan file | PR | Last agent (name, session) | Updated |
 |---|---|---|---|---|---|---|---|---|
-Keyed by ticket. Survives session restarts; agent names do not, so `resume` reads this row.
+Keyed by ticket. Rows persist across syncs and rollovers until stage is done. Survives session restarts; agent names do not, so `resume` reads this row.
 
 ## Peer sessions
 | Session | Working on | Next step | Waiting on user | Blocked on | As of |
