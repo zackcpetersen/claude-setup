@@ -38,7 +38,7 @@ Prompts live in `dispatch-prompts.md`; the page layout and database schema live 
 
 ## rollover
 
-Create today's row (`Name` = `YYYY-MM-DD (Day)`, Date, Status Open) and its scratchpad child. Into Your view copy unchecked Needs-you, non-done In-flight, all Blocked and Deferred lines; append ` (since YYYY-MM-DD)` to each carried line that lacks one, using the previous row's Date (the carry flag compares that date to today). Into the new scratchpad copy every Work registry row whose stage is not done, the Peer sessions table, and the open outreach thread list from Raw findings. Write the Rollover log on both pages. Set the previous row Closed. Then sync.
+Create today's row (`Name` = `YYYY-MM-DD (Day)`, Date, Status Open) and its scratchpad child. If a row with today's Date already exists (the user pre-created it to park items for today), reuse it: set its Status Open, keep every line already on it, and merge the carried items in under the matching headings instead of creating a second row. Into Your view copy unchecked Needs-you, non-done In-flight, all Blocked and Deferred lines; append ` (since YYYY-MM-DD)` to each carried line that lacks one, using the previous row's Date (the carry flag compares that date to today). Into the new scratchpad copy every Work registry row whose stage is not done, the Peer sessions table, and the open outreach thread list from Raw findings. Write the Rollover log on both pages. Set the previous row Closed. Then sync.
 
 ## start
 
@@ -78,6 +78,7 @@ Pass `model` on every dispatch. Planner, implementer, reviewer, pr agent, jira a
 | Treating Explore as read-only | It still has Bash and every MCP write tool. The read-only rule is a prompt rule; every gatherer prompt carries it |
 | Storing agent names as the registry key | Agents die with the session. Key rows by ticket; store worktree, branch, plan file, PR |
 | Two rows left Open after a crash mid-rollover | Keep the newest, close the rest |
+| Rollover creates a second row for today | A pre-created row for today (parked items) is reused, never duplicated |
 | Calling `/babysit-pr` from sync | It makes fixes. Sync reuses only its `gh pr list` query |
 | Blocking the page write on a peer session reply | Replies can be held or expire. Write with the last known answer |
 | Applying memory corrections automatically | Propose them; apply only on a yes |
