@@ -63,6 +63,9 @@ Use `~/bin/query_db <env-file> "<sql>"` to query databases (read-only). Credenti
 ### Start Ticket (`/start-ticket`)
 Fetches ticket context from the issue tracker and creates an implementation plan. Usage: `/start-ticket <ticket-number>`
 
+### Review PR (`/review-pr`)
+Reviews a teammate's pull request: `/review-pr <number or URL> [--effort medium]`. Runs `/code-review` in a background opus agent, drafts comments as questions and suggestions in your writing voice (highs inline, mediums as `nit:`, lows dropped), asks for per-comment approval, then posts one GitHub review and approves when nothing blocks.
+
 ### Writing voice (`write-as-zack` skill)
 <!-- FILL IN: optional. A page the skill fetches for live voice rules; delete the bullet to run on the skill's built-in rules. -->
 - Voice page: <URL>
