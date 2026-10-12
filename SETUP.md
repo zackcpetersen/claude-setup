@@ -11,6 +11,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `commands/self-review.md` | `/self-review` - subagent review of a plan or implementation | `~/.claude/commands/` (symlink) |
 | `commands/start-ticket.md` | `/start-ticket` - fetch ticket, produce implementation plan | `~/.claude/commands/` (symlink) |
 | `skills/write-as-zack/` | `write-as-zack` skill - writing-voice rules, with an optional live voice page | `~/.claude/skills/` (symlink) |
+| `skills/board/` | `board` skill - daily Notion work board plus sub-agent ticket orchestration | `~/.claude/skills/` (symlink) |
 | `output-styles/direct.md` | "Direct" output style - answer first, plain english, no hedging | `~/.claude/output-styles/` (symlink) |
 | `output-styles/momentum.md` | "Momentum" output style - Direct plus progress tracking and one next action | `~/.claude/output-styles/` (symlink) |
 | `output-styles/tldr.md` | "TLDR" output style - 1-3 sentences, expands only on request | `~/.claude/output-styles/` (symlink) |
@@ -116,6 +117,12 @@ Work through these once per machine:
 
 ### `skills/write-as-zack/SKILL.md`
 - No file edits. The optional voice page URL lives in the `### Writing voice` section of `~/.claude/CLAUDE.md`; delete that bullet to run on the rules written into the skill, which are complete on their own. The rules are Zack's; edit them to describe your own voice.
+
+### `skills/board/SKILL.md`
+- No file edits. Everything machine-specific lives in the `### Work board` section of `~/.claude/CLAUDE.md`; copy that block from `claude-md/CLAUDE.md.template` and fill it in. The skill stops with a clear message if the section is missing.
+- Create one empty Notion page with an inline database (any name, only the default title property) and put its URL on the `Board page` line. The skill adds the columns it needs on first run.
+- Needs the Notion MCP plugin, the Slack MCP plugin, your tracker's MCP plugin, `gh`, and `~/bin/worktree` with its config. The ticket flow also needs `/start-ticket`, `/self-review`, `/pr` and the built-in `/code-review` skill.
+- Optional: the `/watch-slack` state file path, if you run that command; leave the line out otherwise.
 
 ### `bin/query_db`
 - No script edits needed - it's fully generic: `query_db <env-file> "<sql>"`.
