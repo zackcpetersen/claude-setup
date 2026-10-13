@@ -15,11 +15,6 @@
       "name": "plan-gate",
       "source": "./plugins/plan-gate",
       "description": "Blocks ExitPlanMode until /self-review has recorded a pass for this project."
-    },
-    {
-      "name": "pr-band",
-      "source": "./plugins/pr-band",
-      "description": "Band above the prompt showing your open PRs with CI and review status."
     }
   ]
 }

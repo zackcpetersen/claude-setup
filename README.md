@@ -51,7 +51,6 @@ Symlinked into `~/bin`, so keep `~/bin` on your `PATH`.
 
 - **`model-discipline`** - Keeps expensive-model spend on judgment work. It bundles the `agent-model-guard` PreToolUse hook (denies subagent dispatches that omit `model` on an expensive session when the agent definition has no pin), a short rules block injected at session start, and a `playbook` skill with the full dispatch-and-session reference. Installed with `/plugin install model-discipline@claude-setup` rather than by `install.sh`. Full description: [plugins/model-discipline/README.md](plugins/model-discipline/README.md).
 - **`plan-gate`** - Blocks `ExitPlanMode` until `/self-review` has recorded a pass for the current project in the last two hours, then consumes that pass so every new plan needs a fresh review. Installed with `/plugin install plan-gate@claude-setup`. Full description: [plugins/plan-gate/README.md](plugins/plan-gate/README.md).
-- **`pr-band`** - A band above the prompt showing your open PRs with CI and review status, labeled by ticket key. Installed with `/plugin install pr-band@claude-setup`. Full description: [plugins/pr-band/README.md](plugins/pr-band/README.md).
 
 ## Templates (`claude-md/`)
 

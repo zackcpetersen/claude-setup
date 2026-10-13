@@ -1,4 +1,0 @@
-{
-  "description": "The pr-band hooks module",
-  "modules": ["./register.js"]
-}

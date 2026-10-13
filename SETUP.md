@@ -21,7 +21,6 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
 | `plugins/model-discipline/` | `model-discipline` plugin - the agent-model-guard hook, a SessionStart rules block, and the `playbook` skill | `/plugin install`, see section 4 |
 | `plugins/plan-gate/` | `plan-gate` plugin - blocks `ExitPlanMode` until `/self-review` records a pass | `/plugin install`, see section 4 |
-| `plugins/pr-band/` | `pr-band` plugin - a band above the prompt showing your open PRs with CI and review status | `/plugin install`, see section 4 |
 | `claude-md/CLAUDE.md.template` | Generic user-level Claude Code preferences | copied to `~/.claude/CLAUDE.md` if absent |
 | `claude-md/MANIFESTO.md` | "The Ten Laws" design-philosophy template to drop into any repo | copy into a repo by hand, fill in the examples |
 | `install.sh` | Does the linking/copying above | - |
@@ -229,25 +228,6 @@ Requires `jq`. The marker is keyed on a hash of the project directory, so one re
 
 **Remove any hand-pasted `ExitPlanMode` entry from `hooks.PreToolUse` in `~/.claude/settings.json` first.** Earlier versions of this file told you to paste the gate in by hand. If both run, the first one consumes the marker and the second one denies, so plan mode locks.
 
-### pr-band plugin (your open PRs above the prompt)
-
-A mod (a plugin that runs JavaScript inside Claude Code) that draws one row above the prompt with your open PRs, their CI status, and review status, labeled by ticket key. It refreshes every 2 minutes. Full description: [plugins/pr-band/README.md](plugins/pr-band/README.md).
-
-```
-/plugin install pr-band@claude-setup
-/reload-plugins
-```
-
-Or from a plain shell: `claude plugin install pr-band@claude-setup`.
-
-Needs:
-
-- Claude Code 2.1.287 or newer (`claude --version`). Mods do not exist in older versions.
-- `gh` installed and logged in (`gh auth status`). The band shows `PRs: gh unavailable` otherwise.
-- The org to search. It defaults to `reserv-technologies`; change `org` (and `refreshSeconds`) in the plugin's options under `/plugin`.
-
-It draws in the terminal and the Desktop app's Code tab only. The VS Code chat panel and claude.ai/code run mods but do not draw them. Try it without installing: `claude --plugin-dir ~/Projects/claude-setup/plugins/pr-band`.
-
 And install the plugins you use via `/plugin` (at minimum, your tracker's plugin for `/start-ticket`).
 
 ## 5. Sanity check
@@ -261,6 +241,5 @@ For the plugins, open a fresh session and check:
 - `bash plugins/model-discipline/tests/agent-model-guard.test.sh` prints `5/5 passed.`
 - `ExitPlanMode` without a review is denied with the plan-gate message; after `/self-review` it goes through once.
 - `bash plugins/plan-gate/tests/plan-gate.test.sh` prints `6/6 passed.`
-- If you installed `pr-band`: a row starting `PRs` appears above the prompt within a few seconds of startup, and `claude plugin test plugins/pr-band` passes.
 
 If you set this repo up before the plugin existed, delete the leftover `~/bin/agent-model-guard` symlink by hand - `install.sh` no longer creates it, but it also never removes links it has stopped iterating over.
