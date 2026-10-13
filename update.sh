@@ -81,14 +81,17 @@ if [[ -n "$baks" ]]; then
   echo
 fi
 
-cache="$(ls -d "$HOME"/.claude/plugins/cache/claude-setup/model-discipline/*/ 2>/dev/null | head -1 || true)"
-if [[ -n "$cache" ]] && ! diff -rq -x .in_use "$cache" "$REPO_DIR/plugins/model-discipline" >/dev/null 2>&1; then
-  echo "== model-discipline plugin: installed cache differs from the repo =="
-  diff -rq -x .in_use "$cache" "$REPO_DIR/plugins/model-discipline" 2>/dev/null | sed 's/^/  /' || true
-  echo "  -> claude plugin marketplace update claude-setup && claude plugin uninstall model-discipline@claude-setup && claude plugin install model-discipline@claude-setup, then restart Claude Code"
-  echo "     (plain 'plugin update' and 'plugin install' are no-ops while the version stays 1.0.0)"
-  echo
-fi
+for plugin_dir in "$REPO_DIR"/plugins/*/; do
+  plugin="$(basename "$plugin_dir")"
+  cache="$(ls -d "$HOME"/.claude/plugins/cache/claude-setup/"$plugin"/*/ 2>/dev/null | head -1 || true)"
+  if [[ -n "$cache" ]] && ! diff -rq -x .in_use "$cache" "$REPO_DIR/plugins/$plugin" >/dev/null 2>&1; then
+    echo "== $plugin plugin: installed cache differs from the repo =="
+    diff -rq -x .in_use "$cache" "$REPO_DIR/plugins/$plugin" 2>/dev/null | sed 's/^/  /' || true
+    echo "  -> claude plugin marketplace update claude-setup && claude plugin uninstall $plugin@claude-setup && claude plugin install $plugin@claude-setup, then restart Claude Code"
+    echo "     (plain 'plugin update' and 'plugin install' are no-ops while the version in plugin.json is unchanged)"
+    echo
+  fi
+done
 
 echo "$after" > "$MARKER"
 echo "Synced at $(git rev-parse --short "$after"). Recorded in $MARKER."

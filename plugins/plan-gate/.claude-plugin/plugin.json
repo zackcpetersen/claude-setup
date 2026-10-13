@@ -1,0 +1,11 @@
+{
+  "name": "plan-gate",
+  "description": "Blocks ExitPlanMode until /self-review has recorded a pass for this project.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Zack Petersen"
+  },
+  "homepage": "https://github.com/zackcpetersen/claude-setup",
+  "repository": "https://github.com/zackcpetersen/claude-setup",
+  "license": "MIT"
+}

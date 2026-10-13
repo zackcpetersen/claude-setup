@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# PreToolUse hook for ExitPlanMode: deny unless /self-review recorded a pass
+# for this project in the last two hours, then consume that pass so every
+# new plan needs a fresh review.
+#
+# /self-review writes the marker as ~/.claude/plan-reviews/<hash>, where
+# <hash> is the first 16 hex chars of the sha256 of the project directory.
+# Wire-up ships with the plan-gate plugin (hooks/hooks.json); nothing needs
+# to be pasted into settings.json.
+# Unlike agent-model-guard this fails closed: a missing cwd (or missing jq)
+# denies, same as the settings.json snippet it replaces.
+
+set -u
+
+deny() {
+  cat <<'JSON'
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Plan gate: no /self-review pass recorded for this project. Run /self-review on the plan, apply the findings, then call ExitPlanMode again."}}
+JSON
+  exit 0
+}
+
+input=$(cat)
+cwd=$(printf %s "$input" | jq -r '.cwd // empty' 2>/dev/null)
+h=$(printf %s "$cwd" | shasum -a 256 | cut -c1-16)
+dir="$HOME/.claude/plan-reviews"
+marker="$dir/$h"
+
+# Expire stale passes before checking, so an old review never unlocks a plan.
+find "$dir" -type f -mmin +120 -delete 2>/dev/null
+
+[[ -n "$cwd" && -f "$marker" ]] || deny
+
+rm -f "$marker"
+exit 0

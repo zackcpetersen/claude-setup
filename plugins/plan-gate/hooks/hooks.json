@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/plan-gate\"",
+            "timeout": 15,
+            "statusMessage": "Checking for a self-review pass"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "pr-band",
+  "description": "A mod that shows your open pull requests above the prompt, labeled by ticket key, with CI and review status.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Zack Petersen"
+  },
+  "homepage": "https://github.com/zackcpetersen/claude-setup",
+  "repository": "https://github.com/zackcpetersen/claude-setup",
+  "license": "MIT",
+  "userConfig": {
+    "org": {
+      "type": "string",
+      "title": "GitHub org",
+      "description": "Only show your open PRs in this GitHub organization",
+      "default": "reserv-technologies"
+    },
+    "refreshSeconds": {
+      "type": "number",
+      "title": "Refresh interval (seconds)",
+      "description": "How often to ask GitHub for your open PRs",
+      "default": 120,
+      "min": 30
+    }
+  }
+}

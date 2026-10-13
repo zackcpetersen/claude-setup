@@ -73,4 +73,4 @@ mkdir -p ~/.claude/plan-reviews && touch ~/.claude/plan-reviews/"$(printf %s "$P
 
 The marker is consumed by the next ExitPlanMode and expires after 2 hours, so each new plan needs a fresh review. Skip this step for implementation reviews.
 
-If the hook is not installed on this machine, the marker is harmless. The hook snippet is in SETUP.md section 4.
+If the hook is not installed on this machine, the marker is harmless. Install it with `/plugin install plan-gate@claude-setup`.

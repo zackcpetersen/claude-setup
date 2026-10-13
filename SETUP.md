@@ -20,6 +20,8 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `bin/worktree` | Multi-repo git worktree manager | `~/bin/` (symlink) |
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
 | `plugins/model-discipline/` | `model-discipline` plugin - the agent-model-guard hook, a SessionStart rules block, and the `playbook` skill | `/plugin install`, see section 4 |
+| `plugins/plan-gate/` | `plan-gate` plugin - blocks `ExitPlanMode` until `/self-review` records a pass | `/plugin install`, see section 4 |
+| `plugins/pr-band/` | `pr-band` plugin - a band above the prompt showing your open PRs with CI and review status | `/plugin install`, see section 4 |
 | `claude-md/CLAUDE.md.template` | Generic user-level Claude Code preferences | copied to `~/.claude/CLAUDE.md` if absent |
 | `claude-md/MANIFESTO.md` | "The Ten Laws" design-philosophy template to drop into any repo | copy into a repo by hand, fill in the examples |
 | `install.sh` | Does the linking/copying above | - |
@@ -75,8 +77,10 @@ The manual equivalent, and what `update.sh` does under the hood:
    section the repo has that yours lacks, and fill in each FILL IN with this
    machine's values. Work through the changelog below for the ones that need
    action.
-3. Open section 4 below and compare each snippet against the `hooks` block
-   of `~/.claude/settings.json`. Paste in any that are missing or differ.
+3. Open section 4 below and compare each remaining snippet (the update
+   nudge) against the `hooks` block of `~/.claude/settings.json`. Paste in
+   any that are missing or differ. Install any plugins from section 4 that
+   `/plugin list` does not show.
 4. Confirm: `ls -la ~/.claude/commands/` shows symlinks into the repo, and
    `/pr`, `/babysit-pr`, `/self-review`, `/start-ticket` appear exactly once
    in the slash command list.
@@ -90,6 +94,10 @@ The manual equivalent, and what `update.sh` does under the hood:
 Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
 
+- 2026-10-13: The plan gate is now the `plan-gate` plugin. Remove the
+  inline `ExitPlanMode` hook from `~/.claude/settings.json` BEFORE
+  installing plan-gate (`/plugin install plan-gate@claude-setup`). Running
+  both locks plan mode.
 - 2026-09-23: The commit message format left `/pr`. CLAUDE.md's
   `## Git and Version Control` section now has a `Commit message format:`
   line (default `type: description`). Set yours, e.g.
@@ -209,25 +217,36 @@ Once a day, on session start, this fetches `origin/main` for the clone at `~/Pro
 }
 ```
 
-### Plan gate hook (self-review before any plan)
+### plan-gate plugin (self-review before any plan)
 
-`/self-review` records a marker file under `~/.claude/plan-reviews/` when a plan review completes. This hook denies `ExitPlanMode` unless a marker exists for the current project and is under two hours old, then consumes it, so every new plan needs a fresh review. Add it to `hooks.PreToolUse` in `~/.claude/settings.json`:
+`/self-review` records a marker file under `~/.claude/plan-reviews/` when a plan review completes. The plan-gate hook denies `ExitPlanMode` unless a marker exists for the current project and is under two hours old, then consumes it, so every new plan needs a fresh review. It ships as a plugin, so there is no hook JSON to paste. Full description: [plugins/plan-gate/README.md](plugins/plan-gate/README.md).
 
-```json
-{
-  "matcher": "ExitPlanMode",
-  "hooks": [
-    {
-      "type": "command",
-      "command": "input=$(cat); cwd=$(printf %s \"$input\" | jq -r '.cwd // empty'); h=$(printf %s \"$cwd\" | shasum -a 256 | cut -c1-16); d=\"$HOME/.claude/plan-reviews\"; f=\"$d/$h\"; find \"$d\" -type f -mmin +120 -delete 2>/dev/null; if [ -n \"$cwd\" ] && [ -f \"$f\" ]; then rm -f \"$f\"; else echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"Plan gate: no /self-review pass recorded for this project. Run /self-review on the plan, apply the findings, then call ExitPlanMode again.\"}}'; fi",
-      "timeout": 15,
-      "statusMessage": "Checking for a self-review pass"
-    }
-  ]
-}
+```
+/plugin install plan-gate@claude-setup
 ```
 
 Requires `jq`. The marker is keyed on a hash of the project directory, so one review unlocks one plan in one project.
+
+**Remove any hand-pasted `ExitPlanMode` entry from `hooks.PreToolUse` in `~/.claude/settings.json` first.** Earlier versions of this file told you to paste the gate in by hand. If both run, the first one consumes the marker and the second one denies, so plan mode locks.
+
+### pr-band plugin (your open PRs above the prompt)
+
+A mod (a plugin that runs JavaScript inside Claude Code) that draws one row above the prompt with your open PRs, their CI status, and review status, labeled by ticket key. It refreshes every 2 minutes. Full description: [plugins/pr-band/README.md](plugins/pr-band/README.md).
+
+```
+/plugin install pr-band@claude-setup
+/reload-plugins
+```
+
+Or from a plain shell: `claude plugin install pr-band@claude-setup`.
+
+Needs:
+
+- Claude Code 2.1.287 or newer (`claude --version`). Mods do not exist in older versions.
+- `gh` installed and logged in (`gh auth status`). The band shows `PRs: gh unavailable` otherwise.
+- The org to search. It defaults to `reserv-technologies`; change `org` (and `refreshSeconds`) in the plugin's options under `/plugin`.
+
+It draws in the terminal and the Desktop app's Code tab only. The VS Code chat panel and claude.ai/code run mods but do not draw them. Try it without installing: `claude --plugin-dir ~/Projects/claude-setup/plugins/pr-band`.
 
 And install the plugins you use via `/plugin` (at minimum, your tracker's plugin for `/start-ticket`).
 
@@ -235,10 +254,13 @@ And install the plugins you use via `/plugin` (at minimum, your tracker's plugin
 
 Open Claude Code anywhere and run `/pr`, `/babysit-pr`, `/self-review`, or `/start-ticket` - they should appear in the slash-command list. `/output-style` should list Direct, Momentum, and TLDR. `worktree help` and `query_db` with no args should both print usage.
 
-For the plugin, open a fresh session and check:
+For the plugins, open a fresh session and check:
 
-- `/plugin list` shows `model-discipline` enabled, and the session's context includes the model-discipline rules block.
+- `/plugin list` shows `model-discipline` and `plan-gate` enabled, and the session's context includes the model-discipline rules block.
 - On a session running the expensive model, an `Agent` dispatch with no `model` is denied with the guard's message; `model: "sonnet"` goes through.
 - `bash plugins/model-discipline/tests/agent-model-guard.test.sh` prints `5/5 passed.`
+- `ExitPlanMode` without a review is denied with the plan-gate message; after `/self-review` it goes through once.
+- `bash plugins/plan-gate/tests/plan-gate.test.sh` prints `6/6 passed.`
+- If you installed `pr-band`: a row starting `PRs` appears above the prompt within a few seconds of startup, and `claude plugin test plugins/pr-band` passes.
 
 If you set this repo up before the plugin existed, delete the leftover `~/bin/agent-model-guard` symlink by hand - `install.sh` no longer creates it, but it also never removes links it has stopped iterating over.

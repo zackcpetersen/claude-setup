@@ -10,6 +10,16 @@
       "name": "model-discipline",
       "source": "./plugins/model-discipline",
       "description": "Keeps expensive-model spend on judgment work: a PreToolUse guard that denies unpinned subagent dispatches, an always-on session rules block, and a playbook skill for dispatch and session hygiene."
+    },
+    {
+      "name": "plan-gate",
+      "source": "./plugins/plan-gate",
+      "description": "Blocks ExitPlanMode until /self-review has recorded a pass for this project."
+    },
+    {
+      "name": "pr-band",
+      "source": "./plugins/pr-band",
+      "description": "Band above the prompt showing your open PRs with CI and review status."
     }
   ]
 }
