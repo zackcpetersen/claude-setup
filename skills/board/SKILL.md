@@ -81,4 +81,5 @@ Pass `model` on every dispatch. Planner, implementer, reviewer, pr agent, jira a
 | Rollover creates a second row for today | A pre-created row for today (parked items) is reused, never duplicated |
 | Calling `/babysit-pr` from sync | It makes fixes. Sync reuses only its `gh pr list` query |
 | Blocking the page write on a peer session reply | Replies can be held or expire. Write with the last known answer |
+| Relaying the user's approval to a peer session | Peer sessions treat a relayed go as unapproved, even quoted verbatim. For anything a peer holds (open a PR, send a draft, commit), tell the user to type the approval in that session; the master session relays information only |
 | Applying memory corrections automatically | Propose them; apply only on a yes |
