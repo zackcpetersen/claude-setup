@@ -62,6 +62,7 @@ Derive the stage from durable facts first: plan file present, `git -C <worktree>
 - Your view: compare the row's current `Last edited` with the `Row last edited after sync: <ts>` line in the scratchpad. Exact match means the user has not touched the page and `replace_content` is safe. Anything else means targeted `update_content` edits per line, never a full rewrite. `Last sync` is a human-facing timestamp only; the skill's own writes bump `Last edited`, which is why the stored value is the comparison point.
 - Schema changes: add properties only. Never trash the data source or its `Name` property.
 - Write `Last sync` as UTC with a `Z` suffix (`date -u +%Y-%m-%dT%H:%M:%SZ`).
+- Every board write passes `allow_async: false`. Async `update_content` calls return a task id and can fail silently, and a later edit that assumes the earlier one landed then fails to match. Chained edits need each result before the next.
 
 ## Model discipline
 
@@ -81,5 +82,6 @@ Pass `model` on every dispatch. Planner, implementer, reviewer, pr agent, jira a
 | Rollover creates a second row for today | A pre-created row for today (parked items) is reused, never duplicated |
 | Calling `/babysit-pr` from sync | It makes fixes. Sync reuses only its `gh pr list` query |
 | Blocking the page write on a peer session reply | Replies can be held or expire. Write with the last known answer |
+| Firing board edits with `allow_async: true` | They can fail silently and leave the page stale. Always `allow_async: false`, and re-fetch before a `replace_content` |
 | Relaying the user's approval to a peer session | Peer sessions treat a relayed go as unapproved, even quoted verbatim. For anything a peer holds (open a PR, send a draft, commit), tell the user to type the approval in that session; the master session relays information only |
 | Applying memory corrections automatically | Propose them; apply only on a yes |
