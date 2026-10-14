@@ -9,7 +9,7 @@ One database, one row per day. Add missing properties with `notion-update-data-s
 | Name | title | `YYYY-MM-DD (Day)`, e.g. `2026-10-12 (Mon)` |
 | Date | date | The day. "Today" is local `date +%F` |
 | Status | select: Open / Closed | Open = the live row; Closed at rollover |
-| Focus | text | One line: the day's top priority |
+| Focus | text | The day's goal in one line (same outcomes as the Today's goal section) |
 | Last sync | date with time | When the skill last wrote the page, always UTC with a `Z` suffix |
 | Last edited | last_edited_time | Compared with Last sync to detect manual edits before any rewrite |
 
@@ -22,8 +22,13 @@ Default view: sorted by Date descending.
 ```
 # Your view
 
-## Today's focus
-One or two lines. The thing that, if nothing else moves, should.
+## Today's goal
+Set at rollover, confirmed by the user before the first sync writes it. At most three outcomes the user can finish today, each checkable.
+- [ ] <outcome 1>
+- [ ] <outcome 2>
+- [ ] <outcome 3>
+
+Changes: none yet. One line per change: <HH:MMZ> <what came in> displaced <what moved out, and where it went>.
 
 ## Needs you (decisions, approvals, sends)
 - [ ] <TICKET or topic>: <exact ask> (<holder: session or agent name>) <link> (since YYYY-MM-DD)
