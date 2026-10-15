@@ -20,6 +20,21 @@ Default view: sorted by Date descending.
 ## Day row body ("Your view")
 
 ```
+## Standup
+### Completed yesterday
+- <KEY> - <title>
+	- <What was done.> <Why it matters, one sentence.>
+- <PARENT KEY> - <parent title>   (when 3+ items in the section share a parent work item)
+	- <CHILD KEY> - <title>
+		- <What was done.> <Why it matters, one sentence.>
+### Working on today
+- <KEY> - <title>
+	- <What happens today, one spoken sentence.>
+### Oncall   (only when the previous row has `oncall:` Done-today lines)
+- <ticket or alert> - oncall - <title> - <what was done and why it matters>
+### Blockers
+- <KEY> - <what> - waiting on <who> since <YYYY-MM-DD>
+
 # Your view
 
 ## Today's goal
@@ -91,6 +106,11 @@ Keyed by ticket. Rows persist across syncs and rollovers until stage is done. Su
 ## Open questions for the user (not yet asked)
 
 ## Rollover log
+- Rollover started: <UTC timestamp, written first by rollover; the next standup counts activity after it>
 - Carried from <previous date>: N needs-you, M in flight, K blocked, J deferred.
 - Closed on <previous date>: ...
 ```
+
+## Standup section rules
+
+The first block of the row, above Today's goal. Built once, at rollover, by the `standup-builder` prompt in `dispatch-prompts.md`, which holds the selection, oncall and blocker rules. Ticketed, meaningful work only, with no length cap; small follow-ups are dropped unless the day is sparse. Parent work items come from the tracker's parent field or the parent list in the Work board config. Sync never rewrites it; a full rewrite of Your view copies an existing Standup back verbatim and never writes the placeholder above. `/board done` appends to Done today only.
