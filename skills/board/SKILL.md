@@ -16,7 +16,7 @@ One place to see all active work. State lives in a Notion database with one row 
 | `/board start <TICKET> [repo]` | Worktree, planner, approval, implementer, reviewer, `/pr` |
 | `/board resume <TICKET>` | Restart a stream from its registry row after a session restart |
 | `/board status [<TICKET>]` | Stage of one or all streams, from files first, agents second |
-| `/board done <text>` / `/board defer <text>` | Tick or move one line on Your view |
+| `/board done <text>` / `/board defer <text>` | Tick or move one line on Your view. `done oncall: <text>` appends `- [x] oncall: <text>` to Done today, which the next standup puts under Oncall |
 
 ## Config
 
@@ -33,14 +33,14 @@ Prompts live in `dispatch-prompts.md`; the page layout and database schema live 
 1. Read config and do the Notion setup above. Find the row with `Status = Open` (query the data source; fall back to fetching it). If none, or its Date is not local `date +%F`, run rollover first. If more than one row is Open, keep the newest and close the rest.
 2. In ONE message dispatch three Explore gatherers from `dispatch-prompts.md`: `jira-status` (opus), `slack-status` (opus), `github-status` (sonnet). Read `MEMORY.md` and the watch-slack state file inline. Message idle peer sessions with the handoff ask only on rollover or `--sessions`; otherwise reuse the scratchpad's last answer marked "as of <time>". Never wait on a peer reply to write the page.
 3. Merge into the template. Never rewrite the Today's goal section: tick outcomes that are done, and when a new item outranks a goal outcome (an external person waiting, a deadline today, an alert on owned work), propose the swap in chat and write it under Changes only after the user says yes; the displaced outcome goes to Needs you or Deferred. Every Needs-you line names the holder and the exact ask. Blocked rows get nudge-due = since + 3 business days. Items carried `carry_flag_days`+ are flagged under Pacing. Anything past `max_needs_you` goes to Deferred, ordered: external people waiting > PR and merge gates > sub-agent approvals > housekeeping.
-4. Write Notion (rules below). The scratchpad rewrite rebuilds from the PREVIOUS scratchpad plus the new findings: Work registry rows persist until their stage is done, the Peer sessions table and the open outreach thread list carry forward. Set `Last sync`, then fetch the row's `Last edited` and store it in the scratchpad as `Row last edited after sync: <ts>`.
+4. Write Notion (rules below). The scratchpad rewrite rebuilds from the PREVIOUS scratchpad plus the new findings: Work registry rows persist until their stage is done, the Peer sessions table and the open outreach thread list carry forward. On a sync run by rollover, after the Your view write: if the row has no `## Standup` yet, dispatch `standup-builder` (sonnet, inputs as its placeholders list) on this run's gatherer replies and insert its output at the top of the row (`insert_content`, position start); if one exists, leave it and say so. Set `Last sync`, then fetch the row's `Last edited` and store it in the scratchpad as `Row last edited after sync: <ts>`.
 5. Print only Your view plus one pacing line that starts with goal progress (`goal 1/3`), then "Memory corrections to apply" if any. Apply memory edits only after the user says yes.
 
 ## rollover
 
-Create today's row (`Name` = `YYYY-MM-DD (Day)`, Date, Status Open) and its scratchpad child. If a row with today's Date already exists (the user pre-created it to park items for today), reuse it: set its Status Open, keep every line already on it, and merge the carried items in under the matching headings instead of creating a second row. Into Your view copy unchecked Needs-you, non-done In-flight, all Blocked and Deferred lines; append ` (since YYYY-MM-DD)` to each carried line that lacks one, using the previous row's Date (the carry flag compares that date to today). Into the new scratchpad copy every Work registry row whose stage is not done, the Peer sessions table, and the open outreach thread list from Raw findings. Write the Rollover log on both pages, listing each unmet goal outcome from the previous row with a one-line reason. Set the previous row Closed.
+Create today's row (`Name` = `YYYY-MM-DD (Day)`, Date, Status Open) and its scratchpad child. If a row with today's Date already exists (the user pre-created it to park items for today), reuse it: set its Status Open, keep every line already on it, and merge the carried items in under the matching headings instead of creating a second row. Into Your view copy unchecked Needs-you, non-done In-flight, all Blocked and Deferred lines; append ` (since YYYY-MM-DD)` to each carried line that lacks one, using the previous row's Date (the carry flag compares that date to today). Into the new scratchpad copy every Work registry row whose stage is not done, the Peer sessions table, and the open outreach thread list from Raw findings. Write the Rollover log on both pages, starting with `Rollover started: <UTC time this rollover began>`, then listing each unmet goal outcome from the previous row with a one-line reason. Set the previous row Closed.
 
-Then set the goal: propose at most three outcomes for today, drawn from unmet outcomes, carried Needs-you lines, nudges due today and dated deadlines, each one something the user can finish today. Ask the user to confirm or edit before writing it (this is the one place rollover waits on the user). Write the confirmed outcomes under Today's goal and the same outcomes in one line in the Focus property. Then sync.
+Then set the goal: propose at most three outcomes for today, drawn from unmet outcomes, carried Needs-you lines, nudges due today and dated deadlines, each one something the user can finish today. Ask the user to confirm or edit before writing it (this is the one place rollover waits on the user). Write the confirmed outcomes under Today's goal and the same outcomes in one line in the Focus property. Then sync; its step 4 builds the standup.
 
 ## start
 
@@ -61,6 +61,7 @@ Derive the stage from durable facts first: plan file present, `git -C <worktree>
 
 - Read `notion://docs/enhanced-markdown-spec` before the first write of a session.
 - Scratchpad child page: `replace_content` every sync.
+- The Standup section is written once at rollover and never rewritten. A `replace_content` of Your view copies an existing Standup back verbatim and never writes the template placeholder.
 - Your view: compare the row's current `Last edited` with the `Row last edited after sync: <ts>` line in the scratchpad. Exact match means the user has not touched the page and `replace_content` is safe. Anything else means targeted `update_content` edits per line, never a full rewrite. `Last sync` is a human-facing timestamp only; the skill's own writes bump `Last edited`, which is why the stored value is the comparison point.
 - Schema changes: add properties only. Never trash the data source or its `Name` property.
 - Write `Last sync` as UTC with a `Z` suffix (`date -u +%Y-%m-%dT%H:%M:%SZ`).
@@ -68,7 +69,7 @@ Derive the stage from durable facts first: plan file present, `git -C <worktree>
 
 ## Model discipline
 
-Pass `model` on every dispatch. Planner, implementer, reviewer, pr agent, jira and slack gatherers: opus. GitHub gatherer and other mechanical work: sonnet. The main session never runs the external gathering (tracker, GitHub, Slack) itself; reading local files like `MEMORY.md` inline is fine.
+Pass `model` on every dispatch. Planner, implementer, reviewer, pr agent, jira and slack gatherers: opus. GitHub gatherer, standup-builder and other mechanical work: sonnet. The main session never runs the external gathering (tracker, GitHub, Slack) itself; reading local files like `MEMORY.md` inline is fine.
 
 ## Common mistakes
 
@@ -87,4 +88,5 @@ Pass `model` on every dispatch. Planner, implementer, reviewer, pr agent, jira a
 | Firing board edits with `allow_async: true` | They can fail silently and leave the page stale. Always `allow_async: false`, and re-fetch before a `replace_content` |
 | Relaying the user's approval to a peer session | Peer sessions treat a relayed go as unapproved, even quoted verbatim. For anything a peer holds (open a PR, send a draft, commit), tell the user to type the approval in that session; the master session relays information only |
 | Applying memory corrections automatically | Propose them; apply only on a yes |
+| Building the standup from the board's Done-today ticks alone, or re-running the gatherers for it | Ticks miss untracked work (merges, approvals, replies). Feed it the gatherer replies this rollover already has |
 | Rewriting Today's goal during sync, or setting it without the user | The goal is set once at rollover with the user's confirmation; sync only ticks outcomes and logs confirmed swaps under Changes |

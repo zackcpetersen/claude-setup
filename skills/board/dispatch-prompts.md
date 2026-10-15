@@ -15,6 +15,9 @@ Every `{{placeholder}}` maps to a key in the `### Work board` section of `~/.cla
 | `approved_files` | the user's ship-it turn |
 | `registry_rows`, `outreach_threads`, peer answers | the previous scratchpad; empty on the first run, which the prompts tolerate |
 | `slack_user_id`, `slack_channels`, `tracker_project`, `tracker_epics`, `github_org`, `worktree_config`, `worktree_script` | the `### Work board` section of `~/.claude/CLAUDE.md` |
+| `prev_done_today`, `prev_rollover_time` | the previous row's Done today section, and the `Rollover started:` line in its scratchpad's Rollover log (else its Date at 00:00 UTC) |
+| `jira_report`, `github_report`, `slack_report` | this rollover's gatherer replies, verbatim |
+| `confirmed_goal`, `carried_needs_you`, `blocked_rows` | the new row's Today's goal, Needs you and Blocked sections after the carry |
 
 Read-only rule, included verbatim in every gatherer prompt:
 
@@ -27,7 +30,7 @@ Read-only rule, included verbatim in every gatherer prompt:
 ```
 You are gathering a read-only status snapshot of {{user_name}}'s issue tracker work ({{tracker_site}}, tools `{{tracker_mcp_prefix}}*`). Today is {{today}}. READ-ONLY. Never call any tool that sends, posts, drafts, creates, updates, edits, comments, reacts, transitions, commits, pushes, checks out, stashes or deletes.
 
-Run these queries (compact view; fields: key, summary, status, priority, issuetype, assignee, reporter, updated, parent, labels, duedate):
+Run these queries (compact view; fields: key, summary, status, priority, issuetype, assignee, reporter, updated, resolutiondate, parent, labels, duedate):
 1. assignee = currentUser() AND statusCategory != Done ORDER BY priority DESC, updated DESC
 2. reporter = currentUser() AND statusCategory != Done AND assignee != currentUser()
 3. parent in ({{tracker_epics}}) ORDER BY status
@@ -38,11 +41,12 @@ Run these queries (compact view; fields: key, summary, status, priority, issuety
 For each In Progress or In Review ticket from query 1, read the description's progress notes and the last 3 comments: next concrete step, blocked on whom or what, and whether anything waits on {{user_name}} (decision, comment, approval). Treat a batch of tickets all updated in the same minute with no comments as not actually updated.
 
 Return under 120 lines:
-- Table A: open tickets assigned to {{user_name}}: key, summary, status, priority, epic, updated, next step, blocked-on, waiting-on-user (yes + what / no).
+- Table A: open tickets assigned to {{user_name}}: key, summary (the ticket title, always included), status, priority, epic, updated, next step, blocked-on, waiting-on-user (yes + what / no).
 - Table B: open tickets {{user_name}} reported or watches, assigned to others: status, what is expected from them.
 - Epic rollups for {{tracker_epics}}: children by status, stalled children (In Progress, no real update 7+ days), unassigned children.
 - Dates in the next 30 days, including dates that only appear in ticket text.
 - "Things that look off": In Progress with 10+ quiet days, Done here but open elsewhere, unassigned High priority updated in 14 days, epics in the wrong status.
+- "Activity since {{since_date}}": one line per ticket {{user_name}} resolved, transitioned or commented on since then: key, summary (the ticket title), parent key, labels, what happened, UTC timestamp.
 ```
 
 ## github-status (model: sonnet, Explore)
@@ -58,6 +62,8 @@ Part 1, GitHub:
 3. For each branch in the work registry (passed in below), `gh pr list --repo <repo> --head <branch> --state all`.
 4. Dependabot PRs on the main repos that fix an open security alert: count plus the ones that are major bumps.
 
+5. Activity since {{since_date}}: `gh search prs --author @me --merged ">={{since_date}}" --owner {{github_org}}` and `gh search prs --reviewed-by @me --updated ">={{since_date}}" --owner {{github_org}}`, plus approvals and reviews received on the user's PRs. One line each: repo, PR number, title, head branch, what happened, UTC timestamp, ticket key if the title or branch names one.
+
 Part 2, local checkouts:
 1. `{{worktree_script}} list`, then loop over `.repos[].repo_path` and `.repos[].worktree_base` from the worktree config json ({{worktree_config}}) and scan each git checkout under them (the repo itself, and every directory inside each worktree base).
 2. Per checkout: branch, `git -C <path> status --short | wc -l` plus top files, unpushed commits (`git -C <path> log --oneline @{upstream}..HEAD 2>/dev/null | wc -l`), last commit date, open PR for the branch.
@@ -65,7 +71,7 @@ Part 2, local checkouts:
 
 Registry rows to check: {{registry_rows}}
 
-Return under 120 lines: Table A open PRs; Table B review/reply owed; named branch states; Table C local checkouts with a suggested disposition (active / at-risk / stale-remove); "Things that look off".
+Return under 120 lines: Table A open PRs; Table B review/reply owed; "Activity since {{since_date}}"; named branch states; Table C local checkouts with a suggested disposition (active / at-risk / stale-remove); "Things that look off".
 ```
 
 ## slack-status (model: opus, Explore)
@@ -79,12 +85,70 @@ Gather:
 1. Each watched channel in {{slack_channels}}: read since {{since_date}}. For every top-level post or thread that names or is addressed to the user, decide whether the user replied after the ask. List unanswered ones: channel, who, when, one-line ask, thread ts.
 2. DMs and group DMs since {{since_date}}: messages from others the user has not answered, with the ask.
 3. Outreach threads the user owns (from the previous scratchpad, passed in below): new replies since last sync, who the ball is with, whether a nudge is due (3 business days of silence), whether a nudge already went out.
-4. Only for channels tagged `(alerts)` in {{slack_channels}}: anything in the last 3 days tagged to the user's area that has no recovery or reply. Skip this step for untagged channels.
+4. Only for channels tagged `(alerts)` in {{slack_channels}}: anything in the last 3 days tagged to the user's area that has no recovery or reply,. Skip this step for untagged channels.
 5. `from:<@{{slack_user_id}}> after:{{since_date}}`: commitments the user made that are still open.
 
 Outreach threads to check: {{outreach_threads}}
 
-Return under 120 lines with thread ts values on every line: "Waiting on user" (with urgency today / this week / low), "Waiting on others" (per thread: ball with, since, nudge due or sent), "Commitments made since {{since_date}}", "Alerts possibly unhandled", "Things that look off", and a one-line coverage caveat.
+Return under 120 lines with thread ts values on every line: "Waiting on user" (with urgency today / this week / low), "Waiting on others" (per thread: ball with, since, nudge due or sent), "Commitments made since {{since_date}}", "Posts sent since {{since_date}}" (one line per post or reply by the user: channel, thread, gist, UTC time), "Alerts possibly unhandled", "Things that look off", and a one-line coverage caveat.
+```
+
+## standup-builder (model: sonnet, general-purpose, rollover only)
+
+Dispatched after the goal is confirmed and the sync gatherers have returned. It reads only what it is given and calls no tools.
+
+```
+You are writing {{user_name}}'s daily standup from the inputs below. They read it aloud, so keep each line short. Use no tools. Return only the markdown block, nothing before or after it.
+
+The output is exactly this shape, in Notion markdown, nested with tab characters:
+
+## Standup
+### Completed yesterday
+- <KEY> - <title>
+	- <What was done.> <Why it matters, one sentence.>
+- <PARENT KEY> - <parent title>
+	- <CHILD KEY> - <title>
+		- <What was done.> <Why it matters, one sentence.>
+### Working on today
+- <KEY> - <title>
+	- <What they will do today, one spoken sentence.>
+### Oncall
+- <ticket or alert> - oncall - <title> - <what was done and why it matters>
+### Blockers
+- <KEY> - <what> - waiting on <who> since <YYYY-MM-DD>
+
+How to fill it:
+1. Candidate items: every line of PREVIOUS DONE TODAY, plus every line in the reports' "Activity since" and "Posts sent since" sections dated after {{prev_rollover_time}}, plus any other dated event in the reports that {{user_name}} did or that moved their work (merges, approvals received, transitions). Merge duplicates. Drop board and session upkeep (rolling the board, memory edits, stopping or replacing agents).
+2. Key each item to a work item: a key in its text, else the PR-to-ticket mapping in the GitHub report, else the work item whose title or parent names the same project or system as the item (an item about a system's shutdown belongs to the work item for that shutdown). Items with no ticket after that are dropped, except meaningful unticketed work such as a kickoff meeting or an incident: at most 2, under one `- No ticket` bullet at the end of the section.
+3. Keep only meaningful work, in both sections: something shipped, merged, approved, decided, designed, built or delivered. Drop small follow-ups: acks, nudges, one-line ticket closes, draft discards, routine checks. Exception: when a section has fewer than 3 items left, put its small ones back. Never drop meaningful work to keep the standup short.
+4. Every ticket bullet is `<KEY> - <title>`, with the title copied from the tracker report's summary for that key. Drop a leading sequence tag such as `[3/10]`. If no input gives a title, write `<KEY> - (title missing)`. Never invent a title.
+5. Parent rollup: a work item's parent is the parent key the tracker report gives it, else the parent stated in the inputs. Parents to roll up are {{tracker_epics}} plus any parent the tracker report names. Within one section, when 3 or more items share a parent, put them under one `<PARENT KEY> - <parent title>` bullet, each child indented one level with its own sub-bullets. With fewer, each item stays top-level. Use only parent links stated in the inputs.
+6. Completed yesterday: one bullet per ticket. Its first sub-bullet says what was done, then one sentence on why it matters to someone outside the team; two sentences in all, at most. Add a second sub-bullet only when a second, separate meaningful change happened on that ticket. No PR numbers, commit hashes, Slack timestamps, draft ids, file paths or clock times.
+7. Working on today: one bullet per ticket in TODAY'S GOAL, in goal order, then tickets from the CARRIED NEEDS-YOU lines that matter most. One sub-bullet each: a spoken sentence about what {{user_name}} will do, not a copy of the goal text.
+8. Oncall: only lines of PREVIOUS DONE TODAY whose text after the checkbox starts with `oncall:` (drop the prefix). Nothing else goes here: not alert channels, monitors, error trackers or dependency alerts. No such lines, no Oncall heading.
+9. Blockers: rows of BLOCKED and CARRIED NEEDS-YOU that wait on another person and name a ticket that appears in Completed yesterday or Working on today. One line each. Drop all other rows. Omit the heading when there are none.
+10. Plain English, short sentences, no em-dashes or en-dashes, no tables, no links, and no PR numbers in any section. Keep acronyms as the inputs write them; never guess what one stands for. Avoid the characters < > [ ] | in text.
+
+PREVIOUS DONE TODAY:
+{{prev_done_today}}
+
+JIRA REPORT:
+{{jira_report}}
+
+GITHUB REPORT:
+{{github_report}}
+
+SLACK REPORT:
+{{slack_report}}
+
+TODAY'S GOAL:
+{{confirmed_goal}}
+
+CARRIED NEEDS-YOU:
+{{carried_needs_you}}
+
+BLOCKED:
+{{blocked_rows}}
 ```
 
 ## Peer session handoff (SendMessage, only on rollover or `--sessions`)
