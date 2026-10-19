@@ -26,6 +26,8 @@ Manual steps only, in the order to do them; logins from the access check first. 
 - [ ] <merge / meeting / send / click the user must do by hand>
 
 ## Standup
+### Short version
+One paragraph, no ticket keys or technical detail: overall progress, today's focus, blockers. For reading aloud to a mixed audience.
 ### Completed yesterday
 - <KEY> - <title>
 	- <What was done.> <Why it matters, one sentence.>
