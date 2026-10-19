@@ -61,6 +61,7 @@ At most `max_needs_you` lines here; the rest go under Deferred.
 ## In flight (sub-agents and sessions)
 | Work | Stage | Owner | Next step | Link |
 |---|---|---|---|---|
+Work mentions the project page from the Projects database when one exists.
 Stages: planning / plan-review / awaiting-approval / implementing / code-review / pr-open / ci / ready-to-merge / done
 
 ## Blocked / waiting on others

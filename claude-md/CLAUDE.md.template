@@ -82,6 +82,7 @@ Reviews a teammate's pull request: `/review-pr <number or URL> [--effort medium]
 - Memory dir: <path to the Claude memory directory for this machine>
 - Watch-slack state file: ~/.claude/watch-slack-last-ts.txt <!-- optional -->
 - WIP limits (starting values, tune after a week): max_streams 3, max_needs_you 7, carry_flag_days 3
+- Projects data source: <collection://... of the Projects database, optional> <!-- one row per workstream; the board appends progress and decisions to its pages -->
 - Oncall: <yes|no> <!-- flip at the start of each rotation week; `no` means the board never reads alert channels or tracks alerts -->
 - Access checks (run by the board at the start of each day; `<name>: <check command> | <fix>`; a fix starting with `!` needs the user):
   - AWS SSO: `aws sts get-caller-identity --profile <profile>` | `! aws sso login --profile <profile>` <!-- one login per SSO start URL covers every profile that shares it -->

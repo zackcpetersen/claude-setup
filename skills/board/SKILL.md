@@ -21,7 +21,7 @@ One place to see all active work. State lives in a Notion database with one row 
 
 ## Config
 
-Read the `### Work board` section of `~/.claude/CLAUDE.md` first. It holds every machine-specific value: the Notion board page (one line, URL or id), Slack user id, watched channel ids (a channel tagged `(alerts)` is also scanned for unhandled alerts), tracker project and epics, GitHub org, worktree config path, `worktree` and `start-ticket` script paths, memory dir, watch-slack state file, the `Oncall` flag, the `Access checks` list, and the WIP limits (`max_streams`, `max_needs_you`, `carry_flag_days`). Nothing in this skill names a company, person, channel, ticket or path.
+Read the `### Work board` section of `~/.claude/CLAUDE.md` first. It holds every machine-specific value: the Notion board page (one line, URL or id), Slack user id, watched channel ids (a channel tagged `(alerts)` is also scanned for unhandled alerts), tracker project and epics, GitHub org, worktree config path, `worktree` and `start-ticket` script paths, memory dir, watch-slack state file, the `Oncall` flag, the `Access checks` list, the `Projects` data source (optional), and the WIP limits (`max_streams`, `max_needs_you`, `carry_flag_days`). Nothing in this skill names a company, person, channel, ticket or path.
 
 If the section or the Notion page line is missing, stop with: "Add the `### Work board` section to ~/.claude/CLAUDE.md (see claude-md/CLAUDE.md.template in claude-setup) and set the board page."
 
@@ -46,6 +46,16 @@ Runs once per day, before the first gatherer dispatch: at rollover, on the first
 3. Merge into the template. Keep `## Your TODOs` at the top of the row: only steps the user must do by hand (logins, merges, meetings, clicks, sends of approved drafts), one checkable line each in the order they should happen, with login lines first; keep the user's ticks, add new lines, never move agent-held approvals in from Needs you. Never rewrite the Today's goal section: tick outcomes that are done, and when a new item outranks a goal outcome (an external person waiting, a deadline today, an alert on owned work), propose the swap in chat and write it under Changes only after the user says yes; the displaced outcome goes to Needs you or Deferred. Every Needs-you line names the holder and the exact ask. Blocked rows get nudge-due = since + 3 business days. Items carried `carry_flag_days`+ are flagged under Pacing. Anything past `max_needs_you` goes to Deferred, ordered: external people waiting > PR and merge gates > sub-agent approvals > housekeeping.
 4. Write Notion (rules below). The scratchpad rewrite rebuilds from the PREVIOUS scratchpad plus the new findings: Work registry rows persist until their stage is done, the Peer sessions table and the open outreach thread list carry forward. On a sync run by rollover, after the Your view write: if the row has no `## Standup` yet, dispatch `standup-builder` (sonnet, inputs as its placeholders list) on this run's gatherer replies and insert its output at the top of the row (`insert_content`, position start); if one exists, leave it and say so. Set `Last sync`, then fetch the row's `Last edited` and store it in the scratchpad as `Row last edited after sync: <ts>`.
 5. Print only Your view plus one pacing line that starts with goal progress (`goal 1/3`), then "Memory corrections to apply" if any. Apply memory edits only after the user says yes.
+
+## Projects database
+
+When config names a `Projects` data source, each long-lived workstream has one row there (Status, Jira epic, Jira tickets, Owner, Next milestone, Last update, Public hub, Summary, and a two-way `Daily rows` relation to the board). Its page body holds `## Where we are`, `## Next steps`, `## Decisions` (append-only table), `## Open questions`, `## Progress log` (dated, append-only) and `## Links`.
+
+- Sync: for every project that moved today (a PR merged, a decision, a reply, a blocker cleared), append one dated line to its Progress log, rewrite `Where we are`, set `Last update`, and add today's row to `Daily rows`. Targeted `update_content` edits only; never rewrite Decisions or the Progress log.
+- Decisions: when the user says something was decided, append a row to that project's Decisions table the same day. The public hub (if any) gets the team-facing version; the project page gets the private one.
+- Daily row: the In-flight table's Work column mentions the project page, so every day links to the long-lived notes. Rollover carries the mentions.
+- Memory files keep pointers and how-to-apply rules; project narrative moves to the project page. Propose, under "Memory corrections to apply", trimming any memory file whose facts now live on a project page.
+- New workstream: propose a row in chat; create it only after the user says yes.
 
 ## Keeping facts current
 
