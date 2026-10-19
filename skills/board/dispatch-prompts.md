@@ -109,7 +109,7 @@ The output is exactly this shape, in Notion markdown, nested with tab characters
 
 ## Standup
 ### Short version
-<One paragraph, 3 to 5 sentences, for someone outside the team: what moved, what is next, what is stuck. No ticket keys, PR numbers, branch names, file names, system internals or people's names. Name projects by what they do for the business ("the Glance export work", "the Stance shutdown").>
+<One paragraph, 3 to 5 sentences, for someone outside the team: what moved, what is next, what is stuck. No ticket keys, PR numbers, branch names, file names, system internals or people's names. Name projects by what they do for the business ("the claim export work", "the legacy system shutdown").>
 ### Completed yesterday
 - <KEY> - <title>
 	- <What was done.> <Why it matters, one sentence.>

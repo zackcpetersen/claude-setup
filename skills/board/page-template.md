@@ -82,6 +82,42 @@ Example row: `| PR 123 review | reviewer name | 2026-01-05 | 2026-01-08 |`. Nudg
 Scratchpad: <link to the child page>
 ```
 
+## Projects database (optional)
+
+One row per long-lived workstream, created under the board page when the `Projects data source` config line exists. Property names are what the skill uses; the two tracker columns can be named for your tracker (for example "Jira epic", "Jira tickets").
+
+| Property | Type | Purpose |
+|---|---|---|
+| Name | title | The workstream, not a ticket |
+| Status | select: Active / Waiting / Parked / Done | Active = worked this week; Waiting = blocked on others; Parked = paused on purpose |
+| Tracker epic | url | The epic or parent ticket |
+| Tracker tickets | text | Child ticket keys, comma separated |
+| Owner | text | Person or team |
+| Next milestone | date | The next dated deliverable |
+| Last update | date | Set by sync when the Progress log changes |
+| Public hub | url | Team-facing page, if any |
+| Daily rows | relation to the Daily Board, two-way (synced property "Projects") | Every day row that touched the project |
+| Summary | text | One line: where we are |
+
+Page body, identical for every project:
+
+```
+## Where we are
+Three to five lines, current as of the last sync, rewritten each time.
+## Next steps
+- dated where known
+## Decisions
+| Date | Decision | Why |
+|---|---|---|
+Append only. The team-facing version goes on the public hub, if any.
+## Open questions
+- one per line, with who owns it
+## Progress log
+- YYYY-MM-DD: one dated line per sync that moved the project. Append only.
+## Links
+- tracker, chat channels and threads, public pages, repos and PRs, local paths
+```
+
 ## Child page body ("Claude scratchpad - YYYY-MM-DD")
 
 Fully rewritten on every sync. The user can read it but does not need to. Includes `## Access check (<HH:MMZ>)`: one line per configured check with pass / fixed / needs user / gap, written by the morning access check and carried through the day.

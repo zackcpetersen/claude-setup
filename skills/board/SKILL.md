@@ -49,7 +49,7 @@ Runs once per day, before the first gatherer dispatch: at rollover, on the first
 
 ## Projects database
 
-When config names a `Projects` data source, each long-lived workstream has one row there (Status, Jira epic, Jira tickets, Owner, Next milestone, Last update, Public hub, Summary, and a two-way `Daily rows` relation to the board). Its page body holds `## Where we are`, `## Next steps`, `## Decisions` (append-only table), `## Open questions`, `## Progress log` (dated, append-only) and `## Links`.
+When config names a `Projects` data source, each long-lived workstream has one row there (schema and page body in `page-template.md`: Status, tracker epic, tracker tickets, Owner, Next milestone, Last update, Public hub, Summary, and a two-way `Daily rows` relation to the board). If the config line is present but the data source does not exist yet, create it under the board page with `notion-create-database` from that schema and tell the user the new `collection://` id to paste into config. Its page body holds `## Where we are`, `## Next steps`, `## Decisions` (append-only table), `## Open questions`, `## Progress log` (dated, append-only) and `## Links`.
 
 - Sync: for every project that moved today (a PR merged, a decision, a reply, a blocker cleared), append one dated line to its Progress log, rewrite `Where we are`, set `Last update`, and add today's row to `Daily rows`. Targeted `update_content` edits only; never rewrite Decisions or the Progress log.
 - Decisions: when the user says something was decided, append a row to that project's Decisions table the same day. The public hub (if any) gets the team-facing version; the project page gets the private one.

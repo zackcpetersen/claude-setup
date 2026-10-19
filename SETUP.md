@@ -136,6 +136,7 @@ Work through these once per machine:
 ### `skills/board/SKILL.md`
 - No file edits. Everything machine-specific lives in the `### Work board` section of `~/.claude/CLAUDE.md`; copy that block from `claude-md/CLAUDE.md.template` and fill it in. The skill stops with a clear message if the section is missing.
 - Create one empty Notion page with an inline database (any name, only the default title property) and put its URL on the `Board page` line. The skill adds the columns it needs on first run.
+- Optional: add the `Projects data source` line. On the first run the skill creates a "Projects" database under the board page with the schema in `page-template.md` and gives you the `collection://` id to paste back; after that it keeps one page per workstream current.
 - Needs the Notion MCP plugin, the Slack MCP plugin, your tracker's MCP plugin, `gh`, and `~/bin/worktree` with its config. The ticket flow also needs `/start-ticket`, `/self-review`, `/pr` and the built-in `/code-review` skill.
 - Optional: the `/watch-slack` state file path, if you run that command; leave the line out otherwise.
 
