@@ -50,9 +50,19 @@ These stand on their own. They are the complete rule set when no live page is co
 
 Scan the draft for the em-dash character (U+2014), "honestly", "genuinely", "hope", "maybe", "if possible", "try to", "thanks in advance", and exclamation-heavy hype. Fix every hit, then deliver. The lead sentence must carry the point.
 
-## Quick asks to teammates
+## Thread replies in Slack (asks, acks, decisions, status updates)
 
-A quick ask in a thread is one or two casual sentences: what's wrong, what you need, stop. No evidence trail, no options menu, no next-steps plan. A light hedge ("I think I need the Launcher role") is fine here - it reads human. Structured, numbered messages are for announcements and write-ups.
+Any reply inside an existing thread is one or two casual sentences: the outcome and who has it, then stop. This covers quick asks, agreeing with a teammate, and keeping a stakeholder updated. No evidence trail, no options menu, no rollout plan.
 
-- Too much: "I'm a Viewer on every deployment, so I can't launch runs. Both the UI and a user token come back UnauthorizedError. Two options: 1) grant me Launcher and I'll run the jobs, 2) launch them yourself and I'll pull the logs."
-- Right: "@teammate I don't think I have the permissions to run the jobs - can you update it for me? I think I need Launcher"
+- Don't restate what the other person already knows. If they posted the numbers, don't quote them back.
+- Don't explain the mechanism or name internal systems to people outside engineering. "a better way forward" beats naming the component.
+- Don't lay out next steps, promise timing, or commit to follow-up work in the reply. Say who is working on it; the rest comes later.
+- No offers of help, no sign-off lines.
+- A light hedge is fine ("I think I need the Launcher role"), so is lowercase and a dash joining two thoughts. It reads human.
+
+Structured, numbered messages are for announcements, write-ups, and new top-level posts.
+
+Examples (drafted vs sent):
+- Quick ask. Too much: "I'm a Viewer on every deployment, so I can't launch runs. Both the UI and a user token come back UnauthorizedError. Two options: 1) grant me Launcher and I'll run the jobs, 2) launch them yourself and I'll pull the logs." Right: "@teammate I don't think I have the permissions to run the jobs - can you update it for me? I think I need Launcher"
+- Agreeing to drop a PR after a teammate's analysis. Drafted: two paragraphs restating their numbers, naming the rule that broke, laying out a staged rollout, offering to use their doc. Sent: "This is good to know - I'll drop my pr and let's go with your approach instead"
+- Updating a stakeholder on a fix that changed direction. Drafted: two paragraphs on the mechanism, the staged rollout, and a cleanup promise. Sent: "Update here - found out there's a better way forward than my proposed fix. Working with @teammate on it"

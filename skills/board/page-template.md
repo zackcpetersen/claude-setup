@@ -31,6 +31,7 @@ Manual steps only, in the order to do them; logins from the access check first. 
 ### By project
 - <Project name> (<priority>) - <KEY>, <KEY>
 	- Done: <what shipped, merged, approved or delivered since the last standup, one sentence>
+	- Live: <what is now live for customers, one sentence>   (only when something reached production)
 	- Next: <what happens today or next, one spoken sentence>
 	- Waiting on: <who> for <what> since <YYYY-MM-DD>   (omit when nothing is waiting)
 ### Oncall   (only when the previous row has `oncall:` Done-today lines)
@@ -152,4 +153,4 @@ Keyed by ticket. Rows persist across syncs and rollovers until stage is done. Su
 
 ## Standup section rules
 
-The first block of the row, above Today's goal. Built once, at rollover, by the `standup-builder` prompt in `dispatch-prompts.md`, which holds the selection, grouping, oncall and waiting-on rules. Grouped by project (at most 4, priority order, from the Projects data source when configured, else the tracker epics), one Done and one Next line per project, ticket keys on the project line only; small follow-ups are dropped unless the project has nothing else. It mirrors how the user gives the standup aloud: by project, naming who they work with, saying what is parked. Sync never rewrites it; a full rewrite of Your view copies an existing Standup back verbatim and never writes the placeholder above. `/board done` appends to Done today only.
+The first block of the row, above Today's goal. Built once, at rollover, by the `standup-builder` prompt in `dispatch-prompts.md`, which holds the selection, grouping, oncall and waiting-on rules. Grouped by project (at most 4, priority order, from the Projects data source when configured, else the tracker epics), one Done and one Next line per project plus a Live line when something reached production, ticket keys on the project line only; small follow-ups are dropped unless the project has nothing else. It mirrors how the user gives the standup aloud: by project, naming who they work with, saying what is parked. Sync never rewrites it; a full rewrite of Your view copies an existing Standup back verbatim and never writes the placeholder above. `/board done` appends to Done today only.

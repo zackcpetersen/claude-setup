@@ -13,12 +13,12 @@ Every `{{placeholder}}` maps to a key in the `### Work board` section of `~/.cla
 | `since_date` | the previous row's Date, else 7 days ago |
 | `today` | local `date +%F` |
 | `approved_files` | the user's ship-it turn |
-| `epic_child_keys` | the child keys under `tracker_epics` from the previous scratchpad's Jira rollup (empty on the first run; the GitHub gatherer then skips step 4) |
+| `epic_child_keys` | the child keys under `tracker_epics` listed under those epics in the previous scratchpad's "Epic rollups" section, never from the project fallback (empty on the first run or when `tracker_epics` is empty; the GitHub gatherer then skips step 4) |
 | `registry_rows`, `outreach_threads`, peer answers | the previous scratchpad; empty on the first run, which the prompts tolerate |
 | `oncall` | the `Oncall` line of the `### Work board` section (`yes` or `no`) |
 | `slack_user_id`, `slack_channels`, `tracker_project`, `tracker_epics`, `github_org`, `worktree_config`, `worktree_script` | the `### Work board` section of `~/.claude/CLAUDE.md` |
 | `prev_done_today`, `prev_rollover_time` | the previous row's Done today section, and the `Rollover started:` line in its scratchpad's Rollover log (else its Date at 00:00 UTC) |
-| `jira_report`, `github_report`, `slack_report` | this rollover's gatherer replies, verbatim |
+| `tracker_report`, `github_report`, `slack_report` | this rollover's gatherer replies, verbatim |
 | `confirmed_goal`, `carried_needs_you`, `blocked_rows` | the new row's Today's goal, Needs you and Blocked sections after the carry |
 
 Read-only rule, included verbatim in every gatherer prompt:
@@ -27,29 +27,31 @@ Read-only rule, included verbatim in every gatherer prompt:
 
 ---
 
-## jira-status (model: opus, Explore)
+## tracker-status (model: opus, Explore)
 
 ```
 You are gathering a read-only status snapshot of {{user_name}}'s issue tracker work ({{tracker_site}}, tools `{{tracker_mcp_prefix}}*`). Today is {{today}}. READ-ONLY. Never call any tool that sends, posts, drafts, creates, updates, edits, comments, reacts, transitions, commits, pushes, checks out, stashes or deletes.
 
-Run these queries (compact view; fields: key, summary, status, priority, issuetype, assignee, reporter, updated, resolutiondate, parent, labels, duedate):
-1. assignee = currentUser() AND statusCategory != Done ORDER BY priority DESC, updated DESC
-2. reporter = currentUser() AND statusCategory != Done AND assignee != currentUser()
-3. parent in ({{tracker_epics}}) ORDER BY status
-4. project = {{tracker_project}} AND statusCategory = "In Progress" AND updated >= -14d, then keep only results whose status name contains "review" (case-insensitive). Do not name statuses in JQL; the tracker rejects unknown status names.
-5. assignee = currentUser() AND statusCategory = Done AND resolved >= -14d
-6. watcher = currentUser() AND statusCategory != Done AND assignee != currentUser() AND updated >= -7d
+Run these queries. Each is an intent, not syntax: map it to this tracker's own tools (JQL on Jira, list_issues filters on Linear, search on GitHub Issues). Filter by state type (open, in progress, done) rather than status names, which the tracker may reject. When a query has no equivalent in this tracker, skip it and say so in the report (for example, watchers on Linear are subscribers). Compact view; fields: key, summary, status, priority, type, assignee, reporter, updated, resolved date, parent, labels, due date. Report summary and parent key on every ticket, whichever query found it.
+1. Open tickets assigned to {{user_name}}, highest priority and most recently updated first.
+2. Open tickets reported by {{user_name}} and assigned to someone else.
+3. Children of each epic or project in {{tracker_epics}}, grouped by status. When none are configured, use the projects of the tickets from query 1 instead.
+4. In-progress tickets in {{tracker_project}} updated in the last 14 days, then keep only those whose status name contains "review" (case-insensitive).
+5. Tickets {{user_name}} completed in the last 14 days.
+6. Open tickets {{user_name}} watches that are assigned to someone else, updated in the last 7 days.
+7. {{user_name}}'s unread notifications.
 
-For each In Progress or In Review ticket from query 1, read the description's progress notes and the last 3 comments: next concrete step, blocked on whom or what, and whether anything waits on {{user_name}} (decision, comment, approval). Treat a batch of tickets all updated in the same minute with no comments as not actually updated.
+For each in-progress or in-review ticket from query 1, read the description's progress notes and the last 3 comments: next concrete step, blocked on whom or what, and whether anything waits on {{user_name}} (decision, comment, approval). Treat a batch of tickets all updated in the same minute with no comments as not actually updated.
 
 Return under 120 lines:
 - Table A: open tickets assigned to {{user_name}}: key, summary (the ticket title, always included), status, priority, epic, updated, next step, blocked-on, waiting-on-user (yes + what / no).
 - Table B: open tickets {{user_name}} reported or watches, assigned to others: status, what is expected from them.
-- Epic rollups for {{tracker_epics}}: children by status, stalled children (In Progress, no real update 7+ days), unassigned children.
+- Epic rollups for {{tracker_epics}} (or the fallback projects from query 3, labeled as such): children by status, stalled children (In Progress, no real update 7+ days), unassigned children.
 - Dates in the next 30 days, including dates that only appear in ticket text.
 - "Things that look off": In Progress with 10+ quiet days, Done here but open elsewhere, unassigned High priority updated in 14 days, epics in the wrong status.
 - "Stale snapshots": every open ticket where the newest comment is by {{user_name}} and is 3+ business days old and reads as a status list, checklist or plan (it names other people's work, blockers or PRs). One line each: key, comment id, age in days, what it claims. The master session treats those claims as unverified until the GitHub report or the owner confirms them.
 - "Activity since {{since_date}}": one line per ticket {{user_name}} resolved, transitioned or commented on since then: key, summary (the ticket title), parent key, labels, what happened, UTC timestamp.
+- "Unread notifications": one line each for items not already covered above: key, summary, who, what, when. If the tracker has no notifications tool, one line saying it was skipped.
 ```
 
 ## github-status (model: sonnet, Explore)
@@ -109,10 +111,11 @@ The output is exactly this shape, in Notion markdown, nested with tab characters
 
 ## Standup
 ### Say this
-<3 to 5 sentences, one per project in priority order, the way {{user_name}} would speak: what moved, who they are working with on it (first names of reviewers, stakeholders or teammates), what is next, and which project is parked or lower priority. Project names in plain words ("the claim export work", "the KinetiQ handover"). No ticket keys, PR numbers, branch names or system internals. End with one thanks when someone unblocked them since the last standup; otherwise no thanks line.>
+<3 to 5 sentences, one per project in priority order, the way {{user_name}} would speak: what moved, who they are working with on it (first names of reviewers, stakeholders or teammates), what is next, and which project is parked or lower priority. Project names in plain words ("the claim export work", "the vendor handover"). No ticket keys, PR numbers, branch names or system internals. End with one thanks when someone unblocked them since the last standup; otherwise no thanks line.>
 ### By project
 - <Project name> (<priority>) - <KEY>, <KEY>
 	- Done: <what shipped, merged, approved, decided or delivered since the last standup, one sentence, plain English>
+	- Live: <what is now live for customers, one sentence>
 	- Next: <what happens today or next, one spoken sentence>
 	- Waiting on: <first name or team> for <what> since <YYYY-MM-DD>
 ### Oncall
@@ -124,11 +127,12 @@ How to fill it:
 3. At most 4 projects, in PROJECTS priority order (P1 first), else by how much moved. Projects with nothing done and nothing planned are left out. A project the user has deprioritised (a Deferred or Pacing line says parked, back burner, lower priority, or pushed to a later week) still appears when it has activity, and its Next line says it is parked.
 4. The project line lists its ticket keys after the dash, most active first, at most 4; the parent key is not listed. Keys only, never titles, never PR numbers.
 5. Done: one sentence covering the meaningful work since the last standup. Something shipped, merged, approved, decided, designed, built or delivered. Join two or three things with commas; never a second Done line. Drop acks, nudges, draft discards and routine checks unless the project has nothing else. No PR numbers, commit hashes, Slack timestamps, file paths or clock times.
-6. Next: one spoken sentence, from TODAY'S GOAL first (in goal order), then the CARRIED NEEDS-YOU lines for that project. Not a copy of the goal text.
-7. Waiting on: at most one line per project, from BLOCKED and CARRIED NEEDS-YOU rows that wait on another person for that project. Pick the one that gates the Next line. Omit the line when nothing is waiting.
-8. Oncall: only lines of PREVIOUS DONE TODAY whose text after the checkbox starts with `oncall:` (drop the prefix). Nothing else goes here: not alert channels, monitors, error trackers or dependency alerts. No such lines, no Oncall heading.
-9. Say this: write it last, from the finished By project block. One sentence per project, same order, naming the people from the Done and Waiting on lines by first name. Plain English a non-engineer follows.
-10. Plain English, short sentences, no em-dashes or en-dashes, no tables, no links, and no PR numbers in any section. Keep acronyms as the inputs write them; never guess what one stands for. Avoid the characters < > [ ] | in text.
+6. Live: one sentence on what is now live for customers, only when a change on that project reached production since the previous rollover (a prod deploy, a prod backfill or config change the user applied), taken from PREVIOUS DONE TODAY and the reports' "Activity since" and "Posts sent since" sections. The Done line still covers the same work; merged-but-not-deployed work stays in Done only. Omit the line when nothing deployed.
+7. Next: one spoken sentence, from TODAY'S GOAL first (in goal order), then the CARRIED NEEDS-YOU lines for that project. Not a copy of the goal text.
+8. Waiting on: at most one line per project, from BLOCKED and CARRIED NEEDS-YOU rows that wait on another person for that project. Pick the one that gates the Next line. Omit the line when nothing is waiting.
+9. Oncall: only lines of PREVIOUS DONE TODAY whose text after the checkbox starts with `oncall:` (drop the prefix). Nothing else goes here: not alert channels, monitors, error trackers or dependency alerts. No such lines, no Oncall heading.
+10. Say this: write it last, from the finished By project block. One sentence per project, same order, naming the people from the Done and Waiting on lines by first name, and saying what went live when a project has a Live line. Plain English a non-engineer follows.
+11. Plain English, short sentences, no em-dashes or en-dashes, no tables, no links, and no PR numbers in any section. Keep acronyms as the inputs write them; never guess what one stands for. Avoid the characters < > [ ] | in text.
 
 PROJECTS (name, priority, ticket keys; may be empty):
 {{projects}}
@@ -136,8 +140,8 @@ PROJECTS (name, priority, ticket keys; may be empty):
 PREVIOUS DONE TODAY:
 {{prev_done_today}}
 
-JIRA REPORT:
-{{jira_report}}
+TRACKER REPORT:
+{{tracker_report}}
 
 GITHUB REPORT:
 {{github_report}}
