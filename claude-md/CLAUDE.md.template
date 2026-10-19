@@ -14,6 +14,7 @@
 
 ## External Communications
 - Slack and email: NEVER send directly. Create a draft (e.g. `slack_send_message_draft`, an email draft) and link to it for approval before anything goes out.
+- Before a draft states a fact about someone else's work (their PR merged, a blocker still open, a report failing), verify it against the primary source the same day (the PR, the thread, the ticket history), or phrase it as a question. Notes, memory and older tracker comments are snapshots, not current state.
 - GitHub PR comments and issue tracker comments have no draft mechanism: get explicit per-item approval before posting. This covers `/babysit-pr` reply and reminder comments.
 <!-- FILL IN: any pre-approved channels -->
 
