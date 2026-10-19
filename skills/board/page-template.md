@@ -148,6 +148,7 @@ Keyed by ticket. Rows persist across syncs and rollovers until stage is done. Su
 - <memory file>: <what is wrong> -> <proposed fix>. Applied only after the user says yes.
 
 ## Open questions for the user (not yet asked)
+- <project or ticket>: <question> | options: <a> / <b> | recommended: <x> | source: <agent or sync, HH:MMZ>   (asked in grouped batches of up to four; removed once answered and recorded as a Decision)
 
 ## Rollover log
 - Rollover started: <UTC timestamp, written first by rollover; the next standup counts activity after it>

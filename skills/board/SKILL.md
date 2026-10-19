@@ -57,6 +57,15 @@ When config names a `Projects` data source, each long-lived workstream has one r
 - Memory files keep pointers and how-to-apply rules; project narrative moves to the project page. Propose, under "Memory corrections to apply", trimming any memory file whose facts now live on a project page.
 - New workstream: propose a row in chat; create it only after the user says yes.
 
+## Open questions (grouped interviews)
+
+Questions for the user that surface mid-work (a seeding agent unsure of an owner, a conflicting fact, a choice between two shapes, a stale credential) are never left inside a long report or dropped. They queue and get asked in batches.
+
+- Queue: every open question goes to the scratchpad's `## Open questions for the user (not yet asked)` as one line: `- <project or ticket>: <question> | options: <a> / <b> | recommended: <x> | source: <agent or sync, HH:MMZ>`. Agent reports are scanned for them on arrival ("unsure", "left out", "conflict", "may be stale", "needs a decision").
+- Ask with `AskUserQuestion`, up to four questions per call, each with the recommended option first and marked `(Recommended)`, grouped by project. Ask when any of these is true: the queue holds 3 or more; a queued question blocks work the user is waiting on (ask that one now, with whatever else is queued); the user turns to the board (a sync, a status ask, a "what's next"); or the oldest queued question is older than 60 minutes. Never ask one question at a time outside those moments, and never ask the same question twice.
+- Record each answer the same turn: a Decisions row on the project page (date, decision, why), a Needs-you or TODO line if it creates work, and remove the line from the queue. An answer of "later" moves the line to Deferred with the date.
+- Questions the user has already answered in chat count as answered: check the conversation and the Decisions tables before queuing.
+
 ## Keeping facts current
 
 The board's notes (scratchpad, memory, the user's own tracker comments) are snapshots. Other people's work keeps moving between syncs.
@@ -122,3 +131,4 @@ Pass `model` on every dispatch. Planner, implementer, reviewer, pr agent, jira a
 | Tracking alerts, monitors or error-tracker issues when the user is not on call | Read the `Oncall` flag; `no` means alert channels are not read and alert items never reach the page |
 | Asking the user for a login or VPN mid-day, or listing a login as a TODO instead of running it | The access check runs at the start of the day, runs every fix itself (the user approves the prompt), and anticipates the day's environments; only fixes that cannot run from the session go under Your TODOs |
 | Rewriting Today's goal during sync, or setting it without the user | The goal is set once at rollover with the user's confirmation; sync only ticks outcomes and logs confirmed swaps under Changes |
+| Leaving a sub-agent's "unsure" or "left out" items inside its report, or asking the user one question at a time as each one appears | Queue them in the scratchpad and ask in one grouped `AskUserQuestion` at the next trigger (3+ queued, blocking, the user turns to the board, or 60 minutes) |
