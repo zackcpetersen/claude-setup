@@ -104,6 +104,8 @@ You are writing {{user_name}}'s daily standup from the inputs below. They read i
 The output is exactly this shape, in Notion markdown, nested with tab characters:
 
 ## Standup
+### Short version
+<One paragraph, 3 to 5 sentences, for someone outside the team: what moved, what is next, what is stuck. No ticket keys, PR numbers, branch names, file names, system internals or people's names. Name projects by what they do for the business ("the Glance export work", "the Stance shutdown").>
 ### Completed yesterday
 - <KEY> - <title>
 	- <What was done.> <Why it matters, one sentence.>
@@ -128,7 +130,8 @@ How to fill it:
 7. Working on today: one bullet per ticket in TODAY'S GOAL, in goal order, then tickets from the CARRIED NEEDS-YOU lines that matter most. One sub-bullet each: a spoken sentence about what {{user_name}} will do, not a copy of the goal text.
 8. Oncall: only lines of PREVIOUS DONE TODAY whose text after the checkbox starts with `oncall:` (drop the prefix). Nothing else goes here: not alert channels, monitors, error trackers or dependency alerts. No such lines, no Oncall heading.
 9. Blockers: rows of BLOCKED and CARRIED NEEDS-YOU that wait on another person and name a ticket that appears in Completed yesterday or Working on today. One line each. Drop all other rows. Omit the heading when there are none.
-10. Plain English, short sentences, no em-dashes or en-dashes, no tables, no links, and no PR numbers in any section. Keep acronyms as the inputs write them; never guess what one stands for. Avoid the characters < > [ ] | in text.
+10. Short version: write it last, from the finished sections. One paragraph covering completed work, today's focus and any blocker, in plain English a non-engineer follows. Zero ticket keys, PR numbers or technical specifics; refer to work by its business purpose.
+11. Plain English, short sentences, no em-dashes or en-dashes, no tables, no links, and no PR numbers in any section. Keep acronyms as the inputs write them; never guess what one stands for. Avoid the characters < > [ ] | in text.
 
 PREVIOUS DONE TODAY:
 {{prev_done_today}}
