@@ -45,7 +45,7 @@ One paragraph, no ticket keys or technical detail: overall progress, today's foc
 # Your view
 
 ## Today's goal
-Set at rollover, confirmed by the user before the first sync writes it. At most three outcomes the user can finish today, each checkable.
+Set at rollover, confirmed by the user before the first sync writes it. Three outcomes by default, five at most, each something the user can finish today and checkable.
 - [ ] <outcome 1>
 - [ ] <outcome 2>
 - [ ] <outcome 3>
