@@ -14,6 +14,7 @@ Every `{{placeholder}}` maps to a key in the `### Work board` section of `~/.cla
 | `today` | local `date +%F` |
 | `approved_files` | the user's ship-it turn |
 | `registry_rows`, `outreach_threads`, peer answers | the previous scratchpad; empty on the first run, which the prompts tolerate |
+| `oncall` | the `Oncall` line of the `### Work board` section (`yes` or `no`) |
 | `slack_user_id`, `slack_channels`, `tracker_project`, `tracker_epics`, `github_org`, `worktree_config`, `worktree_script` | the `### Work board` section of `~/.claude/CLAUDE.md` |
 | `prev_done_today`, `prev_rollover_time` | the previous row's Done today section, and the `Rollover started:` line in its scratchpad's Rollover log (else its Date at 00:00 UTC) |
 | `jira_report`, `github_report`, `slack_report` | this rollover's gatherer replies, verbatim |
@@ -85,7 +86,7 @@ Gather:
 1. Each watched channel in {{slack_channels}}: read since {{since_date}}. For every top-level post or thread that names or is addressed to the user, decide whether the user replied after the ask. List unanswered ones: channel, who, when, one-line ask, thread ts.
 2. DMs and group DMs since {{since_date}}: messages from others the user has not answered, with the ask.
 3. Outreach threads the user owns (from the previous scratchpad, passed in below): new replies since last sync, who the ball is with, whether a nudge is due (3 business days of silence), whether a nudge already went out.
-4. Only for channels tagged `(alerts)` in {{slack_channels}}: anything in the last 3 days tagged to the user's area that has no recovery or reply,. Skip this step for untagged channels.
+4. On-call this week: {{oncall}}. If `no`, skip this step entirely, do not read the `(alerts)` channels, and leave the "Alerts possibly unhandled" section out. If `yes`: only for channels tagged `(alerts)` in {{slack_channels}}, anything in the last 3 days tagged to the user's area that has no recovery or reply. Skip untagged channels either way.
 5. `from:<@{{slack_user_id}}> after:{{since_date}}`: commitments the user made that are still open.
 
 Outreach threads to check: {{outreach_threads}}

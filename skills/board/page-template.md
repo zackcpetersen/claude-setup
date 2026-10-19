@@ -20,6 +20,11 @@ Default view: sorted by Date descending.
 ## Day row body ("Your view")
 
 ```
+## Your TODOs
+Manual steps only, in the order to do them; logins from the access check first. The user ticks these; sync keeps ticks and appends.
+- [ ] `! <login or fix command>` (blocks: <work that waits on it>)
+- [ ] <merge / meeting / send / click the user must do by hand>
+
 ## Standup
 ### Completed yesterday
 - <KEY> - <title>
@@ -76,7 +81,7 @@ Scratchpad: <link to the child page>
 
 ## Child page body ("Claude scratchpad - YYYY-MM-DD")
 
-Fully rewritten on every sync. The user can read it but does not need to.
+Fully rewritten on every sync. The user can read it but does not need to. Includes `## Access check (<HH:MMZ>)`: one line per configured check with pass / fixed / needs user / gap, written by the morning access check and carried through the day.
 
 ```
 # Claude scratchpad

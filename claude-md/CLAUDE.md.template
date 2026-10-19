@@ -81,6 +81,15 @@ Reviews a teammate's pull request: `/review-pr <number or URL> [--effort medium]
 - Memory dir: <path to the Claude memory directory for this machine>
 - Watch-slack state file: ~/.claude/watch-slack-last-ts.txt <!-- optional -->
 - WIP limits (starting values, tune after a week): max_streams 3, max_needs_you 7, carry_flag_days 3
+- Oncall: <yes|no> <!-- flip at the start of each rotation week; `no` means the board never reads alert channels or tracks alerts -->
+- Access checks (run by the board at the start of each day; `<name>: <check command> | <fix>`; a fix starting with `!` needs the user):
+  - AWS SSO: `aws sts get-caller-identity --profile <profile>` | `! aws sso login --profile <profile>` <!-- one login per SSO start URL covers every profile that shares it -->
+  - GitHub CLI: `gh auth status` | `! gh auth login`
+  - GitHub SSH: `ssh -T -o BatchMode=yes git@github.com` (passes when the output says "successfully authenticated") | `! ssh-add ~/.ssh/<key>`
+  - VPN: `<vpn status command>` (passes when connected) | `! <connect command or app to open>`
+  - Database env files: `~/bin/query_db ~/bin/env_files/.env.db.<db>.<env> "select 1"` | fix the env file
+  - MCP servers (Slack, Notion, tracker, Datadog): one read call each | `! /mcp` and re-authenticate the failed server
+  - <project-specific keys: SFTP keys, tokens in env files, cloud consoles> <!-- list every credential a current project needs -->
 
 ### Finalize PR (`/pr`)
 Commits changes and creates pull requests. Handles commit message formatting (per the Git and Version Control section above), branch management, and PR creation using the repo's PR template. After the PR is created it runs a self code review (`/code-review` on opus, default `medium`, override with `--review-effort`) in the background while CI runs, then applies CI fixes and review findings together in one approved push.
