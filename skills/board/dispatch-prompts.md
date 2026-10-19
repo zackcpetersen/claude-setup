@@ -13,6 +13,7 @@ Every `{{placeholder}}` maps to a key in the `### Work board` section of `~/.cla
 | `since_date` | the previous row's Date, else 7 days ago |
 | `today` | local `date +%F` |
 | `approved_files` | the user's ship-it turn |
+| `epic_child_keys` | the child keys under `tracker_epics` from the previous scratchpad's Jira rollup (empty on the first run; the GitHub gatherer then skips step 4) |
 | `registry_rows`, `outreach_threads`, peer answers | the previous scratchpad; empty on the first run, which the prompts tolerate |
 | `oncall` | the `Oncall` line of the `### Work board` section (`yes` or `no`) |
 | `slack_user_id`, `slack_channels`, `tracker_project`, `tracker_epics`, `github_org`, `worktree_config`, `worktree_script` | the `### Work board` section of `~/.claude/CLAUDE.md` |
@@ -47,6 +48,7 @@ Return under 120 lines:
 - Epic rollups for {{tracker_epics}}: children by status, stalled children (In Progress, no real update 7+ days), unassigned children.
 - Dates in the next 30 days, including dates that only appear in ticket text.
 - "Things that look off": In Progress with 10+ quiet days, Done here but open elsewhere, unassigned High priority updated in 14 days, epics in the wrong status.
+- "Stale snapshots": every open ticket where the newest comment is by {{user_name}} and is 3+ business days old and reads as a status list, checklist or plan (it names other people's work, blockers or PRs). One line each: key, comment id, age in days, what it claims. The master session treats those claims as unverified until the GitHub report or the owner confirms them.
 - "Activity since {{since_date}}": one line per ticket {{user_name}} resolved, transitioned or commented on since then: key, summary (the ticket title), parent key, labels, what happened, UTC timestamp.
 ```
 
@@ -61,9 +63,10 @@ Part 1, GitHub:
    Run it per repo listed in {{worktree_config}} (`jq -r '.repos[].repo_path'`) plus any repo named in the registry. For each PR: `gh pr view <n> --repo <repo> --json statusCheckRollup,reviewRequests,reviews,comments,updatedAt,baseRefName` and summarize CI (name failing checks), review state and who was asked how long ago, conflicts, unresolved comments including bot comments, draft or not, age.
 2. PRs requesting the user's review: `gh search prs --review-requested=@me --state=open --owner {{github_org}}`. Separate direct requests from team requests. Mentions: `gh search prs --mentions=@me --state=open --owner {{github_org}}`.
 3. For each branch in the work registry (passed in below), `gh pr list --repo <repo> --head <branch> --state all`.
-4. Dependabot PRs on the main repos that fix an open security alert: count plus the ones that are major bumps.
+4. Epic PRs by others: for each repo, `gh pr list --repo <repo> --state all --search "<KEY> updated:>={{since_date}}" --json number,title,headRefName,author,state,mergedAt,url` for every child key the tracker report or the registry names under {{tracker_epics}} (pass the list in below). One line each: repo, PR, title, author, state, merged date. This is how the board learns that someone else's PR moved a shared workstream.
+5. Dependabot PRs on the main repos that fix an open security alert: count plus the ones that are major bumps.
 
-5. Activity since {{since_date}}: `gh search prs --author @me --merged ">={{since_date}}" --owner {{github_org}}` and `gh search prs --reviewed-by @me --updated ">={{since_date}}" --owner {{github_org}}`, plus approvals and reviews received on the user's PRs. One line each: repo, PR number, title, head branch, what happened, UTC timestamp, ticket key if the title or branch names one.
+6. Activity since {{since_date}}: `gh search prs --author @me --merged ">={{since_date}}" --owner {{github_org}}` and `gh search prs --reviewed-by @me --updated ">={{since_date}}" --owner {{github_org}}`, plus approvals and reviews received on the user's PRs. One line each: repo, PR number, title, head branch, what happened, UTC timestamp, ticket key if the title or branch names one.
 
 Part 2, local checkouts:
 1. `{{worktree_script}} list`, then loop over `.repos[].repo_path` and `.repos[].worktree_base` from the worktree config json ({{worktree_config}}) and scan each git checkout under them (the repo itself, and every directory inside each worktree base).
@@ -71,8 +74,9 @@ Part 2, local checkouts:
 3. Flag: uncommitted real work (at risk), branches never pushed, stale (PR merged or closed, or no own commits), broken worktrees, files that look like secrets (`.env*` untracked).
 
 Registry rows to check: {{registry_rows}}
+Epic child keys to search for: {{epic_child_keys}}
 
-Return under 120 lines: Table A open PRs; Table B review/reply owed; "Activity since {{since_date}}"; named branch states; Table C local checkouts with a suggested disposition (active / at-risk / stale-remove); "Things that look off".
+Return under 120 lines: Table A open PRs; Table B review/reply owed; "Epic PRs by others"; "Activity since {{since_date}}"; named branch states; Table C local checkouts with a suggested disposition (active / at-risk / stale-remove); "Things that look off".
 ```
 
 ## slack-status (model: opus, Explore)

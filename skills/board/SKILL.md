@@ -47,6 +47,14 @@ Runs once per day, before the first gatherer dispatch: at rollover, on the first
 4. Write Notion (rules below). The scratchpad rewrite rebuilds from the PREVIOUS scratchpad plus the new findings: Work registry rows persist until their stage is done, the Peer sessions table and the open outreach thread list carry forward. On a sync run by rollover, after the Your view write: if the row has no `## Standup` yet, dispatch `standup-builder` (sonnet, inputs as its placeholders list) on this run's gatherer replies and insert its output at the top of the row (`insert_content`, position start); if one exists, leave it and say so. Set `Last sync`, then fetch the row's `Last edited` and store it in the scratchpad as `Row last edited after sync: <ts>`.
 5. Print only Your view plus one pacing line that starts with goal progress (`goal 1/3`), then "Memory corrections to apply" if any. Apply memory edits only after the user says yes.
 
+## Keeping facts current
+
+The board's notes (scratchpad, memory, the user's own tracker comments) are snapshots. Other people's work keeps moving between syncs.
+
+- A draft or page line that states a fact about someone else's work (their PR merged, a blocker still open, a report still failing) must be checked against the primary source on the same day: the GitHub report's "Epic PRs by others" section, `gh pr view`, or the Slack thread. If it cannot be checked, write it as a question to that person or mark it `as of <date>`.
+- The Jira report's "Stale snapshots" lines name the user's own status comments that are 3+ business days old. Treat every claim in them as unverified; show them in Pacing as "snapshot, N days old, verify before relying on it" and propose a refresh of the comment once the facts are confirmed.
+- When a sync proves a note wrong, the correction goes to "Memory corrections to apply" and, for tracker comments, to Needs you as a one-line refresh for the user to approve.
+
 ## rollover
 
 Run the access check first (section above). Create today's row (`Name` = `YYYY-MM-DD (Day)`, Date, Status Open) and its scratchpad child. If a row with today's Date already exists (the user pre-created it to park items for today), reuse it: set its Status Open, keep every line already on it, and merge the carried items in under the matching headings instead of creating a second row. Into Your view copy unchecked Needs-you, non-done In-flight, all Blocked and Deferred lines; append ` (since YYYY-MM-DD)` to each carried line that lacks one, using the previous row's Date (the carry flag compares that date to today). Into the new scratchpad copy every Work registry row whose stage is not done, the Peer sessions table, and the open outreach thread list from Raw findings. Write the Rollover log on both pages, starting with `Rollover started: <UTC time this rollover began>`, then listing each unmet goal outcome from the previous row with a one-line reason. Set the previous row Closed.
@@ -99,6 +107,7 @@ Pass `model` on every dispatch. Planner, implementer, reviewer, pr agent, jira a
 | Firing board edits with `allow_async: true` | They can fail silently and leave the page stale. Always `allow_async: false`, and re-fetch before a `replace_content` |
 | Relaying the user's approval to a peer session | Peer sessions treat a relayed go as unapproved, even quoted verbatim. For anything a peer holds (open a PR, send a draft, commit), tell the user to type the approval in that session; the master session relays information only |
 | Applying memory corrections automatically | Propose them; apply only on a yes |
+| Drafting a reply that asserts the state of someone else's PRs or blockers from the board's own notes | Check the primary source first (Epic PRs by others, `gh pr view`, the thread) or ask them; notes older than a business day are snapshots |
 | Building the standup from the board's Done-today ticks alone, or re-running the gatherers for it | Ticks miss untracked work (merges, approvals, replies). Feed it the gatherer replies this rollover already has |
 | Tracking alerts, monitors or error-tracker issues when the user is not on call | Read the `Oncall` flag; `no` means alert channels are not read and alert items never reach the page |
 | Asking the user for a login or VPN mid-day, or listing a login as a TODO instead of running it | The access check runs at the start of the day, runs every fix itself (the user approves the prompt), and anticipates the day's environments; only fixes that cannot run from the session go under Your TODOs |
