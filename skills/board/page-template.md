@@ -26,21 +26,15 @@ Manual steps only, in the order to do them; logins from the access check first. 
 - [ ] <merge / meeting / send / click the user must do by hand>
 
 ## Standup
-### Short version
-One paragraph, no ticket keys or technical detail: overall progress, today's focus, blockers. For reading aloud to a mixed audience.
-### Completed yesterday
-- <KEY> - <title>
-	- <What was done.> <Why it matters, one sentence.>
-- <PARENT KEY> - <parent title>   (when 3+ items in the section share a parent work item)
-	- <CHILD KEY> - <title>
-		- <What was done.> <Why it matters, one sentence.>
-### Working on today
-- <KEY> - <title>
-	- <What happens today, one spoken sentence.>
+### Say this
+3 to 5 sentences, one per project in priority order, as spoken: what moved, who the user is working with, what is next, what is parked. No ticket keys or technical detail.
+### By project
+- <Project name> (<priority>) - <KEY>, <KEY>
+	- Done: <what shipped, merged, approved or delivered since the last standup, one sentence>
+	- Next: <what happens today or next, one spoken sentence>
+	- Waiting on: <who> for <what> since <YYYY-MM-DD>   (omit when nothing is waiting)
 ### Oncall   (only when the previous row has `oncall:` Done-today lines)
 - <ticket or alert> - oncall - <title> - <what was done and why it matters>
-### Blockers
-- <KEY> - <what> - waiting on <who> since <YYYY-MM-DD>
 
 # Your view
 
@@ -158,4 +152,4 @@ Keyed by ticket. Rows persist across syncs and rollovers until stage is done. Su
 
 ## Standup section rules
 
-The first block of the row, above Today's goal. Built once, at rollover, by the `standup-builder` prompt in `dispatch-prompts.md`, which holds the selection, oncall and blocker rules. Ticketed, meaningful work only, with no length cap; small follow-ups are dropped unless the day is sparse. Parent work items come from the tracker's parent field or the parent list in the Work board config. Sync never rewrites it; a full rewrite of Your view copies an existing Standup back verbatim and never writes the placeholder above. `/board done` appends to Done today only.
+The first block of the row, above Today's goal. Built once, at rollover, by the `standup-builder` prompt in `dispatch-prompts.md`, which holds the selection, grouping, oncall and waiting-on rules. Grouped by project (at most 4, priority order, from the Projects data source when configured, else the tracker epics), one Done and one Next line per project, ticket keys on the project line only; small follow-ups are dropped unless the project has nothing else. It mirrors how the user gives the standup aloud: by project, naming who they work with, saying what is parked. Sync never rewrites it; a full rewrite of Your view copies an existing Standup back verbatim and never writes the placeholder above. `/board done` appends to Done today only.

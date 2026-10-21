@@ -103,39 +103,35 @@ Return under 120 lines with thread ts values on every line: "Waiting on user" (w
 Dispatched after the goal is confirmed and the sync gatherers have returned. It reads only what it is given and calls no tools.
 
 ```
-You are writing {{user_name}}'s daily standup from the inputs below. They read it aloud, so keep each line short. Use no tools. Return only the markdown block, nothing before or after it.
+You are writing {{user_name}}'s daily standup from the inputs below. They say it out loud in a team standup in about a minute, grouped by project, so the shape follows the projects, not the ticket list. Use no tools. Return only the markdown block, nothing before or after it.
 
 The output is exactly this shape, in Notion markdown, nested with tab characters:
 
 ## Standup
-### Short version
-<One paragraph, 3 to 5 sentences, for someone outside the team: what moved, what is next, what is stuck. No ticket keys, PR numbers, branch names, file names, system internals or people's names. Name projects by what they do for the business ("the claim export work", "the legacy system shutdown").>
-### Completed yesterday
-- <KEY> - <title>
-	- <What was done.> <Why it matters, one sentence.>
-- <PARENT KEY> - <parent title>
-	- <CHILD KEY> - <title>
-		- <What was done.> <Why it matters, one sentence.>
-### Working on today
-- <KEY> - <title>
-	- <What they will do today, one spoken sentence.>
+### Say this
+<3 to 5 sentences, one per project in priority order, the way {{user_name}} would speak: what moved, who they are working with on it (first names of reviewers, stakeholders or teammates), what is next, and which project is parked or lower priority. Project names in plain words ("the claim export work", "the KinetiQ handover"). No ticket keys, PR numbers, branch names or system internals. End with one thanks when someone unblocked them since the last standup; otherwise no thanks line.>
+### By project
+- <Project name> (<priority>) - <KEY>, <KEY>
+	- Done: <what shipped, merged, approved, decided or delivered since the last standup, one sentence, plain English>
+	- Next: <what happens today or next, one spoken sentence>
+	- Waiting on: <first name or team> for <what> since <YYYY-MM-DD>
 ### Oncall
 - <ticket or alert> - oncall - <title> - <what was done and why it matters>
-### Blockers
-- <KEY> - <what> - waiting on <who> since <YYYY-MM-DD>
 
 How to fill it:
-1. Candidate items: every line of PREVIOUS DONE TODAY, plus every line in the reports' "Activity since" and "Posts sent since" sections dated after {{prev_rollover_time}}, plus any other dated event in the reports that {{user_name}} did or that moved their work (merges, approvals received, transitions). Merge duplicates. Drop board and session upkeep (rolling the board, memory edits, stopping or replacing agents).
-2. Key each item to a work item: a key in its text, else the PR-to-ticket mapping in the GitHub report, else the work item whose title or parent names the same project or system as the item (an item about a system's shutdown belongs to the work item for that shutdown). Items with no ticket after that are dropped, except meaningful unticketed work such as a kickoff meeting or an incident: at most 2, under one `- No ticket` bullet at the end of the section.
-3. Keep only meaningful work, in both sections: something shipped, merged, approved, decided, designed, built or delivered. Drop small follow-ups: acks, nudges, one-line ticket closes, draft discards, routine checks. Exception: when a section has fewer than 3 items left, put its small ones back. Never drop meaningful work to keep the standup short.
-4. Every ticket bullet is `<KEY> - <title>`, with the title copied from the tracker report's summary for that key. Drop a leading sequence tag such as `[3/10]`. If no input gives a title, write `<KEY> - (title missing)`. Never invent a title.
-5. Parent rollup: a work item's parent is the parent key the tracker report gives it, else the parent stated in the inputs. Parents to roll up are {{tracker_epics}} plus any parent the tracker report names. Within one section, when 3 or more items share a parent, put them under one `<PARENT KEY> - <parent title>` bullet, each child indented one level with its own sub-bullets. With fewer, each item stays top-level. Use only parent links stated in the inputs.
-6. Completed yesterday: one bullet per ticket. Its first sub-bullet says what was done, then one sentence on why it matters to someone outside the team; two sentences in all, at most. Add a second sub-bullet only when a second, separate meaningful change happened on that ticket. No PR numbers, commit hashes, Slack timestamps, draft ids, file paths or clock times.
-7. Working on today: one bullet per ticket in TODAY'S GOAL, in goal order, then tickets from the CARRIED NEEDS-YOU lines that matter most. One sub-bullet each: a spoken sentence about what {{user_name}} will do, not a copy of the goal text.
+1. Candidate items: every line of PREVIOUS DONE TODAY, plus every line in the reports' "Activity since" and "Posts sent since" sections dated after {{prev_rollover_time}}, plus any other dated event in the reports that {{user_name}} did or that moved their work (merges, approvals received, transitions). Merge duplicates. Drop board and session upkeep (rolling the board, memory edits, stopping or replacing agents, branch cleanup).
+2. Group every item by project. A project is a row of PROJECTS when that list is given, else a parent in {{tracker_epics}}, else the system or customer the item is about. Key each item to a ticket the same way as before: a key in its text, else the PR-to-ticket mapping in the GitHub report, else the ticket whose title names the same project. Items with no ticket stay in their project's Done line when they are meaningful (a kickoff, an incident, a customer delivery); otherwise drop them.
+3. At most 4 projects, in PROJECTS priority order (P1 first), else by how much moved. Projects with nothing done and nothing planned are left out. A project the user has deprioritised (a Deferred or Pacing line says parked, back burner, lower priority, or pushed to a later week) still appears when it has activity, and its Next line says it is parked.
+4. The project line lists its ticket keys after the dash, most active first, at most 4; the parent key is not listed. Keys only, never titles, never PR numbers.
+5. Done: one sentence covering the meaningful work since the last standup. Something shipped, merged, approved, decided, designed, built or delivered. Join two or three things with commas; never a second Done line. Drop acks, nudges, draft discards and routine checks unless the project has nothing else. No PR numbers, commit hashes, Slack timestamps, file paths or clock times.
+6. Next: one spoken sentence, from TODAY'S GOAL first (in goal order), then the CARRIED NEEDS-YOU lines for that project. Not a copy of the goal text.
+7. Waiting on: at most one line per project, from BLOCKED and CARRIED NEEDS-YOU rows that wait on another person for that project. Pick the one that gates the Next line. Omit the line when nothing is waiting.
 8. Oncall: only lines of PREVIOUS DONE TODAY whose text after the checkbox starts with `oncall:` (drop the prefix). Nothing else goes here: not alert channels, monitors, error trackers or dependency alerts. No such lines, no Oncall heading.
-9. Blockers: rows of BLOCKED and CARRIED NEEDS-YOU that wait on another person and name a ticket that appears in Completed yesterday or Working on today. One line each. Drop all other rows. Omit the heading when there are none.
-10. Short version: write it last, from the finished sections. One paragraph covering completed work, today's focus and any blocker, in plain English a non-engineer follows. Zero ticket keys, PR numbers or technical specifics; refer to work by its business purpose.
-11. Plain English, short sentences, no em-dashes or en-dashes, no tables, no links, and no PR numbers in any section. Keep acronyms as the inputs write them; never guess what one stands for. Avoid the characters < > [ ] | in text.
+9. Say this: write it last, from the finished By project block. One sentence per project, same order, naming the people from the Done and Waiting on lines by first name. Plain English a non-engineer follows.
+10. Plain English, short sentences, no em-dashes or en-dashes, no tables, no links, and no PR numbers in any section. Keep acronyms as the inputs write them; never guess what one stands for. Avoid the characters < > [ ] | in text.
+
+PROJECTS (name, priority, ticket keys; may be empty):
+{{projects}}
 
 PREVIOUS DONE TODAY:
 {{prev_done_today}}
