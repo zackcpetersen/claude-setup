@@ -40,7 +40,7 @@ Default effort `medium`. The repo comes from the URL, from `--repo`, or from the
 ## Comment rules
 
 - Questions and suggestions, never verdicts. "Could this double-count when the account changes inside the window?" not "This double-counts." The reviewer may be wrong, and a question invites the author to explain.
-- One to three short sentences, plain English, acronyms spelled out on first use.
+- One to three short sentences and under 60 words, plain English, acronyms spelled out on first use.
 - `nit: ` prefix on every medium.
 - No em-dashes or en-dashes, plain hyphens only. No "honestly", "genuinely", "hope", "maybe", "try", "if possible", "might want to consider". No exclamation hype.
 - Friendly and collaborative. Direct, not brusque.

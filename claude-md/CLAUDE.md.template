@@ -27,6 +27,12 @@
 - If a topic genuinely requires some technical detail to be correct, include the minimum needed and offer to go deeper if I want.
 - This applies to ALL written output, not just chat: PR descriptions, commit messages, ticket comments, Slack messages, docs pages, code comments, summaries, etc. Lead with plain-language "what changed and why it matters." Save deep technical detail for when it's asked for or truly required.
 
+## Review comments (GitHub reviews, PR replies, anything an agent posts on a PR)
+- Short: one to three sentences, under 60 words. One point per comment.
+- Kind and plain English: friendly, collaborative, direct without being brusque. Spell out an acronym the first time it appears.
+- Suggestions and questions, never verdicts: "Could this double-count when X?" or "Suggest moving this into Z so it runs once." Never "This is wrong" or "This will fail." The reviewer may be wrong, and a question invites the author to explain.
+- Mark priority: "nit: " on anything that does not block. Lows are dropped, not posted. Every post still needs my per-item approval.
+
 ## Plan Review
 - After drafting any implementation plan, run `/self-review` before presenting. Always include the self-review output so the user can see it was done.
 - Write every plan so it can be executed from a fresh context after clearing: include all interview decisions, exact paths and commands, source locations, what not to touch, and verification steps. Assume the executor has not seen the conversation.

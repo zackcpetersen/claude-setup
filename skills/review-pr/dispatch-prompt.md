@@ -11,7 +11,7 @@ Steps:
 3. Classify every finding: high (would break behaviour, data, security, or cost; blocks approval), medium (worth fixing, does not block; becomes a "nit:" comment), low (drop).
 4. For each high and medium finding, draft an inline review comment in the author's voice. <Paste the voice rules from the writing-voice skill or voice page here.> Plus these review rules:
    - Phrase as a suggestion or a question, never as a statement of fact. "Could this double-count when X?" or "What happens if Y is null here?" or "Suggest moving this into Z so it runs once." Never "This is wrong" or "This will fail."
-   - One to three short sentences. Plain English. Spell out an acronym the first time it appears in the comment.
+   - One to three short sentences and under 60 words. Plain English. Spell out an acronym the first time it appears in the comment.
    - Medium comments start with "nit: ".
    - No em-dashes or en-dashes anywhere, plain hyphens only. Never "honestly", "genuinely", "hope", "maybe", "try", "if possible", "might want to consider", no exclamation-heavy hype.
    - Friendly and collaborative, not brusque.
