@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# UserPromptSubmit hook: until the daily-auth skill has written today's
+# results file (~/.claude/daily-auth-last-run.json with "date" = today),
+# add a nudge to every human prompt telling Claude to run daily-auth first.
+#
+# Sessions get reused across days, so a SessionStart hook would miss the
+# first prompt of a new day; this checks on every prompt instead.
+# Prompts that are not typed by a human (task notifications, loop ticks,
+# scheduled tasks, messages from other sessions or subagents) are skipped.
+# Pure file read and date compare, no network.
+# This hook must never block a prompt: every error path exits 0 with no
+# output.
+
+set -u
+
+quiet() { exit 0; }
+
+command -v jq >/dev/null 2>&1 || quiet
+
+input=$(cat) || quiet
+prompt=$(printf %s "$input" | jq -r '.prompt | if type == "string" then . else error end' 2>/dev/null) || quiet
+
+# Messages from other sessions arrive with this prefix in front of the
+# wrapper tag, so strip it before matching.
+prompt="${prompt#"${prompt%%[![:space:]]*}"}"
+prompt="${prompt#Another Claude session sent a message: }"
+
+case "$prompt" in
+  "<task-notification"*|"<teammate-message"*|"<cross-session-message"*|"<agent-message"*) quiet ;;
+  "<scheduled-task"*|"<<"*">>"*) quiet ;;
+esac
+
+today=$(date +%F)
+results="$HOME/.claude/daily-auth-last-run.json"
+last=$(jq -r '.date // empty' "$results" 2>/dev/null || true)
+[[ "$last" == "$today" ]] && quiet
+
+msg="New day ($today): daily-auth has not run yet. Run the daily-auth skill before other work, unless this turn is a board rollover (which runs it)."
+jq -cn --arg msg "$msg" '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $msg}}' 2>/dev/null || quiet
+exit 0

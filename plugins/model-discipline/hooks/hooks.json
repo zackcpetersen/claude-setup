@@ -11,6 +11,17 @@
             "statusMessage": "Checking subagent model discipline"
           }
         ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-rules-append\"",
+            "timeout": 15,
+            "statusMessage": "Adding sub-agent rules to the dispatch prompt"
+          }
+        ]
       }
     ],
     "SessionStart": [

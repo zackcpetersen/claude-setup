@@ -14,6 +14,8 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `skills/board/` | `board` skill - daily Notion work board plus sub-agent ticket orchestration | `~/.claude/skills/` (symlink) |
 | `skills/reviewing-prs/` | `reviewing-prs` skill - the review rules both `review-pr` and `pr` read first | `~/.claude/skills/` (symlink) |
 | `skills/review-pr/` | `review-pr` skill - review a teammate's PR, approve or comment with per-comment approval | `~/.claude/skills/` (symlink) |
+| `skills/daily-auth/` | `daily-auth` skill - check and fix every login the day needs, from `~/.claude/auth-checks.json` | `~/.claude/skills/` (symlink) |
+| `skills/sync-repos/` | `sync-repos` skill - fast-forward every repo in `~/.claude/sync-repos.json` to `origin/main` | `~/.claude/skills/` (symlink) |
 | `output-styles/direct.md` | "Direct" output style - answer first, plain english, no hedging | `~/.claude/output-styles/` (symlink) |
 | `output-styles/momentum.md` | "Momentum" output style - Direct plus progress tracking and one next action | `~/.claude/output-styles/` (symlink) |
 | `output-styles/tldr.md` | "TLDR" output style - 1-3 sentences, expands only on request | `~/.claude/output-styles/` (symlink) |
@@ -22,6 +24,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
 | `plugins/model-discipline/` | `model-discipline` plugin - the agent-model-guard hook, a SessionStart rules block, and the `playbook` skill | `/plugin install`, see section 4 |
 | `plugins/plan-gate/` | `plan-gate` plugin - blocks `ExitPlanMode` until `/self-review` records a pass | `/plugin install`, see section 4 |
+| `plugins/new-day/` | `new-day` plugin - nudges every prompt until `daily-auth` has run today | `/plugin install`, see section 4 |
 | `claude-md/CLAUDE.md.template` | Generic user-level Claude Code preferences | copied to `~/.claude/CLAUDE.md` if absent |
 | `claude-md/MANIFESTO.md` | "The Ten Laws" design-philosophy template to drop into any repo | copy into a repo by hand, fill in the examples |
 | `install.sh` | Does the linking/copying above | - |
@@ -94,6 +97,24 @@ The manual equivalent, and what `update.sh` does under the hood:
 Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
 
+- 2026-10-22: Several changes, each needs a step:
+  - The template gained a `## Handoffs` section (set `Handoff folder:`,
+    e.g. `~/handoffs/`, and create the folder) and new rules under
+    `## General Preferences`, `## Communication Style` and
+    `## Git and Version Control`. Copy them into your CLAUDE.md.
+  - The `Access checks` bullets under `### Work board` moved to
+    `~/.claude/auth-checks.json`, run by the new `daily-auth` skill. Convert
+    your bullets using `skills/daily-auth/auth-checks.example.json`, then
+    replace the bullet list with the template's one-line pointer.
+  - New `sync-repos` skill: create `~/.claude/sync-repos.json` from
+    `skills/sync-repos/sync-repos.example.json`.
+  - Run `/plugin marketplace update claude-setup` first, so the
+    marketplace knows about the plugin changes below.
+  - New `new-day` plugin: `/plugin install new-day@claude-setup`.
+  - model-discipline is now 1.1.0 (adds the sub-agent rules appender).
+    Run `/plugin uninstall model-discipline@claude-setup` and
+    `/plugin install model-discipline@claude-setup`.
+  - Restart Claude Code afterwards, since hooks load at session start.
 - 2026-10-13: The plan gate is now the `plan-gate` plugin. Remove the
   inline `ExitPlanMode` hook from `~/.claude/settings.json` BEFORE
   installing plan-gate (`/plugin install plan-gate@claude-setup`). Running
@@ -127,6 +148,13 @@ Work through these once per machine:
 - The Issue Tracker section (tracker, MCP plugin, ticket URL format)
 - Any other machine-specific tools (log search, tracker MCP, etc.)
 - The Repo Conventions table (one row per repo: default branch, test command, lint command)
+- The `## Handoffs` folder line (e.g. `~/handoffs/`); create the folder with `mkdir -p`
+
+### `skills/daily-auth/SKILL.md`
+- No file edits. Copy `skills/daily-auth/auth-checks.example.json` to `~/.claude/auth-checks.json` and list every login and credential this machine needs (cloud SSO, `gh`, SSH keys, VPN, database env files, MCP servers, browser consoles). The skill writes `~/.claude/daily-auth-last-run.json` each day; the `new-day` plugin reads it.
+
+### `skills/sync-repos/SKILL.md`
+- No file edits. Copy `skills/sync-repos/sync-repos.example.json` to `~/.claude/sync-repos.json` and list the repo paths to keep current.
 
 ### `commands/start-ticket.md`
 - Needs your issue tracker's MCP tools available (e.g. install the Atlassian plugin for Jira, or your tracker's equivalent). No file edits required.
@@ -230,6 +258,16 @@ Requires `jq`. The marker is keyed on a hash of the project directory, so one re
 
 **Remove any hand-pasted `ExitPlanMode` entry from `hooks.PreToolUse` in `~/.claude/settings.json` first.** Earlier versions of this file told you to paste the gate in by hand. If both run, the first one consumes the marker and the second one denies, so plan mode locks.
 
+### new-day plugin (daily login nudge)
+
+Until the `daily-auth` skill has written today's date to `~/.claude/daily-auth-last-run.json`, a UserPromptSubmit hook adds a note to every human prompt telling Claude to run it first. It skips task notifications, loop ticks, scheduled tasks and messages from other sessions. Full description: [plugins/new-day/README.md](plugins/new-day/README.md).
+
+```
+/plugin install new-day@claude-setup
+```
+
+Requires `jq` (without it the hook stays silent). Needs `~/.claude/auth-checks.json`, see the `daily-auth` checklist in section 3.
+
 And install the plugins you use via `/plugin` (at minimum, your tracker's plugin for `/start-ticket`).
 
 ## 5. Sanity check
@@ -238,10 +276,12 @@ Open Claude Code anywhere and run `/pr`, `/babysit-pr`, `/self-review`, or `/sta
 
 For the plugins, open a fresh session and check:
 
-- `/plugin list` shows `model-discipline` and `plan-gate` enabled, and the session's context includes the model-discipline rules block.
+- `/plugin list` shows `model-discipline`, `plan-gate` and `new-day` enabled, and the session's context includes the model-discipline rules block.
 - On a session running the expensive model, an `Agent` dispatch with no `model` is denied with the guard's message; `model: "sonnet"` goes through.
 - `bash plugins/model-discipline/tests/agent-model-guard.test.sh` prints `5/5 passed.`
+- `bash plugins/model-discipline/tests/agent-rules-append.test.sh` prints `6/6 passed.`
 - `ExitPlanMode` without a review is denied with the plan-gate message; after `/self-review` it goes through once.
 - `bash plugins/plan-gate/tests/plan-gate.test.sh` prints `6/6 passed.`
+- `bash plugins/new-day/tests/new-day-check.test.sh` prints `9/9 passed.`
 
 If you set this repo up before the plugin existed, delete the leftover `~/bin/agent-model-guard` symlink by hand - `install.sh` no longer creates it, but it also never removes links it has stopped iterating over.

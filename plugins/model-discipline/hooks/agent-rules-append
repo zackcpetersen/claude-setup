@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# PreToolUse hook for the Agent tool: append the sub-agent rules to the
+# prompt of write-capable dispatches, so every worker gets them even though
+# subagents never see SessionStart-injected context.
+#
+# updatedInput REPLACES the whole tool input, so the output carries the full
+# original tool_input with only `prompt` changed. A deny from
+# agent-model-guard still wins over the allow returned here.
+# Only general-purpose, claude and untyped dispatches get the block.
+# Read-only and report types, forks, and prompts that already carry the
+# marker heading are left alone.
+# This hook must never brick dispatching: every error path exits 0 with no
+# output (the dispatch goes ahead unchanged).
+
+set -u
+
+pass() { exit 0; }
+
+command -v jq >/dev/null 2>&1 || pass
+
+input=$(cat) || pass
+
+subagent_type=$(printf %s "$input" | jq -r '.tool_input.subagent_type // empty' 2>/dev/null) || pass
+prompt_type=$(printf %s "$input" | jq -r '.tool_input.prompt | type' 2>/dev/null) || pass
+[[ "$prompt_type" == "string" ]] || pass
+
+case "$subagent_type" in
+  ""|general-purpose|claude) ;;
+  *) pass ;;
+esac
+
+marker='## Sub-agent rules'
+printf %s "$input" | jq -e --arg m "$marker" '.tool_input.prompt | contains($m)' >/dev/null 2>&1 && pass
+
+IFS= read -r -d '' rules <<'EOF'
+
+
+## Sub-agent rules
+Unless this prompt asks for a different output format or workflow:
+- Own environment: unset `VIRTUAL_ENV` and use the worktree's own env, never the main checkout's venv.
+- Batch changes into one push, not a push per fix.
+- Report exactly once at the end: `DONE: <summary or sha>` or `BLOCKED: <reason>`.
+- One owner per file or Notion page: never edit what another agent owns.
+- If you dispatch agents yourself, check on any that is silent for more than 10 minutes and unblock it.
+EOF
+
+out=$(printf %s "$input" | jq -c --arg rules "$rules" '{
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    permissionDecision: "allow",
+    updatedInput: (.tool_input | .prompt += $rules)
+  }
+}' 2>/dev/null) || pass
+
+printf '%s\n' "$out"
+exit 0
