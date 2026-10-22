@@ -98,6 +98,8 @@ Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
 
 - 2026-10-22: Several changes, each needs a step:
+  - Re-run `./install.sh` so the new `daily-auth` and `sync-repos` skills
+    get linked into `~/.claude/skills/`.
   - The template gained a `## Handoffs` section (set `Handoff folder:`,
     e.g. `~/handoffs/`, and create the folder) and new rules under
     `## General Preferences`, `## Communication Style` and
