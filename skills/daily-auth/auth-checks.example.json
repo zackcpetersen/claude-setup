@@ -7,7 +7,10 @@
       "pass": "exit0",
       "fix": "aws sso login --profile <profile>",
       "fix_kind": "interactive",
-      "covers": ["<profile>", "<other-profile-on-the-same-sso-start-url>"]
+      "covers": [
+        "<profile>",
+        "<other-profile-on-the-same-sso-start-url>"
+      ]
     },
     {
       "name": "GitHub CLI",
@@ -55,6 +58,38 @@
       "check": "open <console URL>; passes when <page element> renders, fails when it redirects to a login page",
       "pass": "exit0",
       "fix": "open <console URL> and sign in",
+      "fix_kind": "manual"
+    },
+    {
+      "name": "Orchestrator API token",
+      "kind": "shell",
+      "check": "set -a; source <path to env file>; set +a; curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H \"<auth header>: $<TOKEN_VAR>\" <cheap API URL>",
+      "pass": "regex:^200$",
+      "fix": "rotate the token and update <path to env file> (never print it)",
+      "fix_kind": "manual"
+    },
+    {
+      "name": "Observability API keys",
+      "kind": "shell",
+      "check": "curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H \"<api key header>: $<API_KEY_VAR>\" <validate URL>",
+      "pass": "regex:^200$",
+      "fix": "rotate the keys in the shell profile (never print them)",
+      "fix_kind": "manual"
+    },
+    {
+      "name": "Database env file (prod, via VPN)",
+      "kind": "shell",
+      "check": "~/bin/query_db <path to prod env file> \"select 1\"",
+      "pass": "exit0",
+      "fix": "fix the env file; needs the VPN check to pass first",
+      "fix_kind": "manual"
+    },
+    {
+      "name": "Docs MCP server",
+      "kind": "mcp",
+      "check": "one cheap read call on the <docs or meeting-notes> MCP server",
+      "pass": "exit0",
+      "fix": "/mcp and re-authenticate the <docs> server",
       "fix_kind": "manual"
     }
   ]
