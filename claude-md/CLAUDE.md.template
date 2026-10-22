@@ -9,6 +9,7 @@
 - Prefer separate Bash tool calls over compound commands (&&, ||, ;). Only chain commands when there's a true dependency (e.g., `cd dir && make`).
 - When asked to install, run, or fix something - do it directly. Don't autonomously explore the codebase or create plans unless asked. Act first, explain briefly after.
 - Do not enter or exit plan mode unless explicitly asked. Deliver results directly in chat.
+- Run what you are allowed to run: if you have permission for a command (logins, scripts, hook swaps, installs), run it yourself. Hand a step to the user only when it needs a browser, an app, or `/mcp`, and say which.
 - Default to dev environment for all operations unless told otherwise.
 <!-- FILL IN: any per-tool exceptions to the default environment, e.g. "database queries default to staging" -->
 
@@ -26,6 +27,8 @@
 - Only go into deep technical detail (internals, edge cases, low-level mechanics, heavy jargon) when I explicitly ask for it (e.g. "explain in detail", "go deep", "be technical").
 - If a topic genuinely requires some technical detail to be correct, include the minimum needed and offer to go deeper if I want.
 - This applies to ALL written output, not just chat: PR descriptions, commit messages, ticket comments, Slack messages, docs pages, code comments, summaries, etc. Lead with plain-language "what changed and why it matters." Save deep technical detail for when it's asked for or truly required.
+- Answer a direct question first, before continuing work. For 'where is this session', give the project dir, worktree path and session id.
+- Interview me: whenever you have a batch of open questions (planning, missing details, decisions), ask them with the AskUserQuestion tool, up to 4 at a time, recommended option first and marked (Recommended). Do not bury questions in a prose list. A single quick yes/no can stay in chat.
 
 ## Review comments (GitHub reviews, PR replies, anything an agent posts on a PR)
 - Short: one to three sentences, under 60 words. One point per comment.
@@ -52,6 +55,13 @@
 - do not commit files until I have approved them
 - do not include the claude code signature anywhere
 - NEVER commit .gitignore or lock file (poetry.lock, package-lock.json, Gemfile.lock, etc.) changes unless explicitly asked
+- Only tag work with a ticket the user named or one that clearly matches. Never reuse an unrelated key; ask or create a new ticket.
+- Syncing main: use `/sync-repos`, or by hand `git fetch` then `git merge --ff-only origin/main`. Never discard local edits.
+
+## Handoffs
+<!-- FILL IN: this machine's handoff folder, e.g. ~/handoffs/ -->
+- Handoff folder: <path>
+- Long or multi-day sessions end with a handoff doc in the handoff folder above: open PRs with CI/review state, blockers and on whom, unposted drafts verbatim, the exact next command. Drafts never live only in the scratchpad.
 
 ## Available Tools
 
@@ -90,14 +100,7 @@ Reviews a teammate's pull request: `/review-pr <number or URL> [--effort medium]
 - WIP limits (starting values, tune after a week): max_streams 3, max_needs_you 7, carry_flag_days 3
 - Projects data source: <collection://... of the Projects database, optional> <!-- one row per workstream; the board appends progress and decisions to its pages -->
 - Oncall: <yes|no> <!-- flip at the start of each rotation week; `no` means the board never reads alert channels or tracks alerts -->
-- Access checks (run by the board at the start of each day; `<name>: <check command> | <fix>`; a fix starting with `!` needs the user):
-  - AWS SSO: `aws sts get-caller-identity --profile <profile>` | `! aws sso login --profile <profile>` <!-- one login per SSO start URL covers every profile that shares it -->
-  - GitHub CLI: `gh auth status` | `! gh auth login`
-  - GitHub SSH: `ssh -T -o BatchMode=yes git@github.com` (passes when the output says "successfully authenticated") | `! ssh-add ~/.ssh/<key>`
-  - VPN: `<vpn status command>` (passes when connected) | `! <connect command or app to open>`
-  - Database env files: `~/bin/query_db ~/bin/env_files/.env.db.<db>.<env> "select 1"` | fix the env file
-  - MCP servers (Slack, Notion, tracker, Datadog): one read call each | `! /mcp` and re-authenticate the failed server
-  - <project-specific keys: SFTP keys, tokens in env files, cloud consoles> <!-- list every credential a current project needs -->
+- Access checks: per-machine list in `~/.claude/auth-checks.json`, run by the `daily-auth` skill (start from `skills/daily-auth/auth-checks.example.json`)
 
 ### Finalize PR (`/pr`)
 Commits changes and creates pull requests. Handles commit message formatting (per the Git and Version Control section above), branch management, and PR creation using the repo's PR template. After the PR is created it runs a self code review (`/code-review` on opus, default `medium`, override with `--review-effort`) in the background while CI runs, then applies CI fixes and review findings together in one approved push.

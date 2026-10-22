@@ -1,7 +1,7 @@
 {
   "name": "model-discipline",
   "description": "Keeps expensive-model spend on judgment work: a PreToolUse guard that denies unpinned subagent dispatches, an always-on session rules block, and a playbook skill for dispatch and session hygiene.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "Zack Petersen"
   },

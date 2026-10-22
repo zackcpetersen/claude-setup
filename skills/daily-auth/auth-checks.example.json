@@ -1,0 +1,61 @@
+{
+  "checks": [
+    {
+      "name": "Cloud SSO (main profile)",
+      "kind": "shell",
+      "check": "aws sts get-caller-identity --profile <profile>",
+      "pass": "exit0",
+      "fix": "aws sso login --profile <profile>",
+      "fix_kind": "interactive",
+      "covers": ["<profile>", "<other-profile-on-the-same-sso-start-url>"]
+    },
+    {
+      "name": "GitHub CLI",
+      "kind": "shell",
+      "check": "gh auth status",
+      "pass": "exit0",
+      "fix": "gh auth login",
+      "fix_kind": "interactive"
+    },
+    {
+      "name": "GitHub SSH",
+      "kind": "shell",
+      "check": "ssh -T -o BatchMode=yes git@github.com 2>&1",
+      "pass": "regex:successfully authenticated",
+      "fix": "ssh-add ~/.ssh/<key>",
+      "fix_kind": "auto"
+    },
+    {
+      "name": "VPN",
+      "kind": "shell",
+      "check": "<vpn status command>",
+      "pass": "regex:<text shown when connected>",
+      "fix": "<command or app that connects the VPN>",
+      "fix_kind": "interactive"
+    },
+    {
+      "name": "Database env file",
+      "kind": "shell",
+      "check": "~/bin/query_db <path to env file> \"select 1\"",
+      "pass": "exit0",
+      "fix": "fix the env file",
+      "fix_kind": "manual"
+    },
+    {
+      "name": "Tracker MCP server",
+      "kind": "mcp",
+      "check": "one cheap read call on the <tracker> MCP server",
+      "pass": "exit0",
+      "fix": "/mcp and re-authenticate the <tracker> server",
+      "fix_kind": "manual"
+    },
+    {
+      "name": "Web console",
+      "kind": "browser",
+      "check": "open <console URL>; passes when <page element> renders, fails when it redirects to a login page",
+      "pass": "exit0",
+      "fix": "open <console URL> and sign in",
+      "fix_kind": "manual"
+    }
+  ]
+}

@@ -5,7 +5,8 @@ A Claude Code plugin that keeps expensive-model spend on judgment work. It is pa
 ## What it does
 
 - **A PreToolUse guard on the `Agent` tool.** On a session running an expensive model, it denies subagent dispatches that omit `model` when the agent's own definition has no `model:` pin - an unpinned dispatch silently inherits the expensive session model. It fails open on every error path, so it cannot break dispatching.
-- **A short rules block at SessionStart.** Four lines on dispatch models, keeping tool-heavy loops and browser verification out of the main loop, and preferring `/clear` plus a handoff over repeated `/compact`.
+- **A sub-agent rules appender on the `Agent` tool.** For write-capable dispatches (`general-purpose`, `claude`, or no type) it appends a `## Sub-agent rules` block to the prompt: use your own environment, batch changes into one push, report once as `DONE:` or `BLOCKED:`, one owner per file or page. Read-only types (Explore, Plan and the like), forks, and prompts that already carry the heading are left alone. It fails open, so a broken hook never blocks a dispatch.
+- **A short rules block at SessionStart.** Four lines on dispatch models, keeping tool-heavy loops and browser verification out of the main loop, and preferring `/clear` plus a handoff over repeated `/compact`, plus the sub-agent rules for the coordinating session.
 - **A `playbook` skill** (`/model-discipline:playbook`) with the full reference: the dispatch ladder, when a top-model subagent is justified, pin upgrade/downgrade rules, the `fork` caveat, why the session rules matter, and the pattern for setting a repo up so agents pick the right model on their own.
 
 ## Install
@@ -53,10 +54,11 @@ The guard is a backstop, not a wall. It fails open when `jq` is missing, when th
 - A fresh session's context includes the model-discipline rules block.
 - On an expensive session, an `Agent` dispatch with no `model` is denied with the guard's message; `model: "sonnet"` goes through.
 - `bash plugins/model-discipline/tests/agent-model-guard.test.sh` prints `5/5 passed.`
+- `bash plugins/model-discipline/tests/agent-rules-append.test.sh` prints `6/6 passed.`
 
 ## Iterating locally
 
 Installed plugins are cached copies under `~/.claude/plugins/cache/`, not live links, so editing the repo does not change what is running. Either:
 
 - run `claude --plugin-dir ~/Projects/claude-setup/plugins/model-discipline` to load the working tree directly, or
-- run `/plugin marketplace update claude-setup` and reinstall after each edit.
+- run `/plugin marketplace update claude-setup` and reinstall after each edit. Bump `version` in `plugin.json` on every pushed change, or the reinstall is a no-op.

@@ -15,6 +15,11 @@
       "name": "plan-gate",
       "source": "./plugins/plan-gate",
       "description": "Blocks ExitPlanMode until /self-review has recorded a pass for this project."
+    },
+    {
+      "name": "new-day",
+      "source": "./plugins/new-day",
+      "description": "Nudges Claude to run the daily-auth skill on every prompt until today's login check has run."
     }
   ]
 }
