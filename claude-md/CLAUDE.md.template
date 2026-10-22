@@ -31,7 +31,7 @@
 - Short: one to three sentences, under 60 words. One point per comment.
 - Kind and plain English: friendly, collaborative, direct without being brusque. Spell out an acronym the first time it appears.
 - Suggestions and questions, never verdicts: "Could this double-count when X?" or "Suggest moving this into Z so it runs once." Never "This is wrong" or "This will fail." The reviewer may be wrong, and a question invites the author to explain.
-- Mark priority: "nit: " on anything that does not block. Lows are dropped, not posted. Every post still needs my per-item approval.
+- Mark priority: "nit: " on anything that does not block. Lows and nice-to-haves are not posted (one exception: a one-line fix goes out as a nit). Approve only when the PR is good to merge as it stands; a high or a blocker means comment, not approve. No summary comments unless needed, never praise summaries, never a signature. Every post still needs my per-item approval, even after a "post and approve" ask. Full rules: the `reviewing-prs` skill.
 
 ## Plan Review
 - After drafting any implementation plan, run `/self-review` before presenting. Always include the self-review output so the user can see it was done.

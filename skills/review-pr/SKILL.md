@@ -15,6 +15,7 @@ Default effort `medium`. The repo comes from the URL, from `--repo`, or from the
 
 ## Config
 
+- Rules: the `reviewing-prs` skill holds the triage, verdict, comment and posting rules; read it first. This file is the mechanics.
 - Voice: if `~/.claude/CLAUDE.md` has a `### Writing voice` section, invoke the skill it names (and fetch its voice page) before drafting comments. Otherwise use the voice rules in `dispatch-prompt.md`.
 - Tracker: the `### Issue Tracker` section gives the ticket URL format, used only to read the linked ticket for context.
 - Posting rule: GitHub review comments have no draft mechanism. The user approves each comment before anything is posted, every time, even when they asked for the review to be posted up front. Show the list, get a yes, then post.
@@ -25,7 +26,7 @@ Default effort `medium`. The repo comes from the URL, from `--repo`, or from the
 2. **Triage** the findings it returns:
    - `high`: would break behaviour, data, security, or cost. Blocks approval. Posted as a normal inline comment.
    - `medium`: worth fixing, does not block. Posted inline prefixed `nit: `.
-   - `low`: dropped. Listed to the user in one line each, never posted.
+   - `low`: dropped and listed to the user in one line each, except a one-line fix, which is posted as `nit: `.
    - Anything an existing review thread already raised is dropped as a duplicate.
 3. **Present** to the user: PR summary (3 lines), verdict (APPROVE when there are no highs, otherwise COMMENT), then each comment as `file:line`, severity, the drafted text. Ask for approval; the user can drop or reword any item or post only the highs. No review body (summary comment) is drafted or posted unless the user asks for one; the inline comments carry the review.
 4. **Post** one review with every approved comment in a single call, so the author gets one notification:
@@ -34,7 +35,7 @@ Default effort `medium`. The repo comes from the URL, from `--repo`, or from the
    gh api repos/<owner>/<repo>/pulls/<n>/reviews --input review.json
    ```
 
-   where `review.json` is `{"event":"APPROVE"|"COMMENT","body":"","comments":[{"path":"<file>","line":<n>,"side":"RIGHT","body":"<text>"}]}`. `body` stays empty unless the user asked for a summary comment. `line` is the line number in the new file for `RIGHT`, the old file for `LEFT`. If GitHub rejects a line as outside the diff, fall back to the nearest changed line in that hunk and say so.
+   where `review.json` is `{"event":"APPROVE"|"COMMENT","body":"","comments":[{"path":"<file>","line":<n>,"side":"RIGHT","body":"<text>"}]}`. `body` stays empty unless the user asked for a summary comment, and no comment or body ever carries a signature or attribution line. `line` is the line number in the new file for `RIGHT`, the old file for `LEFT`. If GitHub rejects a line as outside the diff, fall back to the nearest changed line in that hunk and say so.
 5. **Verify** with `gh pr view <n> --json reviews,reviewDecision` and report: review id, event, comment count, and the PR link.
 
 ## Comment rules

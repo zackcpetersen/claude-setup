@@ -12,6 +12,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `commands/start-ticket.md` | `/start-ticket` - fetch ticket, produce implementation plan | `~/.claude/commands/` (symlink) |
 | `skills/write-as-zack/` | `write-as-zack` skill - writing-voice rules, with an optional live voice page | `~/.claude/skills/` (symlink) |
 | `skills/board/` | `board` skill - daily Notion work board plus sub-agent ticket orchestration | `~/.claude/skills/` (symlink) |
+| `skills/reviewing-prs/` | `reviewing-prs` skill - the review rules both `review-pr` and `pr` read first | `~/.claude/skills/` (symlink) |
 | `skills/review-pr/` | `review-pr` skill - review a teammate's PR, approve or comment with per-comment approval | `~/.claude/skills/` (symlink) |
 | `output-styles/direct.md` | "Direct" output style - answer first, plain english, no hedging | `~/.claude/output-styles/` (symlink) |
 | `output-styles/momentum.md` | "Momentum" output style - Direct plus progress tracking and one next action | `~/.claude/output-styles/` (symlink) |
