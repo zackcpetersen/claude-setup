@@ -65,4 +65,11 @@ Structured, numbered messages are for announcements, write-ups, and new top-leve
 Examples (drafted vs sent):
 - Quick ask. Too much: "I'm a Viewer on every deployment, so I can't launch runs. Both the UI and a user token come back UnauthorizedError. Two options: 1) grant me Launcher and I'll run the jobs, 2) launch them yourself and I'll pull the logs." Right: "@teammate I don't think I have the permissions to run the jobs - can you update it for me? I think I need Launcher"
 - Agreeing to drop a PR after a teammate's analysis. Drafted: two paragraphs restating their numbers, naming the rule that broke, laying out a staged rollout, offering to use their doc. Sent: "This is good to know - I'll drop my pr and let's go with your approach instead"
+- Acking a PR author's DM after you reviewed their PR: one line, thanks plus "approved with some comments". The findings live on the PR; the DM never repeats them.
 - Updating a stakeholder on a fix that changed direction. Drafted: two paragraphs on the mechanism, the staged rollout, and a cleanup promise. Sent: "Update here - found out there's a better way forward than my proposed fix. Working with @teammate on it"
+
+## Review requests in team channels
+
+One line, matching how the team posts them. The PR link is the first word, as a hyperlink labelled "PR", then "for" and a plain description of what it does. No "Review request:" prefix, no CI state, no ask ("could someone take a pass"), no dates, no closing sentence.
+
+Shape: `<PR link|PR> for <what it does in plain words>`. The voice page holds the real examples.

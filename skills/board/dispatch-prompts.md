@@ -16,9 +16,10 @@ Every `{{placeholder}}` maps to a key in the `### Work board` section of `~/.cla
 | `epic_child_keys` | the child keys under `tracker_epics` listed under those epics in the previous scratchpad's "Epic rollups" section, never from the project fallback (empty on the first run or when `tracker_epics` is empty; the GitHub gatherer then skips step 4) |
 | `registry_rows`, `outreach_threads`, peer answers | the previous scratchpad; empty on the first run, which the prompts tolerate |
 | `oncall` | the `Oncall` line of the `### Work board` section (`yes` or `no`) |
+| `email_mcp_prefix`, `email_address` | the `Email` line of the `### Work board` section; when absent, skip the email gatherer |
 | `slack_user_id`, `slack_channels`, `tracker_project`, `tracker_epics`, `github_org`, `worktree_config`, `worktree_script` | the `### Work board` section of `~/.claude/CLAUDE.md` |
 | `prev_done_today`, `prev_rollover_time` | the previous row's Done today section, and the `Rollover started:` line in its scratchpad's Rollover log (else its Date at 00:00 UTC) |
-| `tracker_report`, `github_report`, `slack_report` | this rollover's gatherer replies, verbatim |
+| `tracker_report`, `github_report`, `slack_report`, `email_report` | this rollover's gatherer replies, verbatim |
 | `confirmed_goal`, `carried_needs_you`, `blocked_rows` | the new row's Today's goal, Needs you and Blocked sections after the carry |
 
 Read-only rule, included verbatim in every gatherer prompt:
@@ -100,6 +101,21 @@ Outreach threads to check: {{outreach_threads}}
 Return under 120 lines with thread ts values on every line: "Waiting on user" (with urgency today / this week / low), "Waiting on others" (per thread: ball with, since, nudge due or sent), "Commitments made since {{since_date}}", "Posts sent since {{since_date}}" (one line per post or reply by the user: channel, thread, gist, UTC time), "Alerts possibly unhandled", "Things that look off", and a one-line coverage caveat.
 ```
 
+## email-status (model: sonnet, Explore)
+
+```
+You are gathering a read-only snapshot of what is waiting on {{user_name}} in email ({{email_address}}, tools `{{email_mcp_prefix}}*`). Today is {{today}}. READ-ONLY. Never call any tool that sends, replies, forwards, drafts, labels, archives, trashes or marks anything. Use only the search, get_thread and get_message tools. Never print a message body in full; quote at most two sentences.
+
+1. Search threads with `newer_than:3d` (and again with `after:{{since_date}}` if the tool accepts it). Drop automated mail (GitHub, Jira, Dagster, Datadog, Sentry, payroll, calendar invites, newsletters, promotions) unless a human wrote into the thread.
+2. For every remaining thread, read the latest message and decide: who wrote last, does it ask {{user_name}} for something, has {{user_name}} replied after the ask, and is anyone outside the company on the thread.
+3. Outreach threads {{user_name}} owns (passed in below): new replies since the last sync, who the ball is with, whether a nudge is due (3 business days of silence).
+4. `from:{{email_address}} newer_than:3d`: commitments {{user_name}} made that are still open.
+
+Outreach threads to check: {{outreach_threads}}
+
+Return under 60 lines with thread ids on every line: "Waiting on user" (urgency today / this week / low; external senders first), "Waiting on others" (per thread: ball with, since, nudge due or sent), "Commitments made since {{since_date}}", "Sent since {{since_date}}" (one line per message by {{user_name}}: to, gist, UTC time), "Automated mail worth a look" (at most 5 lines: review requests or alerts not already on the board), and a one-line coverage caveat.
+```
+
 ## standup-builder (model: sonnet, general-purpose, rollover only)
 
 Dispatched after the goal is confirmed and the sync gatherers have returned. It reads only what it is given and calls no tools.
@@ -122,7 +138,7 @@ The output is exactly this shape, in Notion markdown, nested with tab characters
 - <ticket or alert> - oncall - <title> - <what was done and why it matters>
 
 How to fill it:
-1. Candidate items: every line of PREVIOUS DONE TODAY, plus every line in the reports' "Activity since" and "Posts sent since" sections dated after {{prev_rollover_time}}, plus any other dated event in the reports that {{user_name}} did or that moved their work (merges, approvals received, transitions). Merge duplicates. Drop board and session upkeep (rolling the board, memory edits, stopping or replacing agents, branch cleanup).
+1. Candidate items: every line of PREVIOUS DONE TODAY, plus every line in the reports' "Activity since", "Posts sent since" and "Sent since" sections dated after {{prev_rollover_time}}, plus any other dated event in the reports that {{user_name}} did or that moved their work (merges, approvals received, transitions). Merge duplicates. Drop board and session upkeep (rolling the board, memory edits, stopping or replacing agents, branch cleanup).
 2. Group every item by project. A project is a row of PROJECTS when that list is given, else a parent in {{tracker_epics}}, else the system or customer the item is about. Key each item to a ticket the same way as before: a key in its text, else the PR-to-ticket mapping in the GitHub report, else the ticket whose title names the same project. Items with no ticket stay in their project's Done line when they are meaningful (a kickoff, an incident, a customer delivery); otherwise drop them.
 3. At most 4 projects, in PROJECTS priority order (P1 first), else by how much moved. Projects with nothing done and nothing planned are left out. A project the user has deprioritised (a Deferred or Pacing line says parked, back burner, lower priority, or pushed to a later week) still appears when it has activity, and its Next line says it is parked.
 4. The project line lists its ticket keys after the dash, most active first, at most 4; the parent key is not listed. Keys only, never titles, never PR numbers.
@@ -148,6 +164,9 @@ GITHUB REPORT:
 
 SLACK REPORT:
 {{slack_report}}
+
+EMAIL REPORT (may be empty):
+{{email_report}}
 
 TODAY'S GOAL:
 {{confirmed_goal}}
