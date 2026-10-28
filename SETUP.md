@@ -16,11 +16,13 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `skills/review-pr/` | `review-pr` skill - review a teammate's PR, approve or comment with per-comment approval | `~/.claude/skills/` (symlink) |
 | `skills/daily-auth/` | `daily-auth` skill - check and fix every login the day needs, from `~/.claude/auth-checks.json` | `~/.claude/skills/` (symlink) |
 | `skills/sync-repos/` | `sync-repos` skill - fast-forward every repo in `~/.claude/sync-repos.json` to `origin/main` | `~/.claude/skills/` (symlink) |
+| `skills/watch/` | `watch` skill - a registry of waits (replies, PRs, deploys, Dagster runs), checked on a cadence and raised only when you must act | `~/.claude/skills/` (symlink) |
 | `output-styles/direct.md` | "Direct" output style - answer first, plain english, no hedging | `~/.claude/output-styles/` (symlink) |
 | `output-styles/momentum.md` | "Momentum" output style - Direct plus progress tracking and one next action | `~/.claude/output-styles/` (symlink) |
 | `output-styles/tldr.md` | "TLDR" output style - 1-3 sentences, expands only on request | `~/.claude/output-styles/` (symlink) |
 | `bin/query_db` | Read-only Postgres query helper | `~/bin/` (symlink) |
 | `bin/worktree` | Multi-repo git worktree manager | `~/bin/` (symlink) |
+| `bin/watch` | Registry script the `watch` skill drives (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
 | `plugins/model-discipline/` | `model-discipline` plugin - the agent-model-guard hook, a SessionStart rules block, and the `playbook` skill | `/plugin install`, see section 4 |
 | `plugins/plan-gate/` | `plan-gate` plugin - blocks `ExitPlanMode` until `/self-review` records a pass | `/plugin install`, see section 4 |
@@ -97,6 +99,11 @@ The manual equivalent, and what `update.sh` does under the hood:
 Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
 
+- 2026-10-28: New `watch` skill and `bin/watch` script. Re-run
+  `./install.sh` to link `~/bin/watch`; add the `### Watches` block from
+  the template; add the allow rules listed in `skills/watch/SKILL.md`;
+  reword your watch-slack posting carve-out to name the `watch` skill;
+  then retire `~/.claude/commands/watch-slack.md`.
 - 2026-10-22: Several changes, each needs a step:
   - Re-run `./install.sh` so the new `daily-auth` and `sync-repos` skills
     get linked into `~/.claude/skills/`.
@@ -169,7 +176,12 @@ Work through these once per machine:
 - Create one empty Notion page with an inline database (any name, only the default title property) and put its URL on the `Board page` line. The skill adds the columns it needs on first run.
 - Optional: add the `Projects data source` line. On the first run the skill creates a "Projects" database under the board page with the schema in `page-template.md` and gives you the `collection://` id to paste back; after that it keeps one page per workstream current.
 - Needs the Notion MCP plugin, the Slack MCP plugin, your tracker's MCP plugin, `gh`, and `~/bin/worktree` with its config. The ticket flow also needs `/start-ticket`, `/self-review`, `/pr` and the built-in `/code-review` skill.
-- Optional: the `/watch-slack` state file path, if you run that command; leave the line out otherwise.
+- Optional: the watch-slack state file path; the `watch` skill's Requests channel line uses it.
+
+### `skills/watch/SKILL.md`
+- No file edits. Copy the `### Watches` block from `claude-md/CLAUDE.md.template` into `~/.claude/CLAUDE.md` and fill it in; the skill stops with a clear message if the section is missing.
+- Add the allow rules listed in the skill's Install section to `~/.claude/settings.json` by hand, so its check agents never stop on a permission prompt. The same section covers retiring the old `watch-slack` command.
+- Needs `gh`, Python 3, and `~/bin/watch` (linked by `install.sh`). Slack and email watches need those MCP plugins; Dagster watches need the `Dagster` config line.
 
 ### `skills/review-pr/SKILL.md`
 - No file edits. Needs `gh` and the built-in `/code-review` skill. Uses the writing-voice skill named in the `### Writing voice` section of `~/.claude/CLAUDE.md` when present, otherwise the voice rules written into `dispatch-prompt.md`.
