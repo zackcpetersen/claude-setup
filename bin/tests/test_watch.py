@@ -532,6 +532,24 @@ class TickTests(Base):
         r = self.tick("2026-10-28T10:42")
         self.assertEqual([d["id"] for d in r["due"]["slack"]], ["w-1"])
 
+    def test_agent_error_report_clears_in_flight(self):
+        W.add_watch(self.reg, dict(SLACK_SPEC), at("2026-10-28T09:59"), self.cfg)
+        s = self.reg["watches"][0]["state"]
+        r = self.tick("2026-10-28T10:00")
+        self.assertEqual([d["id"] for d in r["due"]["slack"]], ["w-1"])
+        W.update_watch(self.reg, "w-1", at("2026-10-28T10:02"), self.cfg, error="slack: rate limited")
+        self.assertIsNone(s["dispatched_at"])
+        self.assertEqual((s["errors"], s["note"]), (1, "slack: rate limited"))
+        stales = []
+        for t in ("10:05", "10:10"):
+            r = self.tick(f"2026-10-28T{t}")
+            stales += r["stale"]
+            self.assertEqual(r["due"]["slack"], [])
+        r = self.tick("2026-10-28T10:12")  # next cadence after the 10:02 error
+        stales += r["stale"]
+        self.assertEqual([d["id"] for d in r["due"]["slack"]], ["w-1"])
+        self.assertEqual((stales, s["errors"]), ([], 1))
+
     def test_three_consecutive_errors_raise_stale_once(self):
         W.add_watch(self.reg, dict(PR_SPEC), at("2026-10-28T09:00"), self.cfg)
         stales = []

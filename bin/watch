@@ -458,6 +458,7 @@ def update_watch(reg, wid, now, cfg, *, status=None, cursor=None, checked=False,
         state["last_check"] = iso(now)
         state["errors"] += 1
         state["note"] = error
+        state["dispatched_at"] = None  # an agent that reports an error is no longer in flight
     if note is not None:
         state["note"] = note
     if draft is not None:
