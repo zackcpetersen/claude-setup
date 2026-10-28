@@ -114,6 +114,20 @@ class ConfigTests(Base):
         self.assertEqual(self.cfg["deploy_rules"]["acme/lib"], {"type": "release-tag"})
         self.assertEqual(len(self.cfg["deploy_rules"]), 3)
 
+    def test_backticked_values_are_unwrapped(self):
+        text = (
+            CFG_MD.format(tmp=self.tmp)
+            .replace("Slack user id: U_ME", "Slack user id: `U_ME`")
+            .replace(f"Watch-slack state file: {self.tmp}/req-ts.txt", f"Watch-slack state file: `{self.tmp}/req-ts.txt`")
+            .replace("  - acme/app: branch prod", "  - `acme/app`: `branch prod`")
+        )
+        self.cfg_path.write_text(text)
+        cfg = W.load_config(self.cfg_path)
+        self.assertEqual(cfg["self_ids"], {"U_ME", "me@example.com"})
+        self.assertEqual(cfg["requests"]["user"], "U_ME")
+        self.assertEqual(cfg["requests"]["state_file"], str(self.tmp / "req-ts.txt"))
+        self.assertEqual(cfg["deploy_rules"]["acme/app"], {"type": "branch", "name": "prod"})
+
     def test_missing_time_zone_is_an_error(self):
         text = "\n".join(l for l in CFG_MD.format(tmp=self.tmp).splitlines() if "Time zone" not in l)
         self.cfg_path.write_text(text)
@@ -222,6 +236,17 @@ class UpdateTests(Base):
         w = W.update_watch(self.reg, wid, at("2026-10-28T10:10"), self.cfg, messages=[{"author": "U_X", "ts": "250.0"}])
         self.assertEqual(w["state"]["status"], "armed")
         self.assertEqual(w["state"]["cursor"], "300.0")
+
+    def test_report_on_paused_watch_keeps_cursor(self):
+        wid = self.add_slack("100.0")
+        now = at("2026-10-28T10:10")
+        report = [{"author": "U_X", "ts": "300.0", "text": "yes"}]
+        W.update_watch(self.reg, wid, now, self.cfg, status="paused")
+        w = W.update_watch(self.reg, wid, now, self.cfg, messages=report)
+        self.assertEqual((w["state"]["status"], w["state"]["cursor"]), ("paused", "100.0"))
+        W.update_watch(self.reg, wid, now, self.cfg, status="armed")
+        w = W.update_watch(self.reg, wid, now, self.cfg, messages=report)
+        self.assertEqual((w["state"]["status"], w["state"]["cursor"]), ("fired", "300.0"))
 
     def test_requests_channel_fires_on_self_and_holds_cursor(self):
         self.state_file.write_text("100.0")

@@ -101,6 +101,14 @@ def _is_unset(value):
     return value == "" or (value.startswith("<") and value.endswith(">"))
 
 
+def _clean(value):
+    """Strip whitespace and one pair of surrounding backticks (`U123` reads as U123)."""
+    value = value.strip()
+    if len(value) >= 2 and value.startswith("`") and value.endswith("`"):
+        value = value[1:-1].strip()
+    return value
+
+
 def _read_section(lines, heading):
     """Return ({key: value}, {repo: rule text}) for the `### <heading>` section."""
     values, nested = {}, {}
@@ -116,13 +124,13 @@ def _read_section(lines, heading):
         top = re.match(r"^- ([^:]+?):\s*(.*)$", line)
         if top:
             last_key = top.group(1).strip()
-            value = top.group(2).strip()
+            value = _clean(top.group(2))
             if not _is_unset(value):
                 values[last_key] = value
             continue
         sub = re.match(r"^\s+- ([^:]+?):\s*(.*)$", line)
         if sub and last_key == "Deploy rules":
-            repo, rule = sub.group(1).strip(), sub.group(2).strip()
+            repo, rule = _clean(sub.group(1)), _clean(sub.group(2))
             if not _is_unset(repo) and not _is_unset(rule):
                 nested[repo] = rule
     return values, nested
@@ -374,12 +382,15 @@ def _apply_messages(w, messages, now, cfg):
     kind, state = w["kind"], w["state"]
     if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
         raise WatchError("messages must be a list of objects")
+    if state["status"] not in ("armed", "fired"):
+        # A late report on a paused or finished watch changes nothing, so a
+        # reply that lands while paused is seen again after resume.
+        return
     cursor = state["cursor"]
-    can_fire = state["status"] in ("armed", "fired")
     if kind == "requests-channel":
         floor = _ts(cursor) if cursor is not None else float("-inf")
         new = [m for m in messages if m.get("author") == w["target"]["user"] and _ts(m.get("ts")) > floor]
-        if new and can_fire:
+        if new:
             _fire(state, new, now)
         return
     remaining = filter_self(messages, cfg["self_ids"])
@@ -388,7 +399,7 @@ def _apply_messages(w, messages, now, cfg):
     for m in messages:
         cursor = advance_cursor(kind, cursor, m.get("ts") if kind in SLACK_KINDS else m.get("id"))
     state["cursor"] = cursor
-    if remaining and can_fire:
+    if remaining:
         _fire(state, remaining, now)
 
 
