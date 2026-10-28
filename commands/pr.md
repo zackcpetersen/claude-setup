@@ -66,6 +66,7 @@ Use GitHub CLI to create pull requests:
    ```bash
    gh pr create --title "<same format as the commit message>" --body "[filled template content]"
    ```
+4. If `~/bin/watch` exists, register a `pr` watch right after the PR opens: write `{"kind": "pr", "target": {"repo": "<owner/repo>", "number": <n>}, "expect": "all checks green and one approval", "created_by": "pr"}` to a temp file and run `~/bin/watch add --file <path>`. When the user asked for a prod verification, add `on_fire.then` = `{"kind": "deploy", "target": {"repo": "<owner/repo>", "sha": "{merge_sha}"}, "on_fire": {"verify": [<the read-only commands the user named>]}}`. On a fix push the watch already exists and add returns it. `/pr` itself still never merges; only the `watch` skill merges, and only with the user's per-PR approval.
 
 **Note:** Always use the current template structure from `.github/pull_request_template.md` as the source of truth.
 
