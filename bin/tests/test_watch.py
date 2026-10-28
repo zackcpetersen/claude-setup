@@ -656,5 +656,320 @@ class TickCliTests(Base):
         self.assertEqual(reg["last_tick"], "2026-10-28T16:00:00+00:00")
 
 
+GREEN_VIEW = {
+    "state": "OPEN", "headRefOid": "abc", "reviewDecision": "APPROVED", "mergeStateStatus": "CLEAN",
+    "statusCheckRollup": [{"status": "COMPLETED", "conclusion": "SUCCESS"}], "mergeCommit": None,
+}
+FAILING_VIEW = dict(GREEN_VIEW, reviewDecision="REVIEW_REQUIRED", mergeStateStatus="BLOCKED",
+                    statusCheckRollup=[{"status": "COMPLETED", "conclusion": "FAILURE"}])
+
+
+def fake_cmd(table):
+    """run_cmd stand-in: the first table key found in the joined args picks the output."""
+    calls = []
+
+    def run(args):
+        calls.append(list(args))
+        joined = " ".join(args)
+        for key, out in table.items():
+            if key in joined:
+                if isinstance(out, Exception):
+                    raise out
+                return out if isinstance(out, str) else json.dumps(out)
+        raise AssertionError(f"unexpected command {args}")
+
+    return run, calls
+
+
+class PrCheckTests(Base):
+    def test_rollup_state_cases(self):
+        ok = {"status": "COMPLETED", "conclusion": "SUCCESS"}
+        self.assertEqual(W.rollup_state([ok], "BLOCKED"), "green")
+        self.assertEqual(W.rollup_state([ok, {"status": "COMPLETED", "conclusion": "FAILURE"}], "BLOCKED"), "failed")
+        self.assertEqual(W.rollup_state([{"status": "IN_PROGRESS", "conclusion": None}], "BLOCKED"), "pending")
+        self.assertEqual(W.rollup_state([{"state": "ERROR"}], "UNSTABLE"), "failed")
+        self.assertEqual(W.rollup_state([ok, {"state": "PENDING"}], "BLOCKED"), "pending")
+        self.assertEqual(W.rollup_state([{"state": "SUCCESS"}], "BLOCKED"), "green")
+        self.assertEqual((W.rollup_state([], "CLEAN"), W.rollup_state([], "BLOCKED")), ("green", "pending"))
+
+    def test_pr_event_fires_once_per_state(self):
+        W.add_watch(self.reg, dict(PR_SPEC), at("2026-10-28T09:00"), self.cfg)
+        view = {"v": FAILING_VIEW}
+        calls = []
+
+        def gh(args):
+            calls.append(list(args))
+            return json.dumps(view["v"])
+
+        with mock.patch.object(W, "run_cmd", side_effect=gh):
+            r = W.tick(self.reg, self.cfg, at("2026-10-28T10:00"), session="me")
+            self.assertEqual([(f["event"], f["urgent"]) for f in r["fired"]], [("checks_failed", True)])
+            self.assertEqual(calls[0], ["gh", "pr", "view", "7", "--repo", "acme/app", "--json",
+                                        "state,mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid,mergeCommit"])
+            W.update_watch(self.reg, "w-1", at("2026-10-28T10:01"), self.cfg, status="armed")
+            r = W.tick(self.reg, self.cfg, at("2026-10-28T10:15"), session="me")
+            self.assertEqual(r["fired"], [])
+            view["v"] = dict(FAILING_VIEW, headRefOid="def")
+            r = W.tick(self.reg, self.cfg, at("2026-10-28T10:30"), session="me")
+            self.assertEqual([f["event"] for f in r["fired"]], ["checks_failed"])
+        self.assertEqual(self.reg["watches"][0]["state"]["cursor"], "OPEN|def|failed|REVIEW_REQUIRED")
+
+    def test_merge_ok_only_when_head_matches_green_and_approved(self):
+        w = {"on_fire": {"merge": {"words": "merge it when green", "at": "x", "head_sha": "abc"}}}
+        view = dict(GREEN_VIEW)
+        self.assertEqual(W.pr_event(view, w), ("OPEN|abc|green|APPROVED", "ready", {"merge_ok": True}))
+        self.assertEqual(W.pr_event({**view, "headRefOid": "def"}, w)[1], "head_moved")
+        self.assertIsNone(W.pr_event({**view, "reviewDecision": "REVIEW_REQUIRED"}, w)[1])
+        self.assertEqual(W.pr_event(view, {"on_fire": {"merge": None}})[1:], ("ready", {"merge_ok": False}))
+
+    def test_pr_event_priority(self):
+        w = {"on_fire": {"merge": None}}
+        self.assertEqual(W.pr_event(dict(FAILING_VIEW, reviewDecision="CHANGES_REQUESTED"), w)[1:], ("checks_failed", {"urgent": True}))
+        self.assertEqual(W.pr_event(dict(GREEN_VIEW, reviewDecision="CHANGES_REQUESTED"), w)[1], "changes_requested")
+        self.assertEqual(W.pr_event(dict(GREEN_VIEW, state="CLOSED"), w)[1], "closed")
+
+    def test_pr_merged_returns_merge_sha(self):
+        view = dict(GREEN_VIEW, state="MERGED", mergeCommit={"oid": "m1"})
+        self.assertEqual(W.pr_event(view, {"on_fire": {"merge": None}})[1:], ("merged", {"merge_sha": "m1"}))
+
+
+class DeployCheckTests(Base):
+    def deploy_watch(self, repo="acme/app"):
+        W.add_watch(self.reg, {"kind": "deploy", "target": {"repo": repo, "sha": "s1"}}, at("2026-10-28T09:00"), self.cfg)
+        return self.reg["watches"][-1]
+
+    def test_deploy_branch_rule(self):
+        w = self.deploy_watch()
+        run, calls = fake_cmd({"branches/prod": "h9\n", "compare": "ahead\n"})
+        with mock.patch.object(W, "run_cmd", side_effect=run):
+            self.assertEqual(W.run_check(w, self.cfg), ("h9", "deployed", {}))
+        self.assertEqual(calls[0], ["gh", "api", "repos/acme/app/branches/prod", "--jq", ".commit.sha"])
+        self.assertEqual(calls[1], ["gh", "api", "repos/acme/app/compare/s1...h9", "--jq", ".status"])
+
+    def test_deploy_branch_not_yet(self):
+        w = self.deploy_watch()
+        run, _ = fake_cmd({"branches/prod": "h9\n", "compare": "diverged\n"})
+        with mock.patch.object(W, "run_cmd", side_effect=run):
+            self.assertEqual(W.run_check(w, self.cfg), ("h9", None, {}))
+
+    def test_deploy_workflow_failure_is_urgent_and_fingerprint_is_run_id(self):
+        w = self.deploy_watch("acme/web")
+        runs = [
+            {"databaseId": 80, "headSha": "n1", "status": "in_progress", "conclusion": ""},
+            {"databaseId": 79, "headSha": "old", "status": "completed", "conclusion": "success"},
+            {"databaseId": 77, "headSha": "s1", "status": "completed", "conclusion": "failure"},
+        ]
+        run, calls = fake_cmd({"run list": runs, "compare/s1...old": "behind", "compare/s1...s1": "identical"})
+        with mock.patch.object(W, "run_cmd", side_effect=run):
+            self.assertEqual(W.run_check(w, self.cfg), ("77", "deploy_failed", {"run_id": 77, "urgent": True}))
+        self.assertEqual(calls[0], ["gh", "run", "list", "--repo", "acme/web", "--workflow", "deploy", "--branch", "main",
+                                    "--json", "databaseId,headSha,status,conclusion", "--limit", "20"])
+        self.assertEqual(len(calls), 3)
+
+    def test_deploy_workflow_success_and_compare_cap(self):
+        w = self.deploy_watch("acme/web")
+        ok = [{"databaseId": 90, "headSha": "s1", "status": "completed", "conclusion": "success"}]
+        run, _ = fake_cmd({"run list": ok, "compare": "identical"})
+        with mock.patch.object(W, "run_cmd", side_effect=run):
+            self.assertEqual(W.run_check(w, self.cfg), ("90", "deployed", {"run_id": 90}))
+        old = [{"databaseId": i, "headSha": f"o{i}", "status": "completed", "conclusion": "success"} for i in range(10, 0, -1)]
+        run, calls = fake_cmd({"run list": old, "compare": "behind"})
+        with mock.patch.object(W, "run_cmd", side_effect=run):
+            self.assertEqual(W.run_check(w, self.cfg), ("none", None, {}))
+        self.assertEqual(len(calls), 1 + 5)
+
+    def test_deploy_release_tag_waits_until_tag_contains_sha(self):
+        w = self.deploy_watch("acme/lib")
+        run, calls = fake_cmd({"releases/latest": "v1.2\n", "compare": "behind\n"})
+        with mock.patch.object(W, "run_cmd", side_effect=run):
+            self.assertEqual(W.run_check(w, self.cfg), ("v1.2", None, {}))
+        self.assertEqual(calls[0], ["gh", "api", "repos/acme/lib/releases/latest", "--jq", ".tag_name"])
+        self.assertEqual(calls[1], ["gh", "api", "repos/acme/lib/compare/s1...v1.2", "--jq", ".status"])
+        run, _ = fake_cmd({"releases/latest": "v1.3\n", "compare": "ahead\n"})
+        with mock.patch.object(W, "run_cmd", side_effect=run):
+            self.assertEqual(W.run_check(w, self.cfg), ("v1.3", "deployed", {"tag": "v1.3"}))
+
+    def test_deploy_repo_without_rule_is_an_error(self):
+        w = self.deploy_watch("acme/other")
+        with self.assertRaisesRegex(W.WatchError, "acme/other"):
+            W.run_check(w, self.cfg)
+
+
+class DagsterCheckTests(Base):
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.dict(os.environ)
+        p.start()
+        self.addCleanup(p.stop)
+        os.environ.pop("DAGSTER_TOKEN", None)
+
+    def test_backfill_state_terminal_rule(self):
+        mk = lambda st, n, runs: {"__typename": "PartitionBackfill", "status": st, "numPartitions": n,
+                                  "partitionStatuses": {"results": [{"partitionName": str(i), "runId": None, "runStatus": s} for i, s in enumerate(runs)]}}
+        self.assertEqual(W.backfill_state(mk("REQUESTED", 3, ["SUCCESS", "SUCCESS"])), "RUNNING")
+        self.assertEqual(W.backfill_state(mk("COMPLETED", 2, ["SUCCESS", "STARTED"])), "RUNNING")
+        self.assertEqual(W.backfill_state(mk("COMPLETED", 2, ["SUCCESS", "SUCCESS"])), "SUCCESS")
+        self.assertEqual(W.backfill_state(mk("COMPLETED", 2, ["SUCCESS", "FAILURE"])), "FAILURE")
+        self.assertEqual(W.backfill_state(mk("CANCELED", 2, ["SUCCESS", None])), "FAILURE")
+        self.assertEqual(W.backfill_state({"__typename": "PythonError", "message": "x"}), "UNKNOWN")
+
+    def test_dagster_run_failure_fires_urgent(self):
+        os.environ["DAGSTER_TOKEN"] = "t1"
+        W.add_watch(self.reg, {"kind": "dagster-run", "target": {"run_id": "r1"}}, at("2026-10-28T09:00"), self.cfg)
+        reply = {"runOrError": {"__typename": "Run", "runId": "r1", "status": "FAILURE"}}
+        with mock.patch.object(W, "gql", return_value=reply) as g:
+            r = W.tick(self.reg, self.cfg, at("2026-10-28T10:00"), session="me")
+        self.assertEqual(g.call_args.args, ("https://example.invalid/graphql", "t1", W.RUN_QUERY, {"id": "r1"}))
+        f = r["fired"][0]
+        self.assertEqual((f["event"], f["urgent"], f["result"]), ("failed", True, {"run_id": "r1", "status": "FAILURE", "urgent": True}))
+        self.assertEqual(self.reg["watches"][0]["state"]["cursor"], "FAILURE")
+
+    def test_dagster_run_running_then_success(self):
+        os.environ["DAGSTER_TOKEN"] = "t1"
+        w = {"kind": "dagster-run", "target": {"run_id": "r1"}}
+        with mock.patch.object(W, "gql", return_value={"runOrError": {"__typename": "Run", "runId": "r1", "status": "STARTED"}}):
+            self.assertEqual(W.run_check(w, self.cfg), ("STARTED", None, {"run_id": "r1", "status": "STARTED"}))
+        with mock.patch.object(W, "gql", return_value={"runOrError": {"__typename": "Run", "runId": "r1", "status": "SUCCESS"}}):
+            self.assertEqual(W.run_check(w, self.cfg)[1], "succeeded")
+        with mock.patch.object(W, "gql", return_value={"runOrError": {"__typename": "RunNotFoundError"}}):
+            with self.assertRaises(Exception):
+                W.run_check(w, self.cfg)
+
+    def test_dagster_backfill_check(self):
+        os.environ["DAGSTER_TOKEN"] = "t1"
+        w = {"kind": "dagster-backfill", "target": {"backfill_id": "b1"}}
+        payload = {"__typename": "PartitionBackfill", "id": "b1", "status": "COMPLETED", "numPartitions": 1,
+                   "partitionStatuses": {"results": [{"partitionName": "p", "runId": "r", "runStatus": "SUCCESS"}]}}
+        with mock.patch.object(W, "gql", return_value={"partitionBackfillOrError": payload}) as g:
+            self.assertEqual(W.run_check(w, self.cfg), ("SUCCESS", "succeeded", {"backfill_id": "b1", "status": "SUCCESS"}))
+        self.assertEqual(g.call_args.args[2:], (W.BACKFILL_QUERY, {"id": "b1"}))
+
+    def test_load_env_file_sets_missing_vars_only(self):
+        env = self.tmp / ".env"
+        env.write_text('# comment\nexport DAGSTER_TOKEN="t1"\nOTHER_X=\'q v\'\nPRESET_X=new\nnot a line\n')
+        os.environ["PRESET_X"] = "old"
+        os.environ.pop("OTHER_X", None)
+        W.load_env_file(env)
+        self.assertEqual((os.environ["DAGSTER_TOKEN"], os.environ["OTHER_X"], os.environ["PRESET_X"]), ("t1", "q v", "old"))
+        W.load_env_file(self.tmp / "missing.env")  # a missing file is not an error here
+
+    def test_env_file_read_once_per_tick_and_only_when_due(self):
+        (self.tmp / ".env").write_text("DAGSTER_TOKEN=t1\n")
+        W.add_watch(self.reg, {"kind": "dagster-run", "target": {"run_id": "r1"}}, at("2026-10-28T09:00"), self.cfg)
+        W.add_watch(self.reg, {"kind": "dagster-run", "target": {"run_id": "r2"}}, at("2026-10-28T09:00"), self.cfg)
+        reply = {"runOrError": {"__typename": "Run", "runId": "r", "status": "STARTED"}}
+        with mock.patch.object(W, "gql", return_value=reply), \
+                mock.patch.object(W, "load_env_file", wraps=W.load_env_file) as lef:
+            W.tick(self.reg, self.cfg, at("2026-10-28T10:00"), session="me")
+            self.assertEqual(lef.call_count, 1)
+            W.tick(self.reg, self.cfg, at("2026-10-28T10:01"), session="me")  # nothing due
+            self.assertEqual(lef.call_count, 1)
+
+    def test_missing_token_is_a_check_error(self):
+        W.add_watch(self.reg, {"kind": "dagster-run", "target": {"run_id": "r1"}}, at("2026-10-28T09:00"), self.cfg)
+        with mock.patch.object(W, "gql") as g:
+            W.tick(self.reg, self.cfg, at("2026-10-28T10:00"), session="me")
+        self.assertEqual(g.call_count, 0)
+        s = self.reg["watches"][0]["state"]
+        self.assertEqual(s["errors"], 1)
+        self.assertIn("DAGSTER_TOKEN", s["note"])
+
+    def test_gql_posts_with_token_header_and_raises_on_errors(self):
+        class Resp:
+            def __init__(self, body):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return json.dumps(self.body).encode()
+
+        with mock.patch.object(W.urllib.request, "urlopen", return_value=Resp({"data": {"x": 1}})) as uo:
+            self.assertEqual(W.gql("https://example.invalid/graphql", "t1", "query{x}", {"a": 1}), {"x": 1})
+        req = uo.call_args.args[0]
+        self.assertEqual((req.get_method(), req.get_header("Dagster-cloud-api-token"), req.get_header("Content-type")),
+                         ("POST", "t1", "application/json"))
+        self.assertEqual(json.loads(req.data), {"query": "query{x}", "variables": {"a": 1}})
+        self.assertEqual(uo.call_args.kwargs["timeout"], 60)
+        with mock.patch.object(W.urllib.request, "urlopen", return_value=Resp({"errors": [{"message": "nope"}]})):
+            with self.assertRaisesRegex(RuntimeError, "nope"):
+                W.gql("https://example.invalid/graphql", "t1", "query{x}", {})
+
+    def test_dagster_token_never_printed(self):
+        import io
+        (self.tmp / ".env").write_text("DAGSTER_TOKEN=sekret-123\n")
+        W.add_watch(self.reg, {"kind": "dagster-run", "target": {"run_id": "r1"}}, at("2026-10-28T09:00"), self.cfg)
+        self.reg_path.write_text(json.dumps(self.reg))
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(W, "gql", side_effect=RuntimeError("401 for token sekret-123")), \
+                mock.patch.object(sys, "stdout", out), mock.patch.object(sys, "stderr", err):
+            for t in ("10:00", "10:05", "10:10"):
+                rc = W.main(["--registry", str(self.reg_path), "--config", str(self.cfg_path),
+                             "--now", f"2026-10-28T{t}:00-06:00", "tick", "--session", "me"])
+                self.assertEqual(rc, 0)
+        self.assertIn("3 failed checks in a row", out.getvalue())
+        for text in (out.getvalue(), err.getvalue(), self.reg_path.read_text()):
+            self.assertNotIn("sekret-123", text)
+
+    def test_check_failure_counts_error_and_continues(self):
+        W.add_watch(self.reg, dict(PR_SPEC, target={"repo": "acme/app", "number": 1}), at("2026-10-28T09:00"), self.cfg)
+        W.add_watch(self.reg, dict(PR_SPEC, target={"repo": "acme/app", "number": 2}), at("2026-10-28T09:00"), self.cfg)
+        fail = subprocess.CalledProcessError(1, ["gh"], stderr="raw stderr: auth token ghp_x")
+
+        def gh(args):
+            if args[3] == "1":
+                raise fail
+            return json.dumps(dict(GREEN_VIEW, reviewDecision="REVIEW_REQUIRED"))
+
+        with mock.patch.object(W, "run_cmd", side_effect=gh):
+            W.tick(self.reg, self.cfg, at("2026-10-28T10:00"), session="me")
+        w1, w2 = self.reg["watches"]
+        self.assertEqual((w1["state"]["errors"], w1["state"]["checks"]), (1, 0))
+        self.assertNotIn("ghp_x", json.dumps(self.reg))
+        self.assertEqual((w2["state"]["errors"], w2["state"]["checks"], w2["state"]["cursor"]), (0, 1, "OPEN|abc|green|REVIEW_REQUIRED"))
+
+
+class FollowUpTests(Base):
+    def test_fill_placeholders_ok_and_unfilled(self):
+        t = {"kind": "deploy", "target": {"repo": "acme/app", "sha": "{merge_sha}"}}
+        self.assertEqual(W.fill_placeholders(t, {"merge_sha": "m1"})["target"]["sha"], "m1")
+        self.assertEqual(t["target"]["sha"], "{merge_sha}")  # template untouched
+        with self.assertRaisesRegex(W.PlaceholderError, "run_id"):
+            W.fill_placeholders({"target": {"run_id": "{run_id}"}}, {})
+        filled = W.fill_placeholders({"a": ["x-{n}", "{n}"], "b": {"c": "{s}"}}, {"n": 7, "s": "y"})
+        self.assertEqual(filled, {"a": ["x-7", 7], "b": {"c": "y"}})
+        with self.assertRaisesRegex(W.PlaceholderError, "a, b"):
+            W.fill_placeholders({"x": "{b} {a}"}, None)
+
+    def test_add_then_of_registers_followup_and_rejects_unfilled(self):
+        then = {"kind": "deploy", "target": {"repo": "acme/app", "sha": "{merge_sha}"}, "expect": "deployed"}
+        W.add_watch(self.reg, dict(PR_SPEC, created_by="pr", on_fire={"then": then}), at("2026-10-28T09:00"), self.cfg)
+        self.reg["watches"][0]["state"].update(status="fired", result={"merge_sha": "m1"})
+        self.reg_path.write_text(json.dumps(self.reg))
+        r = self.cli("--now", "2026-10-28T10:00:00-06:00", "add", "--then-of", "w-1")
+        self.assertEqual((r.returncode, r.stdout), (0, "w-2\n"), r.stderr)
+        w2 = self.read_reg()["watches"][1]
+        self.assertEqual((w2["kind"], w2["target"], w2["created_by"]), ("deploy", {"repo": "acme/app", "sha": "m1"}, "pr"))
+
+        reg = self.read_reg()
+        reg["watches"][0]["on_fire"]["then"] = {"kind": "dagster-run", "target": {"run_id": "{run_id}"}}
+        self.reg_path.write_text(json.dumps(reg))
+        r = self.cli("--now", "2026-10-28T10:00:00-06:00", "add", "--then-of", "w-1")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("unfilled placeholders: run_id", r.stderr)
+        self.assertEqual(len(self.read_reg()["watches"]), 2)
+
+    def test_then_of_without_then_is_an_error(self):
+        W.add_watch(self.reg, dict(PR_SPEC), at("2026-10-28T09:00"), self.cfg)
+        self.reg_path.write_text(json.dumps(self.reg))
+        r = self.cli("--now", "2026-10-28T10:00:00-06:00", "add", "--then-of", "w-1")
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(len(self.read_reg()["watches"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

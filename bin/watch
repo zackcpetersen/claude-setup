@@ -12,7 +12,9 @@ import fcntl
 import json
 import os
 import re
+import subprocess
 import sys
+import urllib.request
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -572,9 +574,233 @@ def stale_reason(watch, now):
 
 # ---------- checks ----------
 
+CMD_TIMEOUT = 60  # seconds; the tick holds the registry lock through every check
+CHECK_FAILED = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
+CONTEXT_FAILED = {"FAILURE", "ERROR"}
+CONTEXT_PENDING = {"PENDING", "EXPECTED"}
+PR_FIELDS = "state,mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid,mergeCommit"
+WORKFLOW_COMPARES = 5
+
+DAGSTER_KINDS = {"dagster-run", "dagster-backfill"}
+DAGSTER_TERMINAL = {"SUCCESS", "FAILURE", "CANCELED"}
+RUN_QUERY = 'query($id:ID!){runOrError(runId:$id){__typename ... on Run{runId status}}}'
+BACKFILL_QUERY = (
+    'query($id:String!){partitionBackfillOrError(backfillId:$id){__typename ... on PartitionBackfill'
+    '{id status numPartitions partitionStatuses{results{partitionName runId runStatus}}} ... on PythonError{message}}}'
+)
+
+
+class PlaceholderError(WatchError):
+    """A follow-up watch still has `{name}` placeholders after filling."""
+
+
+def run_cmd(args):
+    return subprocess.run(args, capture_output=True, text=True, timeout=CMD_TIMEOUT, check=True).stdout
+
+
+def gql(url, token, query, variables):
+    """POST one Dagster GraphQL query and return its data. The token goes in a header only."""
+    req = urllib.request.Request(
+        url,
+        data=json.dumps({"query": query, "variables": variables}).encode(),
+        headers={"Content-Type": "application/json", "Dagster-Cloud-Api-Token": token},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=CMD_TIMEOUT) as resp:
+        body = json.loads(resp.read())
+    if body.get("errors"):
+        raise RuntimeError("GraphQL error: " + "; ".join(str(e.get("message", e)) for e in body["errors"]))
+    return body["data"]
+
+
+def load_env_file(path):
+    """The script's own `source`: set KEY=VALUE lines that are not already in the environment."""
+    try:
+        text = Path(path).read_text()
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        raise WatchError(f"cannot read env file {path}: {e.strerror}")
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, sep, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if not sep or not re.fullmatch(r"[A-Za-z_]\w*", key):
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        else:
+            value = re.sub(r"\s+#.*$", "", value)
+        os.environ.setdefault(key, value)
+
+
+# ----- pr -----
+
+def rollup_state(rollup, merge_state):
+    if not rollup:
+        return "green" if merge_state == "CLEAN" else "pending"
+    if any(c.get("conclusion") in CHECK_FAILED or c.get("state") in CONTEXT_FAILED for c in rollup):
+        return "failed"
+    for c in rollup:
+        if "state" in c:
+            if c["state"] in CONTEXT_PENDING:
+                return "pending"
+        elif c.get("status") != "COMPLETED":
+            return "pending"
+    return "green"
+
+
+def pr_event(view, watch):
+    checks = rollup_state(view.get("statusCheckRollup") or [], view.get("mergeStateStatus"))
+    head, review = view.get("headRefOid"), view.get("reviewDecision")
+    fp = f"{view.get('state')}|{head}|{checks}|{review}"
+    merge = (watch.get("on_fire") or {}).get("merge")
+    if view.get("state") == "MERGED":
+        return fp, "merged", {"merge_sha": (view.get("mergeCommit") or {}).get("oid")}
+    if view.get("state") == "CLOSED":
+        return fp, "closed", {}
+    if checks == "failed":
+        return fp, "checks_failed", {"urgent": True}
+    if review == "CHANGES_REQUESTED":
+        return fp, "changes_requested", {}
+    if merge and merge.get("head_sha") != head:
+        return fp, "head_moved", {}
+    if checks == "green" and review == "APPROVED":
+        return fp, "ready", {"merge_ok": bool(merge and merge.get("head_sha") == head)}
+    return fp, None, {}
+
+
+# ----- deploy -----
+
+def contains(repo, sha, ref):
+    status = run_cmd(["gh", "api", f"repos/{repo}/compare/{sha}...{ref}", "--jq", ".status"]).strip()
+    return status in ("identical", "ahead")
+
+
+def deploy_event(watch, rule):
+    repo, sha = watch["target"]["repo"], watch["target"]["sha"]
+    if not rule:
+        raise WatchError(f"no deploy rule for {repo} under Deploy rules in the ### Watches config")
+    if rule["type"] == "branch":
+        head = run_cmd(["gh", "api", f"repos/{repo}/branches/{rule['name']}", "--jq", ".commit.sha"]).strip()
+        return head, ("deployed" if contains(repo, sha, head) else None), {}
+    if rule["type"] == "release-tag":
+        tag = run_cmd(["gh", "api", f"repos/{repo}/releases/latest", "--jq", ".tag_name"]).strip()
+        if contains(repo, sha, tag):
+            return tag, "deployed", {"tag": tag}
+        return tag, None, {}
+    runs = json.loads(run_cmd([
+        "gh", "run", "list", "--repo", repo, "--workflow", rule["name"], "--branch", rule["branch"],
+        "--json", "databaseId,headSha,status,conclusion", "--limit", "20",
+    ]))
+    completed = [r for r in runs if r.get("status") == "completed"][:WORKFLOW_COMPARES]
+    for r in completed:
+        if contains(repo, sha, r["headSha"]):
+            if r.get("conclusion") == "success":
+                return str(r["databaseId"]), "deployed", {"run_id": r["databaseId"]}
+            return str(r["databaseId"]), "deploy_failed", {"run_id": r["databaseId"], "urgent": True}
+    return "none", None, {}
+
+
+# ----- dagster -----
+
+def backfill_state(b):
+    if b.get("__typename") != "PartitionBackfill":
+        return "UNKNOWN"
+    results = (b.get("partitionStatuses") or {}).get("results") or []
+    statuses = [r.get("runStatus") for r in results]
+    if b.get("status") in ("FAILED", "CANCELED") and all(s is None or s in DAGSTER_TERMINAL for s in statuses):
+        return "FAILURE"
+    if len(results) < (b.get("numPartitions") or 0) or any(s not in DAGSTER_TERMINAL for s in statuses):
+        return "RUNNING"
+    return "SUCCESS" if all(s == "SUCCESS" for s in statuses) else "FAILURE"
+
+
+def dagster_event(watch, cfg):
+    dagster = cfg.get("dagster")
+    if not dagster:
+        raise WatchError("Dagster watches need a `Dagster` line in the ### Watches config")
+    token = os.environ.get(dagster["token_var"])
+    if not token:
+        raise WatchError(f"{dagster['token_var']} is not set and not in the env file {dagster['env_file']}")
+    target = watch["target"]
+    if watch["kind"] == "dagster-run":
+        key, ident = "run_id", target["run_id"]
+        run = gql(dagster["url"], token, RUN_QUERY, {"id": ident})["runOrError"]
+        if run.get("__typename") != "Run":
+            raise RuntimeError(f"run {ident}: {run.get('__typename')}")
+        status = run["status"]
+    else:
+        key, ident = "backfill_id", target["backfill_id"]
+        payload = gql(dagster["url"], token, BACKFILL_QUERY, {"id": ident})["partitionBackfillOrError"]
+        status = backfill_state(payload)
+        if status == "UNKNOWN":
+            raise RuntimeError(f"backfill {ident}: {payload.get('__typename')} {payload.get('message') or ''}".strip())
+    result = {key: ident, "status": status}
+    if status == "SUCCESS":
+        return status, "succeeded", result
+    if status in ("FAILURE", "CANCELED"):
+        return status, "failed", dict(result, urgent=True)
+    return status, None, result
+
+
 def run_check(watch, cfg):
     """Run one script-backed check. Returns (fingerprint, event or None, result); raises on failure."""
-    raise NotImplementedError(f"no script check for {watch['kind']} yet")
+    kind, target = watch["kind"], watch["target"]
+    if kind == "pr":
+        view = json.loads(run_cmd(["gh", "pr", "view", str(target["number"]), "--repo", target["repo"], "--json", PR_FIELDS]))
+        return pr_event(view, watch)
+    if kind == "deploy":
+        return deploy_event(watch, cfg["deploy_rules"].get(target["repo"]))
+    if kind in DAGSTER_KINDS:
+        return dagster_event(watch, cfg)
+    raise WatchError(f"no script check for {kind}")
+
+
+# ----- follow-up watches -----
+
+_PLACEHOLDER = re.compile(r"\{(\w+)\}")
+
+
+def fill_placeholders(template, result):
+    """Fill every `{name}` in string values from result. A value that is one whole placeholder keeps its type."""
+    result = result or {}
+    missing = set()
+
+    def fill(v):
+        if isinstance(v, dict):
+            return {k: fill(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [fill(x) for x in v]
+        if not isinstance(v, str):
+            return v
+        names = _PLACEHOLDER.findall(v)
+        missing.update(n for n in names if n not in result)
+        whole = _PLACEHOLDER.fullmatch(v)
+        if whole and whole.group(1) in result:
+            return result[whole.group(1)]
+        return _PLACEHOLDER.sub(lambda m: str(result[m.group(1)]) if m.group(1) in result else m.group(0), v)
+
+    filled = fill(template)
+    if missing:
+        raise PlaceholderError(f"unfilled placeholders: {', '.join(sorted(missing))}")
+    return filled
+
+
+def followup_spec(reg, wid):
+    w = find_watch(reg, wid)
+    then = (w.get("on_fire") or {}).get("then")
+    if not then:
+        raise WatchError(f"{wid} has no follow-up watch (on_fire.then is empty)")
+    spec = fill_placeholders(then, w["state"].get("result"))
+    if not isinstance(spec, dict):
+        raise WatchError(f"{wid} on_fire.then must be a JSON object")
+    spec["created_by"] = w["created_by"]
+    return spec
 
 
 def short_error(e, cfg):
@@ -594,7 +820,7 @@ def _raise_stale(w, reason, report):
         report["stale"].append({"id": w["id"], "reason": reason})
 
 
-def _tick_watch(reg, w, cfg, now, report, woke):
+def _tick_watch(reg, w, cfg, now, report, woke, ctx):
     state = w["state"]
     phase = expiry_state(w, now, cfg)
     if phase == "hard":
@@ -623,6 +849,9 @@ def _tick_watch(reg, w, cfg, now, report, woke):
         report["due"][connector].append({"id": w["id"], "kind": w["kind"], "target": w["target"], "cursor": state["cursor"]})
         return
     try:
+        if w["kind"] in DAGSTER_KINDS and cfg.get("dagster") and not ctx["env_loaded"]:
+            ctx["env_loaded"] = True
+            load_env_file(cfg["dagster"]["env_file"])
         fp, event, result = run_check(w, cfg)
     except Exception as e:
         update_watch(reg, w["id"], now, cfg, error=short_error(e, cfg))
@@ -648,10 +877,11 @@ def tick(reg, cfg, now, *, session, take=False):
     woke = bool(last_tick) and now - parse_iso(last_tick) > OWNER_WINDOW * cfg["tick"]
     reg["owner"], reg["last_tick"] = session, iso(now)
     report = {"fired": [], "due": {"slack": [], "email": []}, "stale": [], "expired": []}
+    ctx = {"env_loaded": False}
     for w in reg["watches"]:
         if w["state"]["status"] in TERMINAL:
             continue
-        _tick_watch(reg, w, cfg, now, report, woke)
+        _tick_watch(reg, w, cfg, now, report, woke, ctx)
         if w["state"]["status"] not in TERMINAL:
             # After the check, so the third failure raises on the same tick.
             _raise_stale(w, _errors_reason(w["state"]), report)
@@ -733,6 +963,7 @@ def build_parser():
     src = a.add_mutually_exclusive_group()
     src.add_argument("--file")
     src.add_argument("--json")
+    src.add_argument("--then-of", metavar="ID", help="add the follow-up watch of a fired watch, filled from its result")
 
     sub.add_parser("list", help="one line per open watch")
     s = sub.add_parser("status", help="JSON for one watch, or the whole registry")
@@ -767,7 +998,10 @@ def run(args):
     cfg = load_config(Path(args.config or os.environ.get("WATCH_CONFIG") or DEFAULT_CONFIG).expanduser())
     registry = Path(args.registry or os.environ.get("WATCH_REGISTRY") or cfg["registry"]).expanduser()
 
-    if args.cmd == "add":
+    if args.cmd == "add" and args.then_of:
+        with locked_registry(registry) as reg:
+            print(add_watch(reg, followup_spec(reg, args.then_of), now, cfg))
+    elif args.cmd == "add":
         if args.file:
             try:
                 text = Path(args.file).read_text()
