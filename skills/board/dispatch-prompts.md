@@ -125,7 +125,7 @@ You are verifying, read-only, that each draft {{user_name}} (Slack user {{slack_
 Drafts to check (one per line: id | channel or mailbox | thread ts or message id | gist | expected outcome):
 {{drafts_today}}
 
-For each line: read the target (thread tool with channel id plus thread ts; channel read for a direct message; the mailbox search for email) and report one of: SENT <HH:MMZ> "<first six words>", SCHEDULED (visible as scheduled, not yet posted), DISCARDED (expected outcome was discard and nothing from {{user_name}} appears in that thread after the draft time), NOT FOUND (expected sent but nothing from {{user_name}} after the draft time), or POSTED BY MISTAKE "<first six words>" (expected discard but something appears). Quote at most six words of any message.
+For each line: read the target (thread tool with channel id plus thread ts; channel read for a direct message; the mailbox search for email) and report one of: SENT <HH:MMZ> <message ts or id> "<first six words>", SCHEDULED (visible as scheduled, not yet posted), DISCARDED (expected outcome was discard and nothing from {{user_name}} appears in that thread after the draft time), NOT FOUND (expected sent but nothing from {{user_name}} after the draft time), or POSTED BY MISTAKE "<first six words>" (expected discard but something appears). Quote at most six words of any message.
 
 Reply exactly once: DONE: then one line per draft in the input order, then one line "Problems: <count>".
 ```
@@ -251,7 +251,7 @@ You are finalizing ticket {{ticket}} in the worktree at {{worktree_path}} (repo 
 
 The user has approved committing and pushing exactly these files: {{approved_files}}. That approval covers the commit and the push only. Do not stage lock files, .gitignore, or worktree setup noise (CLAUDE.md, AGENTS.md, .claude/ changes).
 
-Run `/pr --review-effort medium`. It commits with the CLAUDE.md commit format, pushes, opens the PR from the repo template, runs the background self code review, and watches CI. Never merge. If the self review or CI produces fixes, do NOT apply them and do NOT invoke `/babysit-pr`: report the combined list (CI failures grouped by cause, review findings with file and line) and stop. The master session asks the user and dispatches a fix pass.
+Run `/pr --review-effort medium`. It commits with the CLAUDE.md commit format, pushes, opens the PR from the repo template, runs the background self code review, and watches CI. Never merge; a merge happens only through a pre-approved watch, run by the master session. If the self review or CI produces fixes, do NOT apply them and do NOT invoke `/babysit-pr`: report the combined list (CI failures grouped by cause, review findings with file and line) and stop. The master session asks the user and dispatches a fix pass.
 
 Return: commit SHA and message, PR number and URL, final CI state, self review findings and what was applied, and next steps.
 ```

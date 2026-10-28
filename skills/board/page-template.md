@@ -135,6 +135,11 @@ Compact dumps per source: ticket keys, PR numbers, thread timestamps, branch nam
 |---|---|---|---|---|---|
 One row per draft the session created today (Slack draft id, email draft id, or "held" for a tracker comment awaiting approval). Expected is `send` or `discard` (superseded drafts). Status starts `pending` and becomes `sent HH:MMZ`, `scheduled`, `discarded` or `not found` when `wrap` verifies it.
 
+## Watches
+| Id | Kind | Target | Expect | Status | Next check | Last ok check | Board line |
+|---|---|---|---|---|---|---|---|
+Rebuilt from `~/bin/watch status` on every sync and by `/watch arm` and `handle.md`. Read-only here; the registry file is the source of truth.
+
 ## Work registry
 | Ticket | Repo | Worktree path | Branch | Stage | Plan file | PR | Last agent (name, session) | Updated |
 |---|---|---|---|---|---|---|---|---|
