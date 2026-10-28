@@ -62,6 +62,8 @@ Any reply inside an existing thread is one or two casual sentences: the outcome 
 
 Structured, numbered messages are for announcements, write-ups, and new top-level posts.
 
+When a file or page carries the content (a write-up, an analysis, a results doc), the message that delivers it is one casual line: what it is, who produced it (say when an AI did the analysis), and the ask ("lmk what you think"). Never summarise the file in the message; the reader opens the file. A draft that restates the headline findings is the file's job done twice.
+
 Examples (drafted vs sent):
 - Quick ask. Too much: "I'm a Viewer on every deployment, so I can't launch runs. Both the UI and a user token come back UnauthorizedError. Two options: 1) grant me Launcher and I'll run the jobs, 2) launch them yourself and I'll pull the logs." Right: "@teammate I don't think I have the permissions to run the jobs - can you update it for me? I think I need Launcher"
 - Agreeing to drop a PR after a teammate's analysis. Drafted: two paragraphs restating their numbers, naming the rule that broke, laying out a staged rollout, offering to use their doc. Sent: "This is good to know - I'll drop my pr and let's go with your approach instead"
