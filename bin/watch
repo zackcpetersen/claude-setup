@@ -580,6 +580,7 @@ CONTEXT_FAILED = {"FAILURE", "ERROR"}
 CONTEXT_PENDING = {"PENDING", "EXPECTED"}
 PR_FIELDS = "state,mergeStateStatus,reviewDecision,statusCheckRollup,headRefOid,mergeCommit"
 WORKFLOW_COMPARES = 5
+WORKFLOW_COUNTED = {"success", "failure", "timed_out"}  # cancelled, skipped and the rest are passed over
 
 DAGSTER_KINDS = {"dagster-run", "dagster-backfill"}
 DAGSTER_TERMINAL = {"SUCCESS", "FAILURE", "CANCELED"}
@@ -660,7 +661,11 @@ def pr_event(view, watch):
     fp = f"{view.get('state')}|{head}|{checks}|{review}"
     merge = (watch.get("on_fire") or {}).get("merge")
     if view.get("state") == "MERGED":
-        return fp, "merged", {"merge_sha": (view.get("mergeCommit") or {}).get("oid")}
+        merge_sha = (view.get("mergeCommit") or {}).get("oid")
+        if not merge_sha:
+            # GitHub can report MERGED before the merge commit; a distinct fingerprint lets the next tick fire.
+            return fp + "|no-merge-commit", None, {}
+        return fp, "merged", {"merge_sha": merge_sha}
     if view.get("state") == "CLOSED":
         return fp, "closed", {}
     if checks == "failed":
@@ -697,7 +702,8 @@ def deploy_event(watch, rule):
         "gh", "run", "list", "--repo", repo, "--workflow", rule["name"], "--branch", rule["branch"],
         "--json", "databaseId,headSha,status,conclusion", "--limit", "20",
     ]))
-    completed = [r for r in runs if r.get("status") == "completed"][:WORKFLOW_COMPARES]
+    completed = [r for r in runs if r.get("status") == "completed" and r.get("conclusion") in WORKFLOW_COUNTED]
+    completed = completed[:WORKFLOW_COMPARES]
     for r in completed:
         if contains(repo, sha, r["headSha"]):
             if r.get("conclusion") == "success":
@@ -767,7 +773,8 @@ _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 
 
 def fill_placeholders(template, result):
-    """Fill every `{name}` in string values from result. A value that is one whole placeholder keeps its type."""
+    """Fill every `{name}` in string values from result; a None value counts as missing.
+    A value that is one whole placeholder keeps its type."""
     result = result or {}
     missing = set()
 
@@ -779,11 +786,11 @@ def fill_placeholders(template, result):
         if not isinstance(v, str):
             return v
         names = _PLACEHOLDER.findall(v)
-        missing.update(n for n in names if n not in result)
+        missing.update(n for n in names if result.get(n) is None)
         whole = _PLACEHOLDER.fullmatch(v)
-        if whole and whole.group(1) in result:
+        if whole and result.get(whole.group(1)) is not None:
             return result[whole.group(1)]
-        return _PLACEHOLDER.sub(lambda m: str(result[m.group(1)]) if m.group(1) in result else m.group(0), v)
+        return _PLACEHOLDER.sub(lambda m: str(result[m.group(1)]) if result.get(m.group(1)) is not None else m.group(0), v)
 
     filled = fill(template)
     if missing:

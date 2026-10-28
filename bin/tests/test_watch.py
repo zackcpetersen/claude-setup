@@ -728,6 +728,14 @@ class PrCheckTests(Base):
         self.assertEqual(W.pr_event(dict(GREEN_VIEW, reviewDecision="CHANGES_REQUESTED"), w)[1], "changes_requested")
         self.assertEqual(W.pr_event(dict(GREEN_VIEW, state="CLOSED"), w)[1], "closed")
 
+    def test_pr_merged_waits_for_merge_commit(self):
+        w = {"on_fire": {"merge": None}}
+        early = W.pr_event(dict(GREEN_VIEW, state="MERGED", mergeCommit=None), w)
+        self.assertEqual(early[1:], (None, {}))
+        late = W.pr_event(dict(GREEN_VIEW, state="MERGED", mergeCommit={"oid": "m1"}), w)
+        self.assertEqual(late[1:], ("merged", {"merge_sha": "m1"}))
+        self.assertNotEqual(early[0], late[0])  # so the next tick still fires merged
+
     def test_pr_merged_returns_merge_sha(self):
         view = dict(GREEN_VIEW, state="MERGED", mergeCommit={"oid": "m1"})
         self.assertEqual(W.pr_event(view, {"on_fire": {"merge": None}})[1:], ("merged", {"merge_sha": "m1"}))
@@ -765,6 +773,25 @@ class DeployCheckTests(Base):
         self.assertEqual(calls[0], ["gh", "run", "list", "--repo", "acme/web", "--workflow", "deploy", "--branch", "main",
                                     "--json", "databaseId,headSha,status,conclusion", "--limit", "20"])
         self.assertEqual(len(calls), 3)
+
+    def test_deploy_workflow_passes_over_cancelled_and_skipped_runs(self):
+        w = self.deploy_watch("acme/web")
+        runs = [
+            {"databaseId": 83, "headSha": "s1", "status": "completed", "conclusion": "cancelled"},
+            {"databaseId": 82, "headSha": "s1", "status": "completed", "conclusion": "skipped"},
+            {"databaseId": 81, "headSha": "s1", "status": "completed", "conclusion": "success"},
+        ]
+        run, calls = fake_cmd({"run list": runs, "compare": "identical"})
+        with mock.patch.object(W, "run_cmd", side_effect=run):
+            self.assertEqual(W.run_check(w, self.cfg), ("81", "deployed", {"run_id": 81}))
+        self.assertEqual(len(calls), 2)  # passed-over runs cost no compare call
+        timed_out = [dict(runs[0], conclusion="timed_out")]
+        run, _ = fake_cmd({"run list": timed_out, "compare": "identical"})
+        with mock.patch.object(W, "run_cmd", side_effect=run):
+            self.assertEqual(W.run_check(w, self.cfg), ("83", "deploy_failed", {"run_id": 83, "urgent": True}))
+        run, _ = fake_cmd({"run list": runs[:2]})
+        with mock.patch.object(W, "run_cmd", side_effect=run):
+            self.assertEqual(W.run_check(w, self.cfg), ("none", None, {}))
 
     def test_deploy_workflow_success_and_compare_cap(self):
         w = self.deploy_watch("acme/web")
@@ -934,6 +961,12 @@ class DagsterCheckTests(Base):
 
 
 class FollowUpTests(Base):
+    def test_fill_placeholders_none_counts_as_unfilled(self):
+        with self.assertRaisesRegex(W.PlaceholderError, "unfilled placeholders: merge_sha"):
+            W.fill_placeholders({"target": {"sha": "{merge_sha}"}}, {"merge_sha": None})
+        with self.assertRaisesRegex(W.PlaceholderError, "merge_sha"):
+            W.fill_placeholders({"note": "sha {merge_sha}"}, {"merge_sha": None})
+
     def test_fill_placeholders_ok_and_unfilled(self):
         t = {"kind": "deploy", "target": {"repo": "acme/app", "sha": "{merge_sha}"}}
         self.assertEqual(W.fill_placeholders(t, {"merge_sha": "m1"})["target"]["sha"], "m1")
