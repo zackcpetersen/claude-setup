@@ -524,9 +524,11 @@ class TickTests(Base):
         self.assertEqual(s["errors"], 1)
         r = self.tick("2026-10-28T10:21")
         self.assertEqual([d["id"] for d in r["due"]["slack"]], ["w-1"])
+        self.tick("2026-10-28T10:27")  # keep ticks inside the window so 10:32 is not a wake-up
         r = self.tick("2026-10-28T10:32")  # second silent agent: retried again, not raised again
         self.assertEqual(r["stale"], [])
         self.assertIsNone(s["dispatched_at"])
+        self.assertEqual(s["errors"], 2)
         r = self.tick("2026-10-28T10:42")
         self.assertEqual([d["id"] for d in r["due"]["slack"]], ["w-1"])
 
@@ -536,7 +538,7 @@ class TickTests(Base):
         with mock.patch.object(W, "run_check", side_effect=RuntimeError("boom")):
             for t in ("10:00", "10:15", "10:30", "10:45", "11:00"):
                 stales.append(self.tick(f"2026-10-28T{t}")["stale"])
-        self.assertEqual(stales, [[], [], [], [{"id": "w-1", "reason": "3 failed checks in a row: RuntimeError: boom"}], []])
+        self.assertEqual(stales, [[], [], [{"id": "w-1", "reason": "3 failed checks in a row: RuntimeError: boom"}], [], []])
         s = self.reg["watches"][0]["state"]
         self.assertEqual((s["errors"], s["last_ok_check"], s["status"]), (5, None, "armed"))
         with mock.patch.object(W, "run_check", return_value=("p", None, {})):
@@ -559,10 +561,12 @@ class TickTests(Base):
         W.add_watch(self.reg, dict(SLACK_SPEC), then, self.cfg)
         for w in self.reg["watches"]:
             w["state"]["last_check"] = w["state"]["last_ok_check"] = utc(then)
+        self.reg["watches"][2]["state"]["dispatched_at"] = utc(then)  # agent in flight when the laptop slept
         self.reg["owner"], self.reg["last_tick"] = "me", utc(then)
         with mock.patch.object(W, "run_check", return_value=("p", None, {})) as rc:
             r = self.tick("2026-10-28T08:05")
             self.assertEqual((r["stale"], r["expired"], r["fired"]), ([], [], []))
+            self.assertEqual([w["state"]["errors"] for w in self.reg["watches"]], [0, 0, 0])
             self.assertEqual(sorted(c.args[0]["id"] for c in rc.call_args_list), ["w-1", "w-2"])
             self.assertEqual([d["id"] for d in r["due"]["slack"]], ["w-3"])
             r = self.tick("2026-10-28T08:06")

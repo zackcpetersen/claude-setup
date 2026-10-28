@@ -548,11 +548,14 @@ def _agent_overdue(state, now):
     return bool(state.get("dispatched_at")) and now - parse_iso(state["dispatched_at"]) > AGENT_TIMEOUT
 
 
-def stale_reason(watch, now):
-    """Counted in failed checks and silent agents, never in elapsed wall time."""
-    state = watch["state"]
+def _errors_reason(state):
     if state.get("errors", 0) >= STALE_ERRORS:
         return f"{STALE_ERRORS} failed checks in a row: {state.get('note')}"
+    return None
+
+
+def _late_reason(watch, now):
+    state = watch["state"]
     if _agent_overdue(state, now):
         return AGENT_NOTE
     if state["status"] == "fired" and state.get("fired_at"):
@@ -560,6 +563,11 @@ def stale_reason(watch, now):
         if now - parse_iso(state["fired_at"]) > limit:
             return "fired but not handled"
     return None
+
+
+def stale_reason(watch, now):
+    """Counted in failed checks and silent agents, never in elapsed wall time."""
+    return _errors_reason(watch["state"]) or _late_reason(watch, now)
 
 
 # ---------- checks ----------
@@ -580,59 +588,73 @@ def short_error(e, cfg):
 
 # ---------- tick ----------
 
+def _raise_stale(w, reason, report):
+    if reason and not w["state"].get("stale_raised"):
+        w["state"]["stale_raised"] = True
+        report["stale"].append({"id": w["id"], "reason": reason})
+
+
+def _tick_watch(reg, w, cfg, now, report, woke):
+    state = w["state"]
+    phase = expiry_state(w, now, cfg)
+    if phase == "hard":
+        state["status"] = "expired"
+        report["expired"].append({"id": w["id"], "rule": w["expires"], "phase": "hard"})
+        return
+    if phase == "soft" and not state.get("slowed"):
+        state["slowed"] = True
+        report["expired"].append({"id": w["id"], "rule": w["expires"], "phase": "soft"})
+
+    if woke and state.get("dispatched_at"):
+        # The agent ran into a sleep or a closed session, not a fault: just check again.
+        state["dispatched_at"] = None
+    reason = _late_reason(w, now)
+    if _agent_overdue(state, now):
+        # Count the silent agent as a failed check so it is dispatched again next cadence.
+        state["dispatched_at"] = None
+        update_watch(reg, w["id"], now, cfg, error=AGENT_NOTE)
+    _raise_stale(w, reason, report)
+
+    if state["status"] == "fired" or not is_due(w, now, cfg):
+        return
+    connector = KINDS[w["kind"]]["connector"]
+    if connector:
+        state["dispatched_at"] = iso(now)
+        report["due"][connector].append({"id": w["id"], "kind": w["kind"], "target": w["target"], "cursor": state["cursor"]})
+        return
+    try:
+        fp, event, result = run_check(w, cfg)
+    except Exception as e:
+        update_watch(reg, w["id"], now, cfg, error=short_error(e, cfg))
+        return
+    update_watch(reg, w["id"], now, cfg, checked=True)
+    if event and fp != state["cursor"]:
+        state["status"] = "fired"
+        state["fired_at"] = iso(now)
+        state["result"] = result
+        report["fired"].append({
+            "id": w["id"], "kind": w["kind"], "event": event, "result": result, "target": w["target"],
+            "expect": w.get("expect"), "reply_brief": w.get("reply_brief"), "on_fire": w.get("on_fire"),
+            "urgent": bool(w.get("urgent") or (result or {}).get("urgent", False)), "board_line": w.get("board_line"),
+        })
+    state["cursor"] = fp
+
+
 def tick(reg, cfg, now, *, session, take=False):
     owner, last_tick = reg.get("owner"), reg.get("last_tick")
     if owner and owner != session and not take and last_tick \
             and now - parse_iso(last_tick) < OWNER_WINDOW * cfg["tick"]:
         raise NotOwner(f"tick refused: owned by {owner}, last tick {_hhmm(last_tick, cfg['tz'])}")
+    woke = bool(last_tick) and now - parse_iso(last_tick) > OWNER_WINDOW * cfg["tick"]
     reg["owner"], reg["last_tick"] = session, iso(now)
     report = {"fired": [], "due": {"slack": [], "email": []}, "stale": [], "expired": []}
-
     for w in reg["watches"]:
-        state = w["state"]
-        if state["status"] in TERMINAL:
+        if w["state"]["status"] in TERMINAL:
             continue
-        phase = expiry_state(w, now, cfg)
-        if phase == "hard":
-            state["status"] = "expired"
-            report["expired"].append({"id": w["id"], "rule": w["expires"], "phase": "hard"})
-            continue
-        if phase == "soft" and not state.get("slowed"):
-            state["slowed"] = True
-            report["expired"].append({"id": w["id"], "rule": w["expires"], "phase": "soft"})
-
-        reason = stale_reason(w, now)
-        if _agent_overdue(state, now):
-            # Count the silent agent as a failed check so it is dispatched again next cadence.
-            state["dispatched_at"] = None
-            update_watch(reg, w["id"], now, cfg, error=AGENT_NOTE)
-        if reason and not state.get("stale_raised"):
-            state["stale_raised"] = True
-            report["stale"].append({"id": w["id"], "reason": reason})
-
-        if state["status"] == "fired" or not is_due(w, now, cfg):
-            continue
-        connector = KINDS[w["kind"]]["connector"]
-        if connector:
-            state["dispatched_at"] = iso(now)
-            report["due"][connector].append({"id": w["id"], "kind": w["kind"], "target": w["target"], "cursor": state["cursor"]})
-            continue
-        try:
-            fp, event, result = run_check(w, cfg)
-        except Exception as e:
-            update_watch(reg, w["id"], now, cfg, error=short_error(e, cfg))
-            continue
-        update_watch(reg, w["id"], now, cfg, checked=True)
-        if event and fp != state["cursor"]:
-            state["status"] = "fired"
-            state["fired_at"] = iso(now)
-            state["result"] = result
-            report["fired"].append({
-                "id": w["id"], "kind": w["kind"], "event": event, "result": result, "target": w["target"],
-                "expect": w.get("expect"), "reply_brief": w.get("reply_brief"), "on_fire": w.get("on_fire"),
-                "urgent": bool(w.get("urgent") or (result or {}).get("urgent", False)), "board_line": w.get("board_line"),
-            })
-        state["cursor"] = fp
+        _tick_watch(reg, w, cfg, now, report, woke)
+        if w["state"]["status"] not in TERMINAL:
+            # After the check, so the third failure raises on the same tick.
+            _raise_stale(w, _errors_reason(w["state"]), report)
     return report
 
 
