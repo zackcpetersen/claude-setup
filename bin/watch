@@ -467,6 +467,10 @@ def update_watch(reg, wid, now, cfg, *, status=None, cursor=None, checked=False,
         _apply_messages(w, messages, now, cfg)
     if merge is not None:
         w["on_fire"]["merge"] = {"words": merge, "at": iso(now), "head_sha": head}
+        # The PR fingerprint does not include the approval, so forget it and let the next check re-evaluate.
+        state["cursor"] = None
+        if state["status"] == "fired" and "merge_ok" in (state.get("result") or {}):  # only `ready` carries merge_ok
+            state["status"] = "armed"
     if board_line is not None:
         w["board_line"] = board_line
     return w

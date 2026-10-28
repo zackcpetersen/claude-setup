@@ -732,6 +732,28 @@ class PrCheckTests(Base):
             self.assertEqual([f["event"] for f in r["fired"]], ["checks_failed"])
         self.assertEqual(self.reg["watches"][0]["state"]["cursor"], "OPEN|def|failed|REVIEW_REQUIRED")
 
+    def test_merge_approval_after_ready_rechecks_the_pr(self):
+        W.add_watch(self.reg, dict(PR_SPEC), at("2026-10-28T09:00"), self.cfg)
+        s = self.reg["watches"][0]["state"]
+        tick = lambda t: W.tick(self.reg, self.cfg, at(f"2026-10-28T{t}"), session="me")
+        with mock.patch.object(W, "run_cmd", return_value=json.dumps(GREEN_VIEW)):
+            r = tick("10:00")
+            self.assertEqual([(f["event"], f["result"]) for f in r["fired"]], [("ready", {"merge_ok": False})])
+            W.update_watch(self.reg, "w-1", at("2026-10-28T10:02"), self.cfg, merge="merge it when green", head="abc")
+            self.assertEqual((s["status"], s["cursor"]), ("armed", None))
+            r = tick("10:17")
+            self.assertEqual([(f["event"], f["result"]) for f in r["fired"]], [("ready", {"merge_ok": True})])
+            W.update_watch(self.reg, "w-1", at("2026-10-28T10:18"), self.cfg, merge="merge it", head="old")
+            r = tick("10:33")
+            self.assertEqual([f["event"] for f in r["fired"]], ["head_moved"])
+
+    def test_merge_approval_leaves_other_statuses_alone(self):
+        W.add_watch(self.reg, dict(PR_SPEC), at("2026-10-28T09:00"), self.cfg)
+        s = self.reg["watches"][0]["state"]
+        s.update(status="fired", result={"urgent": True}, cursor="OPEN|abc|failed|APPROVED")
+        W.update_watch(self.reg, "w-1", at("2026-10-28T10:02"), self.cfg, merge="merge it", head="abc")
+        self.assertEqual((s["status"], s["cursor"]), ("fired", None))
+
     def test_merge_ok_only_when_head_matches_green_and_approved(self):
         w = {"on_fire": {"merge": {"words": "merge it when green", "at": "x", "head_sha": "abc"}}}
         view = dict(GREEN_VIEW)
