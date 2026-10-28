@@ -138,7 +138,7 @@ One row per draft the session created today (Slack draft id, email draft id, or 
 ## Watches
 | Id | Kind | Target | Expect | Status | Next check | Last ok check | Board line |
 |---|---|---|---|---|---|---|---|
-Rebuilt from `~/bin/watch status` on every sync and by `/watch arm` and `handle.md`. Read-only here; the registry file is the source of truth.
+Rebuilt from `~/bin/watch list` on every sync and by `/watch arm` and `handle.md`. Read-only here; the registry file is the source of truth.
 
 ## Work registry
 | Ticket | Repo | Worktree path | Branch | Stage | Plan file | PR | Last agent (name, session) | Updated |
