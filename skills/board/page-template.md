@@ -130,6 +130,11 @@ Row last edited after sync: <the row's Last edited value fetched right after thi
 ## Raw findings
 Compact dumps per source: ticket keys, PR numbers, thread timestamps, branch names. Enough to reopen any item without re-running the gatherers.
 
+## Drafts today
+| Id | Channel or mailbox | Thread | Gist | Expected | Status |
+|---|---|---|---|---|---|
+One row per draft the session created today (Slack draft id, email draft id, or "held" for a tracker comment awaiting approval). Expected is `send` or `discard` (superseded drafts). Status starts `pending` and becomes `sent HH:MMZ`, `scheduled`, `discarded` or `not found` when `wrap` verifies it.
+
 ## Work registry
 | Ticket | Repo | Worktree path | Branch | Stage | Plan file | PR | Last agent (name, session) | Updated |
 |---|---|---|---|---|---|---|---|---|

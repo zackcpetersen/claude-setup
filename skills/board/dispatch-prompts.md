@@ -19,6 +19,7 @@ Every `{{placeholder}}` maps to a key in the `### Work board` section of `~/.cla
 | `email_mcp_prefix`, `email_address` | the `Email` line of the `### Work board` section; when absent, skip the email gatherer |
 | `slack_user_id`, `slack_channels`, `tracker_project`, `tracker_epics`, `github_org`, `worktree_config`, `worktree_script` | the `### Work board` section of `~/.claude/CLAUDE.md` |
 | `prev_done_today`, `prev_rollover_time` | the previous row's Done today section, and the `Rollover started:` line in its scratchpad's Rollover log (else its Date at 00:00 UTC) |
+| `drafts_today` | the scratchpad's `## Drafts today` table (wrap only) |
 | `tracker_report`, `github_report`, `slack_report`, `email_report` | this rollover's gatherer replies, verbatim |
 | `confirmed_goal`, `carried_needs_you`, `blocked_rows` | the new row's Today's goal, Needs you and Blocked sections after the carry |
 
@@ -114,6 +115,19 @@ You are gathering a read-only snapshot of what is waiting on {{user_name}} in em
 Outreach threads to check: {{outreach_threads}}
 
 Return under 60 lines with thread ids on every line: "Waiting on user" (urgency today / this week / low; external senders first), "Waiting on others" (per thread: ball with, since, nudge due or sent), "Commitments made since {{since_date}}", "Sent since {{since_date}}" (one line per message by {{user_name}}: to, gist, UTC time), "Automated mail worth a look" (at most 5 lines: review requests or alerts not already on the board), and a one-line coverage caveat.
+```
+
+## drafts-check (model: sonnet, Explore, wrap only)
+
+```
+You are verifying, read-only, that each draft {{user_name}} (Slack user {{slack_user_id}}, mailbox {{email_address}}) created today ({{today}}) went out as intended. READ-ONLY. Never send, draft, react, label or post anything.
+
+Drafts to check (one per line: id | channel or mailbox | thread ts or message id | gist | expected outcome):
+{{drafts_today}}
+
+For each line: read the target (thread tool with channel id plus thread ts; channel read for a direct message; the mailbox search for email) and report one of: SENT <HH:MMZ> "<first six words>", SCHEDULED (visible as scheduled, not yet posted), DISCARDED (expected outcome was discard and nothing from {{user_name}} appears in that thread after the draft time), NOT FOUND (expected sent but nothing from {{user_name}} after the draft time), or POSTED BY MISTAKE "<first six words>" (expected discard but something appears). Quote at most six words of any message.
+
+Reply exactly once: DONE: then one line per draft in the input order, then one line "Problems: <count>".
 ```
 
 ## standup-builder (model: sonnet, general-purpose, rollover only)
