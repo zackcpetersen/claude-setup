@@ -18,7 +18,7 @@ Each agent may use only the tools its prompt names. Those tools are on the allow
 | `thread` | Slack: channel id and thread ts (for a direct message, the channel id alone); email: the thread id. The judge reads the thread so far itself |
 | `draft_mode` | the row's `on_fire.draft`: `reply` or `none` |
 | `draft_target` | Slack: channel id plus thread ts to reply in; email: the thread id to reply on |
-| `voice` | the writing-voice skill named in `~/.claude/CLAUDE.md`, else `plain` |
+| `voice_rules` | the rules section of the writing-voice skill's `SKILL.md` named in `~/.claude/CLAUDE.md`, read as a file by the master (never a page fetch); with no voice skill configured, "plain English, short sentences, no em-dashes" |
 | `request_text`, `request_ts` | one message from the fired `requests-channel` result |
 | `thread_replies` | replies already in that request's thread, read by the master with `slack_read_thread`, else `none` |
 
@@ -87,13 +87,14 @@ New messages (author | ts or id | text):
 Thread: {{thread}}
 Draft mode: {{draft_mode}}
 Draft target: {{draft_target}}
-Voice: {{voice}}
+Voice rules:
+{{voice_rules}}
 
-Tools: to read the thread so far, `{{slack_prefix}}slack_read_thread` (or `{{slack_prefix}}slack_read_channel` for a direct message) or `{{email_prefix}}get_thread`. To draft, `{{slack_prefix}}slack_send_message_draft` or `{{email_prefix}}create_draft`. When Voice is not `plain`, load that skill with the Skill tool and follow its rules for the draft; when it is `plain`, write short plain sentences. Use no other tool.
+Tools: to read the thread so far, `{{slack_prefix}}slack_read_thread` (or `{{slack_prefix}}slack_read_channel` for a direct message) or `{{email_prefix}}get_thread`. To draft, `{{slack_prefix}}slack_send_message_draft` or `{{email_prefix}}create_draft`. Load no skill and fetch no page: follow the voice rules above for the draft. Use no other tool.
 
 1. Read the thread so far for context.
 2. Decide: MET (the new messages answer what the user was waiting for), PARTIAL (they move it forward but leave part open), or NOT MET (nothing that answers it, such as an acknowledgement or an unrelated message).
-3. Only when Draft mode is `reply` and the verdict is MET or PARTIAL: create exactly one draft in the draft target, as a reply in that thread, guided by the user's brief. For PARTIAL, the draft asks for the part still open. Never create more than one draft, and never send it.
+3. Only when Draft mode is `reply` and the verdict is MET or PARTIAL: create exactly one draft in the draft target, as a reply in that thread (for a direct message with no thread ts, a top-level message in the direct message), guided by the user's brief. For PARTIAL, the draft asks for the part still open. Never create more than one draft, and never send it.
 
 Reply exactly two lines and nothing else:
 MET: <one-line reason>  (or PARTIAL: <reason>, or NOT MET: <reason>)

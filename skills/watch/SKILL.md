@@ -41,9 +41,9 @@ Only the board's master session arms and ticks. Its name is this session's name 
 
 ## arm
 
-1. `CronList`. Unless a job already carries the tick prompt, `CronCreate` a recurring job with cron `2-59/<N> * * * *`, where N is the `Tick interval` in minutes (default 5). The offset of 2 keeps it off :00 and :30. Use exactly this prompt, with this session's name filled in:
+1. `CronList`. Unless a job already carries the tick prompt, `CronCreate` a recurring job with cron `2-59/<N> * * * *`, where N is the `Tick interval` in minutes (default 5). With the default 5, the offset of 2 keeps it off :00 and :30; for another interval, pick an offset that avoids both. Use exactly this prompt, with this session's name filled in:
 
-   > Run `~/bin/watch tick --session <name>`. If it prints nothing and exits 0, stop: no text, no other tool call. Otherwise read ~/.claude/skills/watch/handle.md and follow it with that output.
+   > Run `~/bin/watch tick --session <name>`. If it prints nothing and exits 0, stop: no text, no other tool call. Otherwise (JSON output, exit 2 or exit 3) read ~/.claude/skills/watch/handle.md and follow it with that output and exit code.
 
 2. Run `~/bin/watch tick --take --session <name>`. When it prints, follow `handle.md`. Anything that expired overnight comes out here.
 3. When the `Requests channel` line exists, add the standing `requests-channel` watch: `kind` `requests-channel`, `target` with that channel and the Work board's Slack user id as `user`, `created_by` `rollover`. Add is idempotent, so this is safe every morning.
@@ -70,7 +70,7 @@ Pre-approving a merge, on a new or an existing PR watch:
 1. Read the head: `gh pr view <n> --repo <repo> --json headRefOid`.
 2. Run `~/bin/watch update <id> --merge "<the user's words>" --head <sha>`.
 
-`add` never changes an existing watch, so a merge approval always goes through `update`. A push after the approval voids it: the watch raises "head moved since your approval, merge?" instead of merging.
+`add` never changes an existing watch, so a merge approval always goes through `update`. `update --merge --head` makes the next tick re-evaluate the PR and fire `ready` with the merge allowed, even when it already raised "ready to merge?". A push after the approval voids it: the watch raises "head moved since your approval, merge?" instead of merging.
 
 Other skills (the board, `/pr`, launch scripts) call `~/bin/watch add` directly with their own `created_by`.
 
@@ -117,6 +117,8 @@ Then:
 | Printing anything on a no-op tick | Empty output and exit 0 end the turn: no text, no other tool call, no board edit |
 | Loading this file or `handle.md` from a silent tick | The cron prompt reads `handle.md` only when the script printed something, and never this file |
 | Ticking from a peer session | Only the master ticks. A peer that gets exit 3 deletes its tick job and says who owns it |
+| Ignoring tick exit 2, or raising it every tick | Raise `watch tick failing: <first stderr line>` once; stay silent while the line is the same, raise again when it changes |
+| Telling the judge to load the voice skill | The skill may fetch a page and stall on a prompt. The master reads the skill file and passes its rules as `voice_rules` |
 | A detect or judge agent calling a tool outside the allow list | It hangs on a permission prompt. The prompts name their only tools; keep them that way |
 | Researching a request inline in the master | It blocks the session, and the cron only fires while idle. Always one `handle-request` agent per request |
 | Advancing the requests cursor before the reply posts | A crash then skips the request. Move the cursor only after its threaded reply is posted, in order |
