@@ -102,6 +102,19 @@ Reviews a teammate's pull request: `/review-pr <number or URL> [--effort medium]
 - Oncall: <yes|no> <!-- flip at the start of each rotation week; `no` means the board never reads alert channels or tracks alerts -->
 - Access checks: per-machine list in `~/.claude/auth-checks.json`, run by the `daily-auth` skill (start from `skills/daily-auth/auth-checks.example.json`)
 
+### Watches (`watch` skill)
+<!-- FILL IN: values for the watch skill and ~/bin/watch. Delete this section if you do not use it. Self ids (your Slack user id and mailbox) and the requests state file come from the Work board section above; do not repeat them here. -->
+- Registry: ~/.claude/watches.json
+- Time zone: <America/Denver> <!-- IANA name; quiet hours and business days use it -->
+- Tick interval: 5m
+- Quiet hours: 19:00-08:00; weekends: quiet <!-- `weekends: poll` keeps polling on Saturday and Sunday -->
+- Business hours: 08:00-18:00 <!-- Monday to Friday; used for reply expiry -->
+- Connectors: slack <mcp__plugin_slack_slack__>, email <mcp__claude_ai_Gmail__> <!-- tool name prefixes for the detect and judge agents -->
+- Requests channel: <C0XXXXXXX> <!-- optional; watches your own top-level posts there, using the Work board's Slack user id and watch-slack state file; replaces the old watch-slack command -->
+- Dagster: <https://<org>.dagster.cloud/<deployment>/graphql>, env file <~/path/to/.env>, token var <DAGSTER_CLOUD_API_TOKEN> <!-- optional; the script reads the token itself and never prints it -->
+- Deploy rules: <!-- one line per repo: `workflow <name> on <branch>`, `release-tag`, or `branch <name>` -->
+  - <owner/repo>: workflow <deploy> on <main>
+
 ### Finalize PR (`/pr`)
 Commits changes and creates pull requests. Handles commit message formatting (per the Git and Version Control section above), branch management, and PR creation using the repo's PR template. After the PR is created it runs a self code review (`/code-review` on opus, default `medium`, override with `--review-effort`) in the background while CI runs, then applies CI fixes and review findings together in one approved push.
 
