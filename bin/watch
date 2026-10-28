@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """watch: a registry of things we are waiting on.
 
-Owns the registry file and its lock, config parsing, and the CLI used by the
-watch skill. Standard library only. See skills/watch/SKILL.md.
+Owns the registry file and its lock, config parsing, time logic, the tick and
+the CLI used by the watch skill. Standard library only. See skills/watch/SKILL.md.
 """
 
 import argparse
@@ -52,6 +52,13 @@ SPEC_KEYS = {
 }
 
 STALE_TICKS = 3  # list says "tick not running" after this many missed tick intervals
+STALE_ERRORS = 3
+AGENT_TIMEOUT = timedelta(minutes=10)
+FIRED_TIMEOUT = timedelta(minutes=10)
+REQUEST_FIRED_TIMEOUT = timedelta(minutes=60)  # a requests-channel watch stays fired while its research agents run
+OWNER_WINDOW = 2  # tick intervals
+EXPIRY_RULES = {"reply", "two-days", "until-terminal", "until-closed", "never"}
+AGENT_NOTE = "detect agent did not report"
 
 DEFAULT_CONFIG = Path("~/.claude/CLAUDE.md")
 DEFAULT_REGISTRY = "~/.claude/watches.json"
@@ -59,6 +66,10 @@ DEFAULT_REGISTRY = "~/.claude/watches.json"
 
 class WatchError(Exception):
     """A user-facing error. The CLI prints it on one line and exits 2."""
+
+
+class NotOwner(Exception):
+    """Another session ticked recently. The CLI prints it on one line and exits 3."""
 
 
 def empty_registry():
@@ -72,6 +83,17 @@ def iso(dt):
 
 def parse_iso(text):
     return datetime.fromisoformat(text)
+
+
+def _aware(text, label):
+    """Parse an ISO time that must carry a UTC offset, for spec fields like `after`."""
+    try:
+        dt = datetime.fromisoformat(str(text))
+    except ValueError:
+        raise WatchError(f"bad {label} {text!r}, expected ISO 8601 with an offset")
+    if dt.tzinfo is None:
+        raise WatchError(f"{label} {text!r} needs a UTC offset")
+    return dt
 
 
 # ---------- config ----------
@@ -300,6 +322,10 @@ def add_watch(reg, spec, now, cfg):
     slow_every = spec.get("slow_every", defaults["slow_every"])
     parse_duration(every)
     parse_duration(slow_every)
+    after = iso(_aware(spec["after"], "after")) if spec.get("after") else None
+    expires = spec.get("expires", defaults["expires"])
+    if expires not in EXPIRY_RULES:
+        expires = iso(_aware(expires, "expires"))
     on_fire = {
         "verify": [],
         "draft": "reply" if kind in ("slack-thread", "slack-dm", "email-thread") else "none",
@@ -321,8 +347,8 @@ def add_watch(reg, spec, now, cfg):
         "reply_brief": spec.get("reply_brief", ""),
         "every": every,
         "slow_every": slow_every,
-        "after": spec.get("after"),
-        "expires": spec.get("expires", defaults["expires"]),
+        "after": after,
+        "expires": expires,
         "quiet": spec.get("quiet", defaults["quiet"]),
         "urgent": spec.get("urgent", False),
         "on_fire": on_fire,
@@ -443,6 +469,177 @@ def update_watch(reg, wid, now, cfg, *, status=None, cursor=None, checked=False,
     return w
 
 
+# ---------- time ----------
+
+def _in_window(t, window):
+    start, end = window["start"], window["end"]
+    if start <= end:
+        return start <= t < end
+    return t >= start or t < end
+
+
+def in_quiet_hours(now, cfg):
+    local = now.astimezone(cfg["tz"])
+    if cfg["quiet"]["weekends"] and local.weekday() >= 5:
+        return True
+    return _in_window(local.time(), cfg["quiet"])
+
+
+def _next_weekday(day):
+    day += timedelta(days=1)
+    while day.weekday() >= 5:
+        day += timedelta(days=1)
+    return day
+
+
+def add_business_days(start, n, cfg):
+    """Move to the next moment inside business hours, then step n weekdays at the same wall time."""
+    tz, bstart, bend = cfg["tz"], cfg["business"]["start"], cfg["business"]["end"]
+    local = start.astimezone(tz)
+    day, wall = local.date(), local.time().replace(tzinfo=None)
+    if day.weekday() >= 5 or wall >= bend:
+        day, wall = _next_weekday(day), bstart
+    elif wall < bstart:
+        wall = bstart
+    for _ in range(n):
+        day = _next_weekday(day)
+    return datetime.combine(day, wall, tzinfo=tz)
+
+
+def expiry_state(watch, now, cfg):
+    rule = watch["expires"]
+    created = parse_iso(watch["created"])
+    if rule == "reply":
+        if now >= add_business_days(created, 5, cfg):
+            return "hard"
+        if now >= add_business_days(created, 1, cfg):
+            return "soft"
+        return None
+    if rule == "two-days":
+        return "hard" if now - created >= timedelta(hours=48) else None
+    if rule == "until-terminal":
+        hours = watch["target"].get("expected_hours")
+        if hours is not None and now - created > timedelta(hours=float(hours)):
+            return "soft"
+        return None
+    if rule in ("until-closed", "never"):
+        return None
+    return "hard" if now >= parse_iso(rule) else None
+
+
+def cadence(watch):
+    return parse_duration(watch["slow_every"] if watch["state"].get("slowed") else watch["every"])
+
+
+def is_due(watch, now, cfg):
+    state = watch["state"]
+    if state["status"] != "armed":
+        return False
+    if watch.get("quiet") and in_quiet_hours(now, cfg):
+        return False
+    if watch.get("after") and now < parse_iso(watch["after"]):
+        return False
+    if state.get("dispatched_at"):
+        return False
+    return not state.get("last_check") or now - parse_iso(state["last_check"]) >= cadence(watch)
+
+
+def _agent_overdue(state, now):
+    return bool(state.get("dispatched_at")) and now - parse_iso(state["dispatched_at"]) > AGENT_TIMEOUT
+
+
+def stale_reason(watch, now):
+    """Counted in failed checks and silent agents, never in elapsed wall time."""
+    state = watch["state"]
+    if state.get("errors", 0) >= STALE_ERRORS:
+        return f"{STALE_ERRORS} failed checks in a row: {state.get('note')}"
+    if _agent_overdue(state, now):
+        return AGENT_NOTE
+    if state["status"] == "fired" and state.get("fired_at"):
+        limit = REQUEST_FIRED_TIMEOUT if watch["kind"] == "requests-channel" else FIRED_TIMEOUT
+        if now - parse_iso(state["fired_at"]) > limit:
+            return "fired but not handled"
+    return None
+
+
+# ---------- checks ----------
+
+def run_check(watch, cfg):
+    """Run one script-backed check. Returns (fingerprint, event or None, result); raises on failure."""
+    raise NotImplementedError(f"no script check for {watch['kind']} yet")
+
+
+def short_error(e, cfg):
+    message = str(e)
+    dagster = cfg.get("dagster")
+    token = os.environ.get(dagster["token_var"]) if dagster else None
+    if token:
+        message = message.replace(token, "***")
+    return f"{type(e).__name__}: {message[:120]}"
+
+
+# ---------- tick ----------
+
+def tick(reg, cfg, now, *, session, take=False):
+    owner, last_tick = reg.get("owner"), reg.get("last_tick")
+    if owner and owner != session and not take and last_tick \
+            and now - parse_iso(last_tick) < OWNER_WINDOW * cfg["tick"]:
+        raise NotOwner(f"tick refused: owned by {owner}, last tick {_hhmm(last_tick, cfg['tz'])}")
+    reg["owner"], reg["last_tick"] = session, iso(now)
+    report = {"fired": [], "due": {"slack": [], "email": []}, "stale": [], "expired": []}
+
+    for w in reg["watches"]:
+        state = w["state"]
+        if state["status"] in TERMINAL:
+            continue
+        phase = expiry_state(w, now, cfg)
+        if phase == "hard":
+            state["status"] = "expired"
+            report["expired"].append({"id": w["id"], "rule": w["expires"], "phase": "hard"})
+            continue
+        if phase == "soft" and not state.get("slowed"):
+            state["slowed"] = True
+            report["expired"].append({"id": w["id"], "rule": w["expires"], "phase": "soft"})
+
+        reason = stale_reason(w, now)
+        if _agent_overdue(state, now):
+            # Count the silent agent as a failed check so it is dispatched again next cadence.
+            state["dispatched_at"] = None
+            update_watch(reg, w["id"], now, cfg, error=AGENT_NOTE)
+        if reason and not state.get("stale_raised"):
+            state["stale_raised"] = True
+            report["stale"].append({"id": w["id"], "reason": reason})
+
+        if state["status"] == "fired" or not is_due(w, now, cfg):
+            continue
+        connector = KINDS[w["kind"]]["connector"]
+        if connector:
+            state["dispatched_at"] = iso(now)
+            report["due"][connector].append({"id": w["id"], "kind": w["kind"], "target": w["target"], "cursor": state["cursor"]})
+            continue
+        try:
+            fp, event, result = run_check(w, cfg)
+        except Exception as e:
+            update_watch(reg, w["id"], now, cfg, error=short_error(e, cfg))
+            continue
+        update_watch(reg, w["id"], now, cfg, checked=True)
+        if event and fp != state["cursor"]:
+            state["status"] = "fired"
+            state["fired_at"] = iso(now)
+            state["result"] = result
+            report["fired"].append({
+                "id": w["id"], "kind": w["kind"], "event": event, "result": result, "target": w["target"],
+                "expect": w.get("expect"), "reply_brief": w.get("reply_brief"), "on_fire": w.get("on_fire"),
+                "urgent": bool(w.get("urgent") or (result or {}).get("urgent", False)), "board_line": w.get("board_line"),
+            })
+        state["cursor"] = fp
+    return report
+
+
+def has_news(report):
+    return bool(report["fired"] or report["due"]["slack"] or report["due"]["email"] or report["stale"] or report["expired"])
+
+
 # ---------- list ----------
 
 def _hhmm(text_or_dt, tz):
@@ -535,6 +732,10 @@ def build_parser():
     u.add_argument("--merge")
     u.add_argument("--head")
     u.add_argument("--board-line")
+
+    t = sub.add_parser("tick", help="check due watches; prints one JSON line only when there is news")
+    t.add_argument("--take", action="store_true", help="tick even if another session owns the tick")
+    t.add_argument("--session", default="default", help="this session's name, recorded as the tick owner")
     return p
 
 
@@ -588,6 +789,11 @@ def run(args):
                 head=args.head, board_line=args.board_line,
             )
             print(f"{w['id']} {w['state']['status']}")
+    elif args.cmd == "tick":
+        with locked_registry(registry) as reg:
+            report = tick(reg, cfg, now, session=args.session, take=args.take)
+        if has_news(report):
+            print(json.dumps(report, separators=(",", ":")))
     return 0
 
 
@@ -598,6 +804,9 @@ def main(argv):
     except WatchError as e:
         print(f"watch: {e}", file=sys.stderr)
         return 2
+    except NotOwner as e:
+        print(e, file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":
