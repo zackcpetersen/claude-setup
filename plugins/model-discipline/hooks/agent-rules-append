@@ -40,6 +40,7 @@ Unless this prompt asks for a different output format or workflow:
 - Own environment: unset `VIRTUAL_ENV` and use the worktree's own env, never the main checkout's venv.
 - Batch changes into one push, not a push per fix.
 - Report exactly once at the end: `DONE: <summary or sha>` or `BLOCKED: <reason>`.
+- If you report by SendMessage, send to `main`, never `team-lead` (that inbox can stall on a held prompt).
 - One owner per file or Notion page: never edit what another agent owns.
 - If you dispatch agents yourself, check on any that is silent for more than 10 minutes and unblock it.
 EOF
