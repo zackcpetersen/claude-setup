@@ -125,6 +125,23 @@ def _is_unset(value):
     return value == "" or (value.startswith("<") and value.endswith(">"))
 
 
+# Lines whose fields may each be wrapped in <...> (the template's style); parsed field by field.
+FIELD_LINES = {"Dagster", "Connectors"}
+
+
+def _field(value, line, path):
+    """Unwrap one `<...>` field. A field that still holds `<` or `>` is an unfilled template placeholder."""
+    value = value.strip()
+    if len(value) >= 2 and value.startswith("<") and value.endswith(">"):
+        value = value[1:-1].strip()
+    if "<" in value or ">" in value or not value:
+        raise WatchError(
+            f"the `{line}` line in the ### Watches section of {path} still has a template placeholder "
+            f"({value!r}); fill it in or delete the line"
+        )
+    return value
+
+
 def _clean(value):
     """Strip whitespace and one pair of surrounding backticks (`U123` reads as U123)."""
     value = value.strip()
@@ -149,7 +166,7 @@ def _read_section(lines, heading):
         if top:
             last_key = top.group(1).strip()
             value = _clean(top.group(2))
-            if not _is_unset(value):
+            if value and (last_key in FIELD_LINES or not _is_unset(value)):
                 values[last_key] = value
             continue
         sub = re.match(r"^\s+- ([^:]+?):\s*(.*)$", line)
@@ -203,9 +220,9 @@ def load_config(path):
 
     connectors = {}
     for item in watches.get("Connectors", "").split(","):
-        parts = item.split()
-        if len(parts) == 2 and not _is_unset(parts[1]):
-            connectors[parts[0]] = parts[1]
+        parts = item.split(None, 1)
+        if len(parts) == 2:
+            connectors[parts[0]] = _field(parts[1], "Connectors", path)
 
     requests = None
     if "Requests channel" in watches:
@@ -221,7 +238,8 @@ def load_config(path):
         m = re.fullmatch(r"(\S+),\s*env file\s+(\S+),\s*token var\s+(\S+)", watches["Dagster"])
         if not m:
             raise WatchError(f"bad Dagster line {watches['Dagster']!r}, expected `<url>, env file <path>, token var <NAME>`")
-        dagster = {"url": m.group(1), "env_file": _expand(m.group(2)), "token_var": m.group(3)}
+        url, env_file, token_var = (_field(m.group(i), "Dagster", path) for i in (1, 2, 3))
+        dagster = {"url": url, "env_file": _expand(env_file), "token_var": token_var}
 
     return {
         "registry": _expand(watches.get("Registry", DEFAULT_REGISTRY)),
@@ -294,6 +312,11 @@ def _start_cursor(kind, spec, now, cfg):
     return None
 
 
+def _norm_target(target):
+    """Target values as strings, so {"number": 5} and {"number": "5"} name the same watch."""
+    return {k: (v if v is None else str(v)) for k, v in target.items()}
+
+
 def add_watch(reg, spec, now, cfg):
     if not isinstance(spec, dict):
         raise WatchError("a watch spec must be a JSON object")
@@ -309,6 +332,7 @@ def add_watch(reg, spec, now, cfg):
     missing = [k for k in TARGET_KEYS[kind] if target.get(k) in (None, "")]
     if missing:
         raise WatchError(f"{kind} target is missing {', '.join(missing)}")
+    target = _norm_target(target)
     if kind == "requests-channel" and not cfg.get("requests"):
         raise WatchError("requests-channel needs a `Requests channel` line in the ### Watches config")
     created_by = spec.get("created_by", "chat")
@@ -316,7 +340,7 @@ def add_watch(reg, spec, now, cfg):
         raise WatchError(f"bad created_by {created_by!r}, expected one of {', '.join(CREATED_BY)}")
 
     for w in reg["watches"]:
-        if w["kind"] == kind and w["target"] == target and w["state"]["status"] not in TERMINAL:
+        if w["kind"] == kind and _norm_target(w["target"]) == target and w["state"]["status"] not in TERMINAL:
             return w["id"]
 
     defaults = KINDS[kind]
@@ -467,8 +491,8 @@ def update_watch(reg, wid, now, cfg, *, status=None, cursor=None, checked=False,
         _apply_messages(w, messages, now, cfg)
     if merge is not None:
         w["on_fire"]["merge"] = {"words": merge, "at": iso(now), "head_sha": head}
-        # The PR fingerprint does not include the approval, so forget it and let the next check re-evaluate.
-        state["cursor"] = None
+        # The PR fingerprint carries the approved head sha on `ready` and `head_moved`, so the next check
+        # re-raises only those. A fired `ready` is re-armed so that check can run.
         if state["status"] == "fired" and "merge_ok" in (state.get("result") or {}):  # only `ready` carries merge_ok
             state["status"] = "armed"
     if board_line is not None:
@@ -538,6 +562,14 @@ def cadence(watch):
     return parse_duration(watch["slow_every"] if watch["state"].get("slowed") else watch["every"])
 
 
+def due_at(watch, cfg):
+    """When a checked watch is next due. last_check is when the check finished, a little after the tick
+    that started it, and ticks run on a fixed grid. So a watch counts as due up to one tick interval
+    (less a minute) early; otherwise a 10m watch on a 5m tick is really checked every 15m."""
+    grace = max(cfg["tick"] - timedelta(minutes=1), timedelta(0))
+    return parse_iso(watch["state"]["last_check"]) + cadence(watch) - grace
+
+
 def is_due(watch, now, cfg):
     state = watch["state"]
     if state["status"] != "armed":
@@ -548,7 +580,7 @@ def is_due(watch, now, cfg):
         return False
     if state.get("dispatched_at"):
         return False
-    return not state.get("last_check") or now - parse_iso(state["last_check"]) >= cadence(watch)
+    return not state.get("last_check") or now >= due_at(watch, cfg)
 
 
 def _agent_overdue(state, now):
@@ -665,6 +697,9 @@ def pr_event(view, watch):
     head, review = view.get("headRefOid"), view.get("reviewDecision")
     fp = f"{view.get('state')}|{head}|{checks}|{review}"
     merge = (watch.get("on_fire") or {}).get("merge")
+    # Only `ready` and `head_moved` depend on a merge approval, so only they carry its head sha.
+    # A new approval then re-raises those two and leaves checks_failed or changes_requested quiet.
+    merge_fp = f"{fp}|merge:{merge.get('head_sha')}" if merge else fp
     if view.get("state") == "MERGED":
         merge_sha = (view.get("mergeCommit") or {}).get("oid")
         if not merge_sha:
@@ -678,9 +713,9 @@ def pr_event(view, watch):
     if review == "CHANGES_REQUESTED":
         return fp, "changes_requested", {}
     if merge and merge.get("head_sha") != head:
-        return fp, "head_moved", {}
+        return merge_fp, "head_moved", {}
     if checks == "green" and review == "APPROVED":
-        return fp, "ready", {"merge_ok": bool(merge and merge.get("head_sha") == head)}
+        return merge_fp, "ready", {"merge_ok": bool(merge and merge.get("head_sha") == head)}
     return fp, None, {}
 
 
@@ -911,10 +946,9 @@ def _hhmm(text_or_dt, tz):
     return dt.astimezone(tz).strftime("%H:%M")
 
 
-def next_check(w, now):
+def next_check(w, now, cfg):
     state = w["state"]
-    every = parse_duration(w["slow_every"] if state.get("slowed") else w["every"])
-    nxt = parse_iso(state["last_check"]) + every if state.get("last_check") else now
+    nxt = due_at(w, cfg) if state.get("last_check") else now
     if w.get("after"):
         nxt = max(nxt, parse_iso(w["after"]))
     return max(nxt, now)
@@ -930,7 +964,7 @@ def format_list(reg, cfg, now):
         last_ok = _hhmm(state["last_ok_check"], tz) if state.get("last_ok_check") else "never"
         expect = (w.get("expect") or "")[:60]
         lines.append(
-            f'{w["id"]} {w["kind"]} {state["status"]} next {_hhmm(next_check(w, now), tz)} last ok {last_ok} "{expect}"'
+            f'{w["id"]} {w["kind"]} {state["status"]} next {_hhmm(next_check(w, now, cfg), tz)} last ok {last_ok} "{expect}"'
         )
     if not lines:
         lines.append("no open watches")
@@ -1075,6 +1109,9 @@ def main(argv):
     except NotOwner as e:
         print(e, file=sys.stderr)
         return 3
+    except Exception as e:  # a bug, not a user error: one line and exit 2 so the cron prompt can raise it
+        print(f"watch: internal error: {type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

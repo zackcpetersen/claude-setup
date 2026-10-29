@@ -47,7 +47,7 @@ Only the board's master session arms and ticks. Its name is this session's name 
 
 2. Run `~/bin/watch tick --take --session <name>`. When it prints, follow `handle.md`. Anything that expired overnight comes out here.
 3. When the `Requests channel` line exists, add the standing `requests-channel` watch: `kind` `requests-channel`, `target` with that channel and the Work board's Slack user id as `user`, `created_by` `rollover`. Add is idempotent, so this is safe every morning.
-4. When the board is configured, mirror `~/bin/watch status` into the board scratchpad's `## Watches` table.
+4. When the board is configured, rebuild the board scratchpad's `## Watches` table from `~/bin/watch list`, with Target and Board line from `~/bin/watch status <id>`.
 
 ## Creating watches
 

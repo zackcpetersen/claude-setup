@@ -109,9 +109,9 @@ Reviews a teammate's pull request: `/review-pr <number or URL> [--effort medium]
 - Tick interval: 5m
 - Quiet hours: 19:00-08:00; weekends: quiet <!-- `weekends: poll` keeps polling on Saturday and Sunday -->
 - Business hours: 08:00-18:00 <!-- Monday to Friday; used for reply expiry -->
-- Connectors: slack <mcp__plugin_slack_slack__>, email <mcp__claude_ai_Gmail__> <!-- tool name prefixes for the detect and judge agents -->
+- Connectors: slack mcp__plugin_slack_slack__, email mcp__claude_ai_Gmail__ <!-- tool name prefixes for the detect and judge agents -->
 - Requests channel: <C0XXXXXXX> <!-- optional; watches your own top-level posts there, using the Work board's Slack user id and watch-slack state file; replaces the old watch-slack command -->
-- Dagster: <https://<org>.dagster.cloud/<deployment>/graphql>, env file <~/path/to/.env>, token var <DAGSTER_CLOUD_API_TOKEN> <!-- optional; the script reads the token itself and never prints it -->
+- Dagster: https://<org>.dagster.cloud/<deployment>/graphql, env file ~/path/to/.env, token var DAGSTER_CLOUD_API_TOKEN <!-- optional; fill in <org> and <deployment> or delete this line; the script reads the token itself and never prints it -->
 - Deploy rules: <!-- one line per repo: `workflow <name> on <branch>`, `release-tag`, or `branch <name>` -->
   - <owner/repo>: workflow <deploy> on <main>
 

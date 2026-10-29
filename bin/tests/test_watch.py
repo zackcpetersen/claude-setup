@@ -1,6 +1,8 @@
 """Tests for bin/watch. Run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest bin/tests/test_watch.py -v"""
 
+import contextlib
 import importlib.machinery
+import io
 import importlib.util
 import json
 import os
@@ -130,6 +132,53 @@ class ConfigTests(Base):
         self.assertEqual(cfg["requests"]["state_file"], str(self.tmp / "req-ts.txt"))
         self.assertEqual(cfg["deploy_rules"]["acme/app"], {"type": "branch", "name": "prod"})
 
+    def test_angle_bracketed_dagster_and_connector_fields_are_unwrapped(self):
+        text = (
+            CFG_MD.format(tmp=self.tmp)
+            .replace("Connectors: slack mcp__slack__, email mcp__mail__", "Connectors: slack <mcp__slack__>, email <mcp__mail__>")
+            .replace(
+                f"Dagster: https://example.invalid/graphql, env file {self.tmp}/.env, token var DAGSTER_TOKEN",
+                f"Dagster: <https://example.invalid/graphql>, env file <{self.tmp}/.env>, token var <DAGSTER_TOKEN>",
+            )
+        )
+        self.cfg_path.write_text(text)
+        cfg = W.load_config(self.cfg_path)
+        self.assertEqual(cfg["connectors"], {"slack": "mcp__slack__", "email": "mcp__mail__"})
+        self.assertEqual(
+            cfg["dagster"],
+            {"url": "https://example.invalid/graphql", "env_file": str(self.tmp / ".env"), "token_var": "DAGSTER_TOKEN"},
+        )
+
+    def test_template_placeholders_in_dagster_or_connectors_exit_2_naming_the_line(self):
+        base = CFG_MD.format(tmp=self.tmp)
+        cases = {
+            "Dagster": base.replace(
+                f"Dagster: https://example.invalid/graphql, env file {self.tmp}/.env, token var DAGSTER_TOKEN",
+                "Dagster: <https://<org>.dagster.cloud/<deployment>/graphql>, env file <~/path/to/.env>, token var <DAGSTER_CLOUD_API_TOKEN>",
+            ),
+            "Connectors": base.replace("email mcp__mail__", "email <mcp__<server>__>"),
+        }
+        for line, text in cases.items():
+            with self.subTest(line=line):
+                self.cfg_path.write_text(text)
+                with self.assertRaisesRegex(W.WatchError, f"`{line}` line .* template placeholder"):
+                    W.load_config(self.cfg_path)
+                r = self.cli("list")
+                self.assertEqual(r.returncode, 2)
+                self.assertIn(f"`{line}` line", r.stderr)
+
+    def test_shipped_template_watches_block_parses(self):
+        template = BIN.parent / "claude-md" / "CLAUDE.md.template"
+        text = template.read_text().replace("<America/Denver>", "America/Denver")
+        self.cfg_path.write_text(text)
+        with self.assertRaisesRegex(W.WatchError, "`Dagster` line"):
+            W.load_config(self.cfg_path)  # its Dagster line is a placeholder until filled
+        lines = [l for l in text.splitlines() if not l.startswith("- Dagster:")]
+        self.cfg_path.write_text("\n".join(lines))
+        cfg = W.load_config(self.cfg_path)
+        self.assertEqual(cfg["connectors"], {"slack": "mcp__plugin_slack_slack__", "email": "mcp__claude_ai_Gmail__"})
+        self.assertIsNone(cfg["dagster"])
+
     def test_missing_time_zone_is_an_error(self):
         text = "\n".join(l for l in CFG_MD.format(tmp=self.tmp).splitlines() if "Time zone" not in l)
         self.cfg_path.write_text(text)
@@ -180,6 +229,15 @@ class AddTests(Base):
         b = W.add_watch(self.reg, dict(PR_SPEC), at("2026-10-28T10:05"), self.cfg)
         self.assertEqual(a, b)
         self.assertEqual(len(self.reg["watches"]), 1)
+
+    def test_add_is_idempotent_across_value_types(self):
+        a = W.add_watch(self.reg, dict(PR_SPEC), at("2026-10-28T10:00"), self.cfg)
+        b = W.add_watch(self.reg, dict(PR_SPEC, target={"repo": "acme/app", "number": "7"}), at("2026-10-28T10:05"), self.cfg)
+        self.assertEqual((a, len(self.reg["watches"])), (b, 1))
+        self.assertEqual(self.reg["watches"][0]["target"], {"repo": "acme/app", "number": "7"})
+        self.reg["watches"][0]["target"]["number"] = 7  # a row stored before targets were normalized
+        c = W.add_watch(self.reg, dict(PR_SPEC, target={"repo": "acme/app", "number": "7"}), at("2026-10-28T10:10"), self.cfg)
+        self.assertEqual((c, len(self.reg["watches"])), (a, 1))
 
     def test_add_after_stop_creates_new_row(self):
         a = W.add_watch(self.reg, dict(PR_SPEC), at("2026-10-28T10:00"), self.cfg)
@@ -329,7 +387,7 @@ class CliTests(Base):
         spec_file.write_text(json.dumps(PR_SPEC))
         self.assertEqual(self.cli("add", "--file", str(spec_file)).stdout.strip(), "w-1")
         r = self.cli("status", "w-1")
-        self.assertEqual(json.loads(r.stdout)["target"], {"repo": "acme/app", "number": 7})
+        self.assertEqual(json.loads(r.stdout)["target"], {"repo": "acme/app", "number": "7"})
         self.assertEqual(json.loads(self.cli("status").stdout)["next_id"], 2)
 
     def test_update_via_cli(self):
@@ -343,6 +401,17 @@ class CliTests(Base):
         self.assertEqual(s["last_check"], "2026-10-28T16:10:00+00:00")
         r = self.cli("update", "w-9", "--checked")
         self.assertEqual(r.returncode, 2)
+
+    def test_unexpected_exception_is_one_line_and_exit_2(self):
+        err = io.StringIO()
+        with mock.patch.object(W, "run", side_effect=KeyError("state")), contextlib.redirect_stderr(err):
+            code = W.main(["list"])
+        self.assertEqual((code, err.getvalue()), (2, "watch: internal error: KeyError: 'state'\n"))
+        self.reg_path.write_text(json.dumps({"version": 1, "next_id": 2, "watches": [{"id": "w-1"}]}))
+        r = self.cli("list")
+        self.assertEqual(r.returncode, 2)
+        self.assertTrue(r.stderr.startswith("watch: internal error: KeyError:"), r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
 
     def test_save_is_atomic_and_leaves_no_temp(self):
         self.assertEqual(self.cli("add", "--json", json.dumps(PR_SPEC)).returncode, 0)
@@ -373,7 +442,8 @@ class CliTests(Base):
         self.reg["owner"] = "master"
         self.reg["last_tick"] = (now - timedelta(minutes=20)).astimezone(timezone.utc).isoformat()
         out = W.format_list(self.reg, self.cfg, now)
-        self.assertIn('w-1 pr armed next 10:05 last ok 09:50 "green and approved"', out)
+        # 15m cadence less the 4m tick grace after the 09:50 check
+        self.assertIn('w-1 pr armed next 10:01 last ok 09:50 "green and approved"', out)
         self.assertIn("tick: last 09:40 by master", out)
         self.assertIn("tick not running", out)
         self.reg_path.write_text(json.dumps(self.reg))
@@ -485,6 +555,17 @@ class TickTests(Base):
             self.tick("2026-10-28T23:00")
         self.assertEqual([c.args[0]["id"] for c in rc.call_args_list], ["w-1"])
 
+    def test_due_one_tick_early_so_cadence_holds_on_the_tick_grid(self):
+        W.add_watch(self.reg, dict(SLACK_SPEC), at("2026-10-28T09:00"), self.cfg)
+        w = self.reg["watches"][0]
+        w["state"]["last_check"] = utc(at("2026-10-28T10:02:30"))  # agent reported 30s after the 10:02 tick
+        self.assertFalse(W.is_due(w, at("2026-10-28T10:07"), self.cfg))
+        self.assertTrue(W.is_due(w, at("2026-10-28T10:12"), self.cfg))  # 10m later on the grid, not 15m
+        w["state"]["slowed"] = True  # slow_every 60m gets the same grace
+        self.assertFalse(W.is_due(w, at("2026-10-28T10:57"), self.cfg))
+        self.assertTrue(W.is_due(w, at("2026-10-28T11:02"), self.cfg))
+        self.assertEqual(W.next_check(w, at("2026-10-28T10:30"), self.cfg), at("2026-10-28T10:58:30"))
+
     def test_after_delays_first_check(self):
         W.add_watch(self.reg, dict(PR_SPEC, after="2026-10-28T11:00:00-06:00"), at("2026-10-28T10:00"), self.cfg)
         with mock.patch.object(W, "run_check", return_value=("p", None, {})) as rc:
@@ -541,11 +622,11 @@ class TickTests(Base):
         self.assertIsNone(s["dispatched_at"])
         self.assertEqual((s["errors"], s["note"]), (1, "slack: rate limited"))
         stales = []
-        for t in ("10:05", "10:10"):
+        for t in ("10:05", "10:07"):
             r = self.tick(f"2026-10-28T{t}")
             stales += r["stale"]
             self.assertEqual(r["due"]["slack"], [])
-        r = self.tick("2026-10-28T10:12")  # next cadence after the 10:02 error
+        r = self.tick("2026-10-28T10:08")  # 10m cadence less the 4m tick grace after the 10:02 error
         stales += r["stale"]
         self.assertEqual([d["id"] for d in r["due"]["slack"]], ["w-1"])
         self.assertEqual((stales, s["errors"]), ([], 1))
@@ -587,7 +668,7 @@ class TickTests(Base):
             self.assertEqual([w["state"]["errors"] for w in self.reg["watches"]], [0, 0, 0])
             self.assertEqual(sorted(c.args[0]["id"] for c in rc.call_args_list), ["w-1", "w-2"])
             self.assertEqual([d["id"] for d in r["due"]["slack"]], ["w-3"])
-            r = self.tick("2026-10-28T08:06")
+            r = self.tick("2026-10-28T08:05:30")
             self.assertEqual((r["stale"], r["due"]["slack"], rc.call_count), ([], [], 2))
 
     def test_paused_watch_is_not_checked(self):
@@ -740,7 +821,7 @@ class PrCheckTests(Base):
             r = tick("10:00")
             self.assertEqual([(f["event"], f["result"]) for f in r["fired"]], [("ready", {"merge_ok": False})])
             W.update_watch(self.reg, "w-1", at("2026-10-28T10:02"), self.cfg, merge="merge it when green", head="abc")
-            self.assertEqual((s["status"], s["cursor"]), ("armed", None))
+            self.assertEqual((s["status"], s["cursor"]), ("armed", "OPEN|abc|green|APPROVED"))
             r = tick("10:17")
             self.assertEqual([(f["event"], f["result"]) for f in r["fired"]], [("ready", {"merge_ok": True})])
             W.update_watch(self.reg, "w-1", at("2026-10-28T10:18"), self.cfg, merge="merge it", head="old")
@@ -752,12 +833,33 @@ class PrCheckTests(Base):
         s = self.reg["watches"][0]["state"]
         s.update(status="fired", result={"urgent": True}, cursor="OPEN|abc|failed|APPROVED")
         W.update_watch(self.reg, "w-1", at("2026-10-28T10:02"), self.cfg, merge="merge it", head="abc")
-        self.assertEqual((s["status"], s["cursor"]), ("fired", None))
+        self.assertEqual((s["status"], s["cursor"]), ("fired", "OPEN|abc|failed|APPROVED"))
+
+    def test_merge_approval_does_not_re_raise_failed_checks_or_changes_requested(self):
+        W.add_watch(self.reg, dict(PR_SPEC), at("2026-10-28T09:00"), self.cfg)
+        s = self.reg["watches"][0]["state"]
+        view = {"v": FAILING_VIEW}
+        tick = lambda t: W.tick(self.reg, self.cfg, at(f"2026-10-28T{t}"), session="me")
+        with mock.patch.object(W, "run_cmd", side_effect=lambda args: json.dumps(view["v"])):
+            self.assertEqual([f["event"] for f in tick("10:00")["fired"]], ["checks_failed"])
+            W.update_watch(self.reg, "w-1", at("2026-10-28T10:01"), self.cfg, status="armed")
+            W.update_watch(self.reg, "w-1", at("2026-10-28T10:02"), self.cfg, merge="merge it when green", head="abc")
+            self.assertEqual(tick("10:15")["fired"], [])
+            view["v"] = dict(GREEN_VIEW, reviewDecision="CHANGES_REQUESTED")
+            self.assertEqual([f["event"] for f in tick("10:30")["fired"]], ["changes_requested"])
+            W.update_watch(self.reg, "w-1", at("2026-10-28T10:31"), self.cfg, status="armed")
+            W.update_watch(self.reg, "w-1", at("2026-10-28T10:32"), self.cfg, merge="merge it", head="abc")
+            self.assertEqual(tick("10:45")["fired"], [])
+            view["v"] = GREEN_VIEW
+            r = tick("11:00")
+        self.assertEqual([(f["event"], f["result"]) for f in r["fired"]], [("ready", {"merge_ok": True})])
+        self.assertEqual(s["cursor"], "OPEN|abc|green|APPROVED|merge:abc")
 
     def test_merge_ok_only_when_head_matches_green_and_approved(self):
         w = {"on_fire": {"merge": {"words": "merge it when green", "at": "x", "head_sha": "abc"}}}
         view = dict(GREEN_VIEW)
-        self.assertEqual(W.pr_event(view, w), ("OPEN|abc|green|APPROVED", "ready", {"merge_ok": True}))
+        self.assertEqual(W.pr_event(view, w), ("OPEN|abc|green|APPROVED|merge:abc", "ready", {"merge_ok": True}))
+        self.assertEqual(W.pr_event(view, {"on_fire": {"merge": None}})[0], "OPEN|abc|green|APPROVED")
         self.assertEqual(W.pr_event({**view, "headRefOid": "def"}, w)[1], "head_moved")
         self.assertIsNone(W.pr_event({**view, "reviewDecision": "REVIEW_REQUIRED"}, w)[1])
         self.assertEqual(W.pr_event(view, {"on_fire": {"merge": None}})[1:], ("ready", {"merge_ok": False}))
@@ -929,7 +1031,7 @@ class DagsterCheckTests(Base):
                 mock.patch.object(W, "load_env_file", wraps=W.load_env_file) as lef:
             W.tick(self.reg, self.cfg, at("2026-10-28T10:00"), session="me")
             self.assertEqual(lef.call_count, 1)
-            W.tick(self.reg, self.cfg, at("2026-10-28T10:01"), session="me")  # nothing due
+            W.tick(self.reg, self.cfg, at("2026-10-28T10:00:30"), session="me")  # nothing due
             self.assertEqual(lef.call_count, 1)
 
     def test_missing_token_is_a_check_error(self):

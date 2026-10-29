@@ -9,7 +9,7 @@ The bound for everything here: read-only verification, Slack and email drafts, b
 ## 1. Exit 2 or 3: the tick did not run
 
 - **Exit 3, another session owns the tick.** `CronDelete` this session's `~/bin/watch tick` job (find its id with `CronList`), then say one line: "this session no longer ticks; <owner> does", with the owner from the error text. Stop there.
-- **Exit 2, a config or registry error.** Raise one Needs-you line `watch tick failing: <first stderr line>` (step 5's board rule; chat only when no board is configured) and say it once in chat. On later ticks with the same first line, stay silent: no text, no other tool call. A different first line raises again. Never edit the registry or config to clear it; the user fixes it. Stop there.
+- **Exit 2, a config, registry or internal error.** Before raising, check whether today's board row already has the exact line `watch tick failing: <first stderr line>`; if so, stay silent: no text, no other tool call. Otherwise add that line under Needs you (the board line only, no `update --board-line` call, since there is no watch id to store it on; chat only when no board is configured) and say it once in chat. A different first line raises again. Never edit the registry or config to clear it; the user fixes it. Stop there.
 
 ## 2. Detect
 
@@ -55,7 +55,7 @@ Fired, stale and expired items are raised here, one raise per state change. The 
   - Expired entries carry `phase`: `soft` means the watch keeps going (slowed), `hard` means it ended.
   - Soft expiry on a `reply` rule: "no reply yet on <thread>, nudge?". On `until-terminal`: "watch <id> still running past <expected_hours>h".
   - Hard expiry: "watch <id> expired: <rule>". The script has already set it `expired`.
-- **Mirror.** After any raise or handled watch, refresh the board scratchpad's `## Watches` table from `~/bin/watch status` (when the board is configured).
+- **Mirror.** After any raise or handled watch, refresh the board scratchpad's `## Watches` table from `~/bin/watch list`, with Target and Board line from `~/bin/watch status <id>` (when the board is configured).
 
 ## 6. Requests channel
 

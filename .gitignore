@@ -19,3 +19,6 @@ bin/.worktree-config.json
 
 # OS noise
 .DS_Store
+
+# Python bytecode from running bin/ scripts and their tests
+__pycache__/
