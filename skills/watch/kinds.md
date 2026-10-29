@@ -6,14 +6,14 @@ What each kind checks, its defaults, and the keys its spec needs. `~/bin/watch a
 
 | Kind | Check | Default cadence (`every`, then `slow_every`) | Expiry rule | On fire, by default |
 |---|---|---|---|---|
-| `slack-thread` | haiku detect agent reads the thread since the cursor | 10m, then 60m | `reply` | judge the reply, draft an answer, raise with the draft |
-| `slack-dm` | haiku detect agent reads the direct message channel since the cursor | 10m, then 60m | `reply` | same as `slack-thread` |
-| `email-thread` | haiku detect agent reads the mailbox thread after the cursor message | 20m, then 60m | `reply` | same as `slack-thread` |
-| `pr` | script: `gh pr view` state, merge state, review decision, check rollup | 15m | `until-closed` | raise failed checks or changes requested; merge when pre-approved, green and approved; otherwise raise "ready to merge?" |
-| `deploy` | script: the repo's deploy rule from the `Deploy rules` config | 30m | `two-days` | run the `verify` commands and raise the result; urgent when verification fails |
+| `slack-thread` | the tick handler reads the thread since the cursor (detect-slack procedure) | 10m, then 60m | `reply` | judge the reply, draft an answer, raise with the draft |
+| `slack-dm` | the tick handler reads the direct message channel since the cursor | 10m, then 60m | `reply` | same as `slack-thread` |
+| `email-thread` | the tick handler reads the mailbox thread after the cursor message (detect-email procedure) | 20m, then 60m | `reply` | same as `slack-thread` |
+| `pr` | script: `gh pr view` state, merge state, review decision, check rollup | 15m | `until-closed` | raise failed checks or changes requested; the master merges when pre-approved, green and approved; otherwise raise "ready to merge?" |
+| `deploy` | script: the repo's deploy rule from the `Deploy rules` config | 30m | `two-days` | the master runs the `verify` commands and raises the result; urgent when verification fails |
 | `dagster-run` | script: Dagster GraphQL run status | 5m | `until-terminal` | raise the outcome; failure is urgent |
 | `dagster-backfill` | script: Dagster GraphQL backfill status, finished only when every partition is terminal | 5m | `until-terminal` | same as `dagster-run` |
-| `requests-channel` | haiku detect agent reads the configured channel for new top-level posts by the configured user | 10m | `never` | research each request and reply in its thread (handle.md section 6) |
+| `requests-channel` | the tick handler reads the configured channel for new top-level posts by the configured user | 10m | `never` | research each request and draft a reply in its thread (handle.md section 6) |
 
 Quiet hours (the `Quiet hours` config line, weekends included unless it says `weekends: poll`) pause every watch with `quiet: true`. Dagster kinds default to `quiet: false`. Set `quiet: false` on any other watch the user wants checked "through the night".
 
