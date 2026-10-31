@@ -205,6 +205,17 @@ def rollup_state(rollup, merge_state):
     return "green"
 
 
+def any_pending(rollup):
+    """True while any check is still queued or running, failed or not."""
+    for c in rollup or []:
+        if "state" in c:
+            if c["state"] in CONTEXT_PENDING:
+                return True
+        elif c.get("status") != "COMPLETED":
+            return True
+    return False
+
+
 def failed_names(rollup):
     return [c.get("name") or c.get("context") or "unknown" for c in rollup or [] if _check_failed(c)]
 
@@ -274,7 +285,8 @@ def poll_pr(repo, number, sha=None):
         return f"CONFLICT {number}"
     if merge_state == "BEHIND":
         return f"BEHIND {number}"
-    if state == "OPEN" and merge_state in ("CLEAN", "UNSTABLE", "HAS_HOOKS") and review in ("APPROVED", "") and checks != "pending":
+    if state == "OPEN" and merge_state in ("CLEAN", "UNSTABLE", "HAS_HOOKS") and review in ("APPROVED", "") and checks != "pending" \
+            and not any_pending(rollup):
         line = f"READY {number} {head} {'approved' if review == 'APPROVED' else 'no-review-required'}"
         optional = failed_names(rollup)
         return line + (" optional-failed=" + ",".join(optional) if optional else "")

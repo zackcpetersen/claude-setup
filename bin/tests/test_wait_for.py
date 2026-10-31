@@ -217,6 +217,11 @@ class PrTests(Base):
             v = view(mergeStateStatus=ms, statusCheckRollup=[OK, PENDING])
             self.assertEqual(self.pr(v, "--max", "10m"), "TIMEOUT pr acme/app#7")
 
+    def test_optional_failure_with_other_checks_pending_keeps_waiting(self):
+        v = view(mergeStateStatus="UNSTABLE", statusCheckRollup=[BAD, PENDING])
+        checks = [{"name": "build", "bucket": "pass"}]
+        self.assertEqual(self.pr(v, "--max", "10m", checks=checks), "TIMEOUT pr acme/app#7")
+
     def test_has_hooks_is_ready(self):
         self.assertEqual(self.pr(view(mergeStateStatus="HAS_HOOKS")), f"READY 7 {H1} approved")
 
