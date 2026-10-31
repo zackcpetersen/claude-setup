@@ -16,13 +16,13 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `skills/review-pr/` | `review-pr` skill - review a teammate's PR, approve or comment with per-comment approval | `~/.claude/skills/` (symlink) |
 | `skills/daily-auth/` | `daily-auth` skill - check and fix every login the day needs, from `~/.claude/auth-checks.json` | `~/.claude/skills/` (symlink) |
 | `skills/sync-repos/` | `sync-repos` skill - fast-forward every repo in `~/.claude/sync-repos.json` to `origin/main` | `~/.claude/skills/` (symlink) |
-| `skills/watch/` | `watch` skill - a registry of waits (replies, PRs, deploys, Dagster runs), checked on a cadence and raised only when you must act | `~/.claude/skills/` (symlink) |
+| `skills/watch/` | `watch` skill - background waits on PRs, deploys and Dagster runs that wake the session once, plus an hourly Slack sweep that drafts replies and proposes watches | `~/.claude/skills/` (symlink) |
 | `output-styles/direct.md` | "Direct" output style - answer first, plain english, no hedging | `~/.claude/output-styles/` (symlink) |
 | `output-styles/momentum.md` | "Momentum" output style - Direct plus progress tracking and one next action | `~/.claude/output-styles/` (symlink) |
 | `output-styles/tldr.md` | "TLDR" output style - 1-3 sentences, expands only on request | `~/.claude/output-styles/` (symlink) |
 | `bin/query_db` | Read-only Postgres query helper | `~/bin/` (symlink) |
 | `bin/worktree` | Multi-repo git worktree manager | `~/bin/` (symlink) |
-| `bin/watch` | Registry script the `watch` skill drives (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
+| `bin/wait-for` | Background wait the `watch` skill starts: PR, deploy or Dagster run, one event line then exit (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
 | `plugins/model-discipline/` | `model-discipline` plugin - the agent-model-guard hook, a SessionStart rules block, and the `playbook` skill | `/plugin install`, see section 4 |
 | `plugins/plan-gate/` | `plan-gate` plugin - blocks `ExitPlanMode` until `/self-review` records a pass | `/plugin install`, see section 4 |
@@ -99,6 +99,19 @@ The manual equivalent, and what `update.sh` does under the hood:
 Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
 
+- 2026-10-31: The `watch` skill dropped its registry. `bin/watch` is
+  gone; waits are background `~/bin/wait-for` commands and Slack is
+  swept hourly. Per machine: re-run `./install.sh`; `rm ~/bin/watch`;
+  archive or delete `~/.claude/watches.json`; trim the `### Watches`
+  block to the template (drop Registry, Tick interval, Quiet hours,
+  Requests channel and the email connector); repoint the Work board
+  `Watch-slack state file` line to `~/.claude/watch-sweep.json`; delete
+  any `/watch tick` cron job; in `~/.claude/settings.json` replace
+  `Bash(~/bin/watch *)` with `Bash(~/bin/wait-for *)`, keep the Slack
+  read tools and `slack_send_message_draft`, and drop the watch-only
+  lines `mcp__claude_ai_Gmail__{get_thread,get_message,search_threads,
+  create_draft,update_draft}`, `<notion prefix>notion-fetch` and
+  `<notion prefix>notion-update-page` unless other skills still use them.
 - 2026-10-28: New `watch` skill and `bin/watch` script. Re-run
   `./install.sh` to link `~/bin/watch`; add the `### Watches` block from
   the template; add the allow rules listed in `skills/watch/SKILL.md`;
@@ -176,12 +189,12 @@ Work through these once per machine:
 - Create one empty Notion page with an inline database (any name, only the default title property) and put its URL on the `Board page` line. The skill adds the columns it needs on first run.
 - Optional: add the `Projects data source` line. On the first run the skill creates a "Projects" database under the board page with the schema in `page-template.md` and gives you the `collection://` id to paste back; after that it keeps one page per workstream current.
 - Needs the Notion MCP plugin, the Slack MCP plugin, your tracker's MCP plugin, `gh`, and `~/bin/worktree` with its config. The ticket flow also needs `/start-ticket`, `/self-review`, `/pr` and the built-in `/code-review` skill.
-- Optional: the watch-slack state file path; the `watch` skill's Requests channel line uses it.
+- The watch-slack state file path (`~/.claude/watch-sweep.json`); the `watch` skill's hourly sweep uses it.
 
 ### `skills/watch/SKILL.md`
 - No file edits. Copy the `### Watches` block from `claude-md/CLAUDE.md.template` into `~/.claude/CLAUDE.md` and fill it in; the skill stops with a clear message if the section is missing.
-- Add the allow rules listed in the skill's Install section to `~/.claude/settings.json` by hand, so its check agents never stop on a permission prompt. The same section covers retiring the old `watch-slack` command.
-- Needs `gh`, Python 3, and `~/bin/watch` (linked by `install.sh`). Slack and email watches need those MCP plugins; Dagster watches need the `Dagster` config line.
+- Add the allow rules listed in the skill's Install section to `~/.claude/settings.json` by hand: `Bash(~/bin/wait-for *)` plus the Slack read tools and `slack_send_message_draft`, so the sweep never stops on a permission prompt.
+- Needs `gh`, Python 3, and `~/bin/wait-for` (linked by `install.sh`). The sweep needs the Slack MCP plugin; Dagster waits need the `Dagster` config line.
 
 ### `skills/review-pr/SKILL.md`
 - No file edits. Needs `gh` and the built-in `/code-review` skill. Uses the writing-voice skill named in the `### Writing voice` section of `~/.claude/CLAUDE.md` when present, otherwise the voice rules written into `dispatch-prompt.md`.

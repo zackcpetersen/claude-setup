@@ -1,3 +1,5 @@
+Superseded by docs/superpowers/plans/2026-10-31-watch-simple.md (2026-10-31).
+
 # Watch: a registry of things we are waiting on
 
 Design, 2026-10-28. Status: approved by the user 2026-10-28 (with the silent no-op tick rule). Lives in claude-setup as a generic skill; every machine-specific value goes in a `### Watches` config section of `~/.claude/CLAUDE.md`, the same way the `board` skill works.
