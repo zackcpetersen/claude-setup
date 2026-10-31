@@ -96,22 +96,18 @@ Reviews a teammate's pull request: `/review-pr <number or URL> [--effort medium]
 - GitHub org: <org-name>
 - Worktree config: ~/bin/.worktree-config.json; scripts: ~/bin/worktree, ~/bin/start-ticket
 - Memory dir: <path to the Claude memory directory for this machine>
-- Watch-slack state file: ~/.claude/watch-slack-last-ts.txt <!-- optional -->
+- Watch-slack state file: ~/.claude/watch-sweep.json <!-- the hourly sweep's state; the main session writes it -->
 - WIP limits (starting values, tune after a week): max_streams 3, max_needs_you 7, carry_flag_days 3
 - Projects data source: <collection://... of the Projects database, optional> <!-- one row per workstream; the board appends progress and decisions to its pages -->
 - Oncall: <yes|no> <!-- flip at the start of each rotation week; `no` means the board never reads alert channels or tracks alerts -->
 - Access checks: per-machine list in `~/.claude/auth-checks.json`, run by the `daily-auth` skill (start from `skills/daily-auth/auth-checks.example.json`)
 
 ### Watches (`watch` skill)
-<!-- FILL IN: values for the watch skill and ~/bin/watch. Delete this section if you do not use it. Self ids (your Slack user id and mailbox) and the requests state file come from the Work board section above; do not repeat them here. -->
-- Registry: ~/.claude/watches.json
-- Time zone: <America/Denver> <!-- IANA name; quiet hours and business days use it -->
-- Tick interval: 5m
-- Quiet hours: 19:00-08:00; weekends: quiet <!-- `weekends: poll` keeps polling on Saturday and Sunday -->
-- Business hours: 08:00-18:00 <!-- Monday to Friday; used for reply expiry -->
-- Connectors: slack mcp__plugin_slack_slack__, email mcp__claude_ai_Gmail__ <!-- tool name prefixes for the detect and judge agents -->
-- Requests channel: <C0XXXXXXX> <!-- optional; watches your own top-level posts there, using the Work board's Slack user id and watch-slack state file; replaces the old watch-slack command -->
-- Dagster: https://<org>.dagster.cloud/<deployment>/graphql, env file ~/path/to/.env, token var DAGSTER_CLOUD_API_TOKEN <!-- optional; fill in <org> and <deployment> or delete this line; the script reads the token itself and never prints it -->
+<!-- FILL IN: values for the watch skill and ~/bin/wait-for. Delete this section if you do not use it. Your Slack user id, watched channels and the sweep state file come from the Work board section above; do not repeat them here. -->
+- Time zone: <America/Denver> <!-- IANA name -->
+- Business hours: 08:00-18:00 <!-- Monday to Friday; the hourly sweep runs in these hours -->
+- Connectors: slack mcp__plugin_slack_slack__ <!-- tool name prefix for the sweep agent -->
+- Dagster: https://<org>.dagster.cloud/<deployment>/graphql, env file ~/path/to/.env, token var DAGSTER_CLOUD_API_TOKEN <!-- optional; fill in <org> and <deployment> or delete this line; wait-for reads the token itself and never prints it -->
 - Deploy rules: <!-- one line per repo: `workflow <name> on <branch>`, `release-tag`, or `branch <name>` -->
   - <owner/repo>: workflow <deploy> on <main>
 

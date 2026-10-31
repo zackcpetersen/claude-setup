@@ -251,7 +251,7 @@ You are finalizing ticket {{ticket}} in the worktree at {{worktree_path}} (repo 
 
 The user has approved committing and pushing exactly these files: {{approved_files}}. That approval covers the commit and the push only. Do not stage lock files, .gitignore, or worktree setup noise (CLAUDE.md, AGENTS.md, .claude/ changes).
 
-Run `/pr --review-effort medium`. It commits with the CLAUDE.md commit format, pushes, opens the PR from the repo template, runs the background self code review, and watches CI. Never merge; a merge happens only through a pre-approved watch, run by the master session. If the self review or CI produces fixes, do NOT apply them and do NOT invoke `/babysit-pr`: report the combined list (CI failures grouped by cause, review findings with file and line) and stop. The master session asks the user and dispatches a fix pass.
+Run `/pr --review-effort medium`. It commits with the CLAUDE.md commit format, pushes, opens the PR from the repo template, runs the background self code review, and watches CI. Never merge; a merge happens only through the `watch` skill, run by the master session with the user's per-PR approval. If the self review or CI produces fixes, do NOT apply them and do NOT invoke `/babysit-pr`: report the combined list (CI failures grouped by cause, review findings with file and line) and stop. The master session asks the user and dispatches a fix pass.
 
 Return: commit SHA and message, PR number and URL, final CI state, self review findings and what was applied, and next steps.
 ```
