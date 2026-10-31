@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+"""wait-for: one background wait that prints one event line and exits.
+
+Modes: pr, deploy, dagster. Poll, print one event line, exit 0. Exit 2 on a usage
+or config error. Standard library only. See skills/watch/SKILL.md.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+from datetime import timedelta
+from pathlib import Path
+
+DEFAULT_CONFIG = "~/.claude/CLAUDE.md"
+DEFAULT_EVERY = "5m"
+DEFAULT_MAX = {"pr": "3d", "deploy": "4h", "dagster": "12h"}
+MAX_ERRORS = 3
+CMD_TIMEOUT = 60
+CHECK_FAILED = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
+CONTEXT_FAILED = {"FAILURE", "ERROR"}
+CONTEXT_PENDING = {"PENDING", "EXPECTED"}
+PR_FIELDS = "state,headRefOid,reviewDecision,statusCheckRollup,mergeStateStatus,mergeCommit"
+WORKFLOW_COMPARES = 5
+WORKFLOW_COUNTED = {"success", "failure", "timed_out"}  # cancelled, skipped and the rest are passed over
+DAGSTER_TERMINAL = {"SUCCESS", "FAILURE", "CANCELED"}
+RUN_QUERY = 'query($id:ID!){runOrError(runId:$id){__typename ... on Run{runId status}}}'
+BACKFILL_QUERY = (
+    'query($id:String!){partitionBackfillOrError(backfillId:$id){__typename ... on PartitionBackfill'
+    '{id status numPartitions partitionStatuses{results{partitionName runId runStatus}}} ... on PythonError{message}}}'
+)
+
+SLEEP = time.sleep
+CLOCK = time.monotonic
+
+
+class WaitError(Exception):
+    """A usage or config problem. Exit 2."""
+
+
+# ---------- config ----------
+
+def parse_duration(text):
+    m = re.fullmatch(r"\s*(\d+)\s*([smhd])\s*", str(text))
+    if not m:
+        raise WaitError(f"bad duration {text!r}, expected a number and s, m, h or d (like 5m)")
+    n, unit = int(m.group(1)), m.group(2)
+    return {"s": timedelta(seconds=n), "m": timedelta(minutes=n), "h": timedelta(hours=n), "d": timedelta(days=n)}[unit]
+
+
+def parse_deploy_rule(text):
+    words = str(text).split()
+    if len(words) == 4 and words[0] == "workflow" and words[2] == "on":
+        return {"type": "workflow", "name": words[1], "branch": words[3]}
+    if words == ["release-tag"]:
+        return {"type": "release-tag"}
+    if len(words) == 2 and words[0] == "branch":
+        return {"type": "branch", "name": words[1]}
+    raise WaitError(
+        f"bad deploy rule {text!r}, expected `workflow <name> on <branch>`, `release-tag` or `branch <name>`"
+    )
+
+
+def _is_unset(value):
+    return value == "" or (value.startswith("<") and value.endswith(">"))
+
+
+def _field(value, line, path):
+    """Unwrap one `<...>` field. A field that still holds `<` or `>` is an unfilled template placeholder."""
+    value = value.strip()
+    if len(value) >= 2 and value.startswith("<") and value.endswith(">"):
+        value = value[1:-1].strip()
+    if "<" in value or ">" in value or not value:
+        raise WaitError(
+            f"the `{line}` line in the ### Watches section of {path} still has a template placeholder "
+            f"({value!r}); fill it in or delete the line"
+        )
+    return value
+
+
+def _clean(value):
+    value = value.strip()
+    if len(value) >= 2 and value.startswith("`") and value.endswith("`"):
+        value = value[1:-1].strip()
+    return value
+
+
+def _read_section(lines, heading):
+    """Return ({key: value}, {repo: rule text}) for the `### <heading>` section."""
+    values, nested = {}, {}
+    inside, last_key = False, None
+    for raw in lines:
+        if raw.startswith("##"):
+            inside = raw.startswith("### " + heading)
+            last_key = None
+            continue
+        if not inside:
+            continue
+        line = re.sub(r"<!--.*?-->", "", raw).rstrip()
+        top = re.match(r"^- ([^:]+?):\s*(.*)$", line)
+        if top:
+            last_key = top.group(1).strip()
+            value = _clean(top.group(2))
+            if value and (last_key in ("Dagster", "Connectors") or not _is_unset(value)):
+                values[last_key] = value
+            continue
+        sub = re.match(r"^\s+- ([^:]+?):\s*(.*)$", line)
+        if sub and last_key == "Deploy rules":
+            repo, rule = _clean(sub.group(1)), _clean(sub.group(2))
+            if not _is_unset(repo) and not _is_unset(rule):
+                nested[repo] = rule
+    return values, nested
+
+
+def _expand(path):
+    return str(Path(path).expanduser())
+
+
+def load_config(path):
+    """Read the kept lines of the `### Watches` section: Dagster and Deploy rules."""
+    path = Path(path).expanduser()
+    try:
+        lines = path.read_text().splitlines()
+    except OSError as e:
+        raise WaitError(f"cannot read config {path}: {e.strerror}")
+    watches, rules = _read_section(lines, "Watches")
+
+    dagster = None
+    if "Dagster" in watches:
+        m = re.fullmatch(r"(\S+),\s*env file\s+(\S+),\s*token var\s+(\S+)", watches["Dagster"])
+        if not m:
+            raise WaitError(f"bad Dagster line {watches['Dagster']!r}, expected `<url>, env file <path>, token var <NAME>`")
+        url, env_file, token_var = (_field(m.group(i), "Dagster", path) for i in (1, 2, 3))
+        dagster = {"url": url, "env_file": _expand(env_file), "token_var": token_var}
+
+    return {"dagster": dagster, "deploy_rules": {repo: parse_deploy_rule(rule) for repo, rule in rules.items()}}
+
+
+# ---------- helpers ----------
+
+def run_cmd(args):
+    return subprocess.run(args, capture_output=True, text=True, timeout=CMD_TIMEOUT, check=True).stdout
+
+
+def gql(url, token, query, variables):
+    """POST one Dagster GraphQL query and return its data. The token goes in a header only."""
+    req = urllib.request.Request(
+        url,
+        data=json.dumps({"query": query, "variables": variables}).encode(),
+        headers={"Content-Type": "application/json", "Dagster-Cloud-Api-Token": token},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=CMD_TIMEOUT) as resp:
+        body = json.loads(resp.read())
+    if body.get("errors"):
+        raise RuntimeError("GraphQL error: " + "; ".join(str(e.get("message", e)) for e in body["errors"]))
+    return body["data"]
+
+
+def load_env_file(path):
+    """Set KEY=VALUE lines from an env file that are not already in the environment."""
+    try:
+        text = Path(path).read_text()
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        raise WaitError(f"cannot read env file {path}: {e.strerror}")
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        key, sep, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if not sep or not re.fullmatch(r"[A-Za-z_]\w*", key):
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        else:
+            value = re.sub(r"\s+#.*$", "", value)
+        os.environ.setdefault(key, value)
+
+
+def _check_failed(c):
+    return c.get("conclusion") in CHECK_FAILED or c.get("state") in CONTEXT_FAILED
+
+
+def rollup_state(rollup, merge_state):
+    if not rollup:
+        return "green" if merge_state == "CLEAN" else "pending"
+    if any(_check_failed(c) for c in rollup):
+        return "failed"
+    for c in rollup:
+        if "state" in c:
+            if c["state"] in CONTEXT_PENDING:
+                return "pending"
+        elif c.get("status") != "COMPLETED":
+            return "pending"
+    return "green"
+
+
+def failed_names(rollup):
+    return [c.get("name") or c.get("context") or "unknown" for c in rollup or [] if _check_failed(c)]
+
+
+def contains(repo, sha, ref):
+    status = run_cmd(["gh", "api", f"repos/{repo}/compare/{sha}...{ref}", "--jq", ".status"]).strip()
+    return status in ("identical", "ahead")
+
+
+def backfill_state(b):
+    if b.get("__typename") != "PartitionBackfill":
+        return "UNKNOWN"
+    results = (b.get("partitionStatuses") or {}).get("results") or []
+    statuses = [r.get("runStatus") for r in results]
+    if b.get("status") in ("FAILED", "CANCELED") and all(s is None or s in DAGSTER_TERMINAL for s in statuses):
+        return "FAILURE"
+    if len(results) < (b.get("numPartitions") or 0) or any(s not in DAGSTER_TERMINAL for s in statuses):
+        return "RUNNING"
+    return "SUCCESS" if all(s == "SUCCESS" for s in statuses) else "FAILURE"
+
+
+# ---------- polls: each returns an event line, or None to keep waiting ----------
+
+def poll_pr(repo, number, sha=None):
+    view = json.loads(run_cmd(["gh", "pr", "view", str(number), "--repo", repo, "--json", PR_FIELDS]))
+    state, head = view.get("state"), view.get("headRefOid") or ""
+    merge_state, review = view.get("mergeStateStatus"), view.get("reviewDecision") or ""
+    rollup = view.get("statusCheckRollup") or []
+    if state == "MERGED":
+        merge_sha = (view.get("mergeCommit") or {}).get("oid")
+        return f"MERGED {number} {merge_sha}" if merge_sha else None  # the merge commit can lag the state
+    if state == "CLOSED":
+        return f"CLOSED {number}"
+    if rollup_state(rollup, merge_state) == "failed" and merge_state != "UNSTABLE":
+        return f"FAILED {number} {','.join(failed_names(rollup))}"
+    if review == "CHANGES_REQUESTED":
+        return f"CHANGES_REQUESTED {number}"
+    if sha and not head.startswith(sha):
+        return f"HEAD_MOVED {number} {head}"
+    if state == "OPEN" and merge_state in ("CLEAN", "UNSTABLE") and review in ("APPROVED", ""):
+        line = f"READY {number} {head} {'approved' if review == 'APPROVED' else 'no-review-required'}"
+        if merge_state == "UNSTABLE":
+            line += " optional-failed=" + ",".join(failed_names(rollup))
+        return line
+    return None
+
+
+def poll_deploy(repo, sha, rule):
+    if rule["type"] == "branch":
+        head = run_cmd(["gh", "api", f"repos/{repo}/branches/{rule['name']}", "--jq", ".commit.sha"]).strip()
+        return f"DEPLOYED {sha} {head}" if contains(repo, sha, head) else None
+    if rule["type"] == "release-tag":
+        tag = run_cmd(["gh", "api", f"repos/{repo}/releases/latest", "--jq", ".tag_name"]).strip()
+        return f"DEPLOYED {sha} {tag}" if contains(repo, sha, tag) else None
+    runs = json.loads(run_cmd([
+        "gh", "run", "list", "--repo", repo, "--workflow", rule["name"], "--branch", rule["branch"],
+        "--json", "databaseId,headSha,status,conclusion", "--limit", "20",
+    ]))
+    counted = [r for r in runs if r.get("status") == "completed" and r.get("conclusion") in WORKFLOW_COUNTED]
+    for r in counted[:WORKFLOW_COMPARES]:
+        if contains(repo, sha, r["headSha"]):
+            word = "DEPLOYED" if r["conclusion"] == "success" else "DEPLOY_FAILED"
+            return f"{word} {sha} {r['databaseId']}"
+    return None
+
+
+def poll_dagster(kind, ident, dagster, token):
+    if kind == "run":
+        run = gql(dagster["url"], token, RUN_QUERY, {"id": ident})["runOrError"]
+        if run.get("__typename") != "Run":
+            raise RuntimeError(f"run {ident}: {run.get('__typename')}")
+        status = run["status"]
+    else:
+        payload = gql(dagster["url"], token, BACKFILL_QUERY, {"id": ident})["partitionBackfillOrError"]
+        status = backfill_state(payload)
+        if status == "UNKNOWN":
+            raise RuntimeError(f"backfill {ident}: {payload.get('__typename')} {payload.get('message') or ''}".strip())
+    if status == "SUCCESS":
+        return "SUCCEEDED"
+    if status in ("FAILURE", "CANCELED"):
+        return f"FAILED {status}"
+    return None
+
+
+# ---------- the wait ----------
+
+def error_line(e, secrets=()):
+    text = e.stderr if isinstance(e, subprocess.CalledProcessError) and e.stderr else str(e)
+    lines = (text or type(e).__name__).strip().splitlines()
+    text = lines[0] if lines else type(e).__name__
+    for s in secrets:
+        if s:
+            text = text.replace(s, "***")
+    return text
+
+
+def wait_loop(poll, what, every, max_wait, secrets=()):
+    deadline = CLOCK() + max_wait.total_seconds()
+    errors = 0
+    while True:
+        try:
+            event = poll()
+            errors = 0
+        except Exception as e:  # transient gh or network trouble is retried
+            errors += 1
+            if errors >= MAX_ERRORS:
+                return f"ERROR {error_line(e, secrets)}"
+            event = None
+        if event:
+            return event
+        if CLOCK() >= deadline:
+            return f"TIMEOUT {what}"
+        SLEEP(every.total_seconds())
+
+
+def build_parser():
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--config", default=os.environ.get("WAIT_FOR_CONFIG", DEFAULT_CONFIG), help="CLAUDE.md with the ### Watches section")
+    common.add_argument("--every", default=DEFAULT_EVERY, help="poll interval, like 5m (default 5m)")
+    common.add_argument("--max", dest="max_wait", default=None,
+                        help="give up after this long (pr 3d, deploy 4h, dagster 12h)")
+    p = argparse.ArgumentParser(prog="wait-for", description="Wait for one event, print one line, exit 0. Options go after the mode.")
+    sub = p.add_subparsers(dest="mode", required=True)
+    pr = sub.add_parser("pr", parents=[common], help="wait for a PR: MERGED CLOSED FAILED CHANGES_REQUESTED HEAD_MOVED READY")
+    pr.add_argument("repo")
+    pr.add_argument("number", type=int)
+    pr.add_argument("--sha", help="the approved head; exit HEAD_MOVED when it changes")
+    dp = sub.add_parser("deploy", parents=[common], help="wait for a sha to reach prod: DEPLOYED DEPLOY_FAILED")
+    dp.add_argument("repo")
+    dp.add_argument("sha")
+    dg = sub.add_parser("dagster", parents=[common], help="wait for a Dagster run or backfill: SUCCEEDED FAILED")
+    dg.add_argument("what", choices=("run", "backfill"))
+    dg.add_argument("id")
+    return p
+
+
+def run(args):
+    every = parse_duration(args.every)
+    max_wait = parse_duration(args.max_wait or DEFAULT_MAX[args.mode])
+    secrets = ()
+    if args.mode == "pr":
+        what = f"pr {args.repo}#{args.number}"
+        poll = lambda: poll_pr(args.repo, args.number, args.sha)
+    elif args.mode == "deploy":
+        cfg = load_config(args.config)
+        rule = cfg["deploy_rules"].get(args.repo)
+        if not rule:
+            raise WaitError(f"no deploy rule for {args.repo} under Deploy rules in the ### Watches config")
+        what = f"deploy {args.repo} {args.sha}"
+        poll = lambda: poll_deploy(args.repo, args.sha, rule)
+    else:
+        dagster = load_config(args.config)["dagster"]
+        if not dagster:
+            raise WaitError("dagster waits need a `Dagster` line in the ### Watches config")
+        load_env_file(dagster["env_file"])
+        token = os.environ.get(dagster["token_var"])
+        if not token:
+            raise WaitError(f"{dagster['token_var']} is not set and not in the env file {dagster['env_file']}")
+        what = f"dagster {args.what} {args.id}"
+        poll = lambda: poll_dagster(args.what, args.id, dagster, token)
+        secrets = (token,)
+    print(wait_loop(poll, what, every, max_wait, secrets), flush=True)
+    return 0
+
+
+def main(argv=None):
+    try:
+        return run(build_parser().parse_args(argv))
+    except WaitError as e:
+        print(f"wait-for: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
