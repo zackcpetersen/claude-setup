@@ -66,7 +66,7 @@ Use GitHub CLI to create pull requests:
    ```bash
    gh pr create --title "<same format as the commit message>" --body "[filled template content]"
    ```
-4. If `~/bin/wait-for` exists, ask the user one line right after the PR opens: "Watch #<n>? (a) merge when green and approved (b) just tell me (c) no". On (a) or (b), start `~/bin/wait-for pr <owner/repo> <n>` in the background (Bash `run_in_background`), adding `--sha <full head sha>` on (a), and follow the `watch` skill for its events. When the user asked for a prod verification, note it so the main session starts `~/bin/wait-for deploy <owner/repo> <merge sha>` after `MERGED`. `/pr` itself never merges; merges happen only through the `watch` skill with the user's per-PR approval.
+4. Skip this step when `/pr` runs as a dispatched agent: the main session proposes the wait instead (board `start` step 8). Otherwise, if `~/bin/wait-for` exists, ask the user one line right after the PR opens: "Watch #<n>? (a) merge when green and approved (b) just tell me (c) no". On (a) or (b), start `~/bin/wait-for pr <owner/repo> <n>` in the background (Bash `run_in_background`), adding `--sha <full head sha>` on (a), and follow the `watch` skill for its events. When the user asked for a prod verification, note it so the main session starts `~/bin/wait-for deploy <owner/repo> <merge sha>` after the merge (the session's own merge on `READY`, or a `MERGED` event). `/pr` itself never merges; merges happen only through the `watch` skill with the user's per-PR approval.
 
 **Note:** Always use the current template structure from `.github/pull_request_template.md` as the source of truth.
 

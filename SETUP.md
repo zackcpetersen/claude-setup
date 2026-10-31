@@ -104,10 +104,14 @@ than 6 months.
   swept hourly. Per machine: re-run `./install.sh`; `rm ~/bin/watch`;
   archive or delete `~/.claude/watches.json`; trim the `### Watches`
   block to the template (drop Registry, Tick interval, Quiet hours,
-  Requests channel and the email connector); delete any `watch tick`
-  cron job; in `~/.claude/settings.json` drop `Bash(~/bin/watch *)` and
-  the Gmail and Notion watch lines, then add `Bash(~/bin/wait-for *)`
-  plus the Slack read tools and `slack_send_message_draft`.
+  Requests channel and the email connector); repoint the Work board
+  `Watch-slack state file` line to `~/.claude/watch-sweep.json`; delete
+  any `/watch tick` cron job; in `~/.claude/settings.json` replace
+  `Bash(~/bin/watch *)` with `Bash(~/bin/wait-for *)`, keep the Slack
+  read tools and `slack_send_message_draft`, and drop the watch-only
+  lines `mcp__claude_ai_Gmail__{get_thread,get_message,search_threads,
+  create_draft,update_draft}`, `<notion prefix>notion-fetch` and
+  `<notion prefix>notion-update-page` unless other skills still use them.
 - 2026-10-28: New `watch` skill and `bin/watch` script. Re-run
   `./install.sh` to link `~/bin/watch`; add the `### Watches` block from
   the template; add the allow rules listed in `skills/watch/SKILL.md`;
@@ -185,7 +189,7 @@ Work through these once per machine:
 - Create one empty Notion page with an inline database (any name, only the default title property) and put its URL on the `Board page` line. The skill adds the columns it needs on first run.
 - Optional: add the `Projects data source` line. On the first run the skill creates a "Projects" database under the board page with the schema in `page-template.md` and gives you the `collection://` id to paste back; after that it keeps one page per workstream current.
 - Needs the Notion MCP plugin, the Slack MCP plugin, your tracker's MCP plugin, `gh`, and `~/bin/worktree` with its config. The ticket flow also needs `/start-ticket`, `/self-review`, `/pr` and the built-in `/code-review` skill.
-- Optional: the watch-slack state file path (`~/.claude/watch-sweep.json`); the `watch` skill's hourly sweep uses it.
+- The watch-slack state file path (`~/.claude/watch-sweep.json`); the `watch` skill's hourly sweep uses it.
 
 ### `skills/watch/SKILL.md`
 - No file edits. Copy the `### Watches` block from `claude-md/CLAUDE.md.template` into `~/.claude/CLAUDE.md` and fill it in; the skill stops with a clear message if the section is missing.
