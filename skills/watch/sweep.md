@@ -41,7 +41,7 @@ If there is nothing to report, reply with exactly `NOTHING`. Keep every line pla
 | `{{last_sweep}}`, `{{declined}}` | The sweep state file (the board's `Watch-slack state file` line). Drop declined keys older than 7 days |
 | `{{running_waits}}` | The main session's list of running `wait-for` commands |
 | `{{repos}}` | The repos named on the `Deploy rules` line, plus any the user names |
-| `{{voice_rules}}` | The `write-as-zack`-style voice skill's rules, pasted in by the main session. Never tell the agent to load a skill |
+| `{{voice_rules}}` | The user's voice skill rules, pasted in by the main session. Never tell the agent to load a skill |
 
 ## What the main session does with the report
 
