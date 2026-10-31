@@ -23,7 +23,7 @@ For each item, oldest first, handle at most 4 in total. Leave the rest for the n
 
 - A reply is needed: create a threaded draft with `slack_send_message_draft`, in the user's voice as given in {{voice_rules}}. Report `DRAFT <channel> <thread> <draft id> <one-line gist>`.
 - Something is worth watching (an open PR, a thread waiting on a person): report `PROPOSE <one plain-English line>`. Put the key in brackets at the end: `[pr:<owner/repo>#<n>]` or `[slack:<channel>:<thread_ts>]`.
-- The user's own ask has had no reply for 1 business day: report `NUDGE? <thread>`.
+- The user's own ask in a thread, older than 1 business day with no reply, and not in the declined list (look back up to 5 business days, not just since {{last_sweep}}): report `NUDGE? <one plain-English line> [slack:<channel>:<thread_ts>]`.
 - A reply met the ask: report nothing, unless a follow-up is needed.
 
 If anything is left over because of the 4-item cap, end with `LEFTOVER <timestamp of the oldest item not handled>`.
@@ -45,8 +45,8 @@ If there is nothing to report, reply with exactly `NOTHING`. Keep every line pla
 
 ## What the main session does with the report
 
-- `DRAFT` and `NUDGE?` lines: relay them, with the draft link. The user sends nothing without approving.
-- `PROPOSE` lines: ask them in one multi-select question, up to 4. A yes starts the matching `wait-for`. A no goes into `declined` with today's date.
+- `DRAFT` lines: relay them, with the draft link. The user sends nothing without approving.
+- `PROPOSE` and `NUDGE?` lines: ask them in one multi-select question, up to 4. A yes on a PROPOSE starts the matching `wait-for`. A yes on a NUDGE? means draft the nudge for approval. A no on either goes into `declined` with today's date.
 - `LEFTOVER`: write its timestamp as `last_sweep`. With no `LEFTOVER`, write now. Rollover items are never lost.
 - `NOTHING`: say nothing, and still update `last_sweep`.
 - The agent only reads the state file. The main session writes it, in the same turn it relays the report.

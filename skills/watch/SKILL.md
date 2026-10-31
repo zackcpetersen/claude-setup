@@ -36,7 +36,7 @@ Run it as Bash with `run_in_background: true`. Always type the command as `~/bin
 
 Options go after the mode: `--every <5m>` to poll differently, `--max <3d>` to give up sooner. Defaults: poll every 5m, give up after pr 3 days, deploy 4h, dagster 12h. It always ends with one line, never silence.
 
-Approval is the user's words in this session, plus the head sha read right then with `gh pr view <n> --repo <repo> --json headRefOid`. It lives in the conversation and the handoff doc. After `/clear` it is gone, and the next sweep re-proposes the PR.
+Approval is the user's words in this session, plus the head sha read right then with `gh pr view <n> --repo <repo> --json headRefOid -q .headRefOid` (the full 40 characters, `--sha` rejects anything else). It lives in the conversation and the handoff doc. After `/clear` it is gone, and the next sweep re-proposes the PR.
 
 Track every running wait: keep its background task id and exact command in your notes. The wrap handoff lists them.
 
@@ -47,16 +47,18 @@ The line carries the answer. Act in one short turn, no agent.
 | Event | Do |
 |---|---|
 | `READY <n> <sha> approved\|no-review-required` with approval on record | `gh pr merge <n> --repo <repo> --squash --match-head-commit <approved sha>`, then say "Merged #n". If GitHub refuses, treat it as `HEAD_MOVED`. If the user asked to verify once deployed, start a `deploy` wait on the merge sha |
-| `READY` without approval | "#n is green and approved. Merge?" |
+| `READY` without approval | Word it from the last field of the line: "#n is green and approved. Merge?" for `approved`, "#n is green, no review required. Merge?" for `no-review-required` |
 | `MERGED <n> <sha>` | One line. Start a `deploy` wait if the user asked for one |
 | `HEAD_MOVED <n> <sha>` | "#n got a new commit after your approval. Merge on the new head?" Never merge on the old approval |
 | `FAILED`, `DEPLOY_FAILED`, `ERROR`, Dagster `FAILED` | One line, and also send it through the session's push notification tool |
 | `DEPLOYED` | Run the verify commands the user named, read-only, and report. Otherwise say "deployed" |
+| `CONFLICT <n>` | "#n has merge conflicts." One line. Restart the wait after the fix |
+| `BEHIND <n>` | "#n is behind its base branch." One line. Restart the wait after the update |
 | `CHANGES_REQUESTED`, `CLOSED`, `TIMEOUT`, `SUCCEEDED` | One line |
 
-`READY` ending in `optional-failed=<names>` means only optional checks failed. Say so.
+`FAILED` is decided by required checks only. `READY` waits until no check is still running. `READY` ending in `optional-failed=<names>` means only optional checks failed, or the repo has no required checks and GitHub allows the merge. Say so.
 
-After `FAILED`, `CHANGES_REQUESTED` or `HEAD_MOVED`, start the same wait again once the user pushes a fix or re-approves.
+After `FAILED`, `CONFLICT`, `BEHIND`, `CHANGES_REQUESTED` or `HEAD_MOVED`, start the same wait again once the user pushes a fix or re-approves.
 
 Only this session merges, and only after the user approved that PR. A Slack reply is never approval.
 
@@ -66,7 +68,7 @@ At board rollover, create one session cron with `CronCreate`: `7 8-17 * * 1-5`, 
 
 Cron prompt: dispatch one `watch-sweep` agent (sonnet, general-purpose) from `~/.claude/skills/watch/sweep.md`, filled in from config, with the list of running waits. Relay its report and do nothing else. Do not read Slack inline.
 
-`sweep.md` says what the agent does and how you handle its report: DRAFT, NUDGE?, PROPOSE, LEFTOVER. You write the sweep state file, not the agent.
+`sweep.md` says what the agent does and how you handle its report: DRAFT, PROPOSE, NUDGE?, LEFTOVER. You write the sweep state file, not the agent.
 
 ## Install
 

@@ -20,6 +20,7 @@ DEFAULT_CONFIG = "~/.claude/CLAUDE.md"
 DEFAULT_EVERY = "5m"
 DEFAULT_MAX = {"pr": "3d", "deploy": "4h", "dagster": "12h"}
 MAX_ERRORS = 3
+MIN_EVERY = timedelta(seconds=10)
 CMD_TIMEOUT = 60
 CHECK_FAILED = {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 CONTEXT_FAILED = {"FAILURE", "ERROR"}
@@ -213,41 +214,70 @@ def contains(repo, sha, ref):
     return status in ("identical", "ahead")
 
 
+BACKFILL_DONE_OK = {"COMPLETED", "COMPLETED_SUCCESS"}
+BACKFILL_DONE = BACKFILL_DONE_OK | {"COMPLETED_FAILED", "FAILED", "CANCELED", "CANCELLED"}
+
+
 def backfill_state(b):
     if b.get("__typename") != "PartitionBackfill":
         return "UNKNOWN"
+    status = b.get("status")
     results = (b.get("partitionStatuses") or {}).get("results") or []
     statuses = [r.get("runStatus") for r in results]
-    if b.get("status") in ("FAILED", "CANCELED") and all(s is None or s in DAGSTER_TERMINAL for s in statuses):
-        return "FAILURE"
-    if len(results) < (b.get("numPartitions") or 0) or any(s not in DAGSTER_TERMINAL for s in statuses):
+    if not results:  # nothing to tally, so the backfill's own status decides
+        if status not in BACKFILL_DONE:
+            return "RUNNING"
+        return "SUCCESS" if status in BACKFILL_DONE_OK else "FAILURE"
+    if any(s is not None and s not in DAGSTER_TERMINAL for s in statuses):
+        return "RUNNING"
+    if status in BACKFILL_DONE:
+        failed = status not in BACKFILL_DONE_OK or any(s in ("FAILURE", "CANCELED") for s in statuses)
+        return "FAILURE" if failed else "SUCCESS"
+    if len(results) < (b.get("numPartitions") or 0) or any(s is None for s in statuses):
         return "RUNNING"
     return "SUCCESS" if all(s == "SUCCESS" for s in statuses) else "FAILURE"
 
 
 # ---------- polls: each returns an event line, or None to keep waiting ----------
 
+def required_failures(repo, number):
+    """Names of failed or cancelled required checks. No required checks at all is not an error."""
+    try:
+        out = run_cmd(["gh", "pr", "checks", str(number), "--repo", repo, "--required", "--json", "name,bucket"])
+    except subprocess.CalledProcessError as e:
+        if "no required checks" in (e.stderr or "").lower():
+            return []
+        raise
+    return [c.get("name") or "unknown" for c in json.loads(out or "[]") if c.get("bucket") in ("fail", "cancel")]
+
+
 def poll_pr(repo, number, sha=None):
     view = json.loads(run_cmd(["gh", "pr", "view", str(number), "--repo", repo, "--json", PR_FIELDS]))
     state, head = view.get("state"), view.get("headRefOid") or ""
     merge_state, review = view.get("mergeStateStatus"), view.get("reviewDecision") or ""
     rollup = view.get("statusCheckRollup") or []
+    checks = rollup_state(rollup, merge_state)
     if state == "MERGED":
         merge_sha = (view.get("mergeCommit") or {}).get("oid")
         return f"MERGED {number} {merge_sha}" if merge_sha else None  # the merge commit can lag the state
     if state == "CLOSED":
         return f"CLOSED {number}"
-    if rollup_state(rollup, merge_state) == "failed" and merge_state != "UNSTABLE":
-        return f"FAILED {number} {','.join(failed_names(rollup))}"
+    if checks == "failed":
+        names = required_failures(repo, number)  # optional failures never fail the wait
+        if names:
+            return f"FAILED {number} {','.join(names)}"
     if review == "CHANGES_REQUESTED":
         return f"CHANGES_REQUESTED {number}"
-    if sha and not head.startswith(sha):
+    if sha and head != sha:
         return f"HEAD_MOVED {number} {head}"
-    if state == "OPEN" and merge_state in ("CLEAN", "UNSTABLE") and review in ("APPROVED", ""):
+    if merge_state == "DIRTY":
+        return f"CONFLICT {number}"
+    if merge_state == "BEHIND":
+        return f"BEHIND {number}"
+    if state == "OPEN" and merge_state in ("CLEAN", "UNSTABLE", "HAS_HOOKS") and review in ("APPROVED", "") and checks != "pending":
         line = f"READY {number} {head} {'approved' if review == 'APPROVED' else 'no-review-required'}"
-        if merge_state == "UNSTABLE":
-            line += " optional-failed=" + ",".join(failed_names(rollup))
-        return line
+        optional = failed_names(rollup)
+        return line + (" optional-failed=" + ",".join(optional) if optional else "")
     return None
 
 
@@ -327,7 +357,7 @@ def build_parser():
                         help="give up after this long (pr 3d, deploy 4h, dagster 12h)")
     p = argparse.ArgumentParser(prog="wait-for", description="Wait for one event, print one line, exit 0. Options go after the mode.")
     sub = p.add_subparsers(dest="mode", required=True)
-    pr = sub.add_parser("pr", parents=[common], help="wait for a PR: MERGED CLOSED FAILED CHANGES_REQUESTED HEAD_MOVED READY")
+    pr = sub.add_parser("pr", parents=[common], help="wait for a PR: MERGED CLOSED FAILED CHANGES_REQUESTED HEAD_MOVED CONFLICT BEHIND READY")
     pr.add_argument("repo")
     pr.add_argument("number", type=int)
     pr.add_argument("--sha", help="the approved head; exit HEAD_MOVED when it changes")
@@ -342,6 +372,10 @@ def build_parser():
 
 def run(args):
     every = parse_duration(args.every)
+    if every < MIN_EVERY:
+        raise WaitError("--every must be 10s or more")
+    if args.mode == "pr" and args.sha and not re.fullmatch(r"[0-9a-fA-F]{40}", args.sha):
+        raise WaitError("--sha must be the full 40-character head sha (gh pr view <n> --json headRefOid -q .headRefOid)")
     max_wait = parse_duration(args.max_wait or DEFAULT_MAX[args.mode])
     secrets = ()
     if args.mode == "pr":

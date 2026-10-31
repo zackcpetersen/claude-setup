@@ -37,13 +37,14 @@ CFG_MD = """# Machine config
 - Not: part of the section
 """
 
+H1, H2 = "a" * 40, "b" * 40
 OK = {"status": "COMPLETED", "conclusion": "SUCCESS", "name": "build"}
 BAD = {"status": "COMPLETED", "conclusion": "FAILURE", "name": "lint"}
 PENDING = {"status": "IN_PROGRESS", "conclusion": None, "name": "slow"}
 
 
 def view(**kw):
-    base = {"state": "OPEN", "headRefOid": "h1", "reviewDecision": "APPROVED", "statusCheckRollup": [OK],
+    base = {"state": "OPEN", "headRefOid": H1, "reviewDecision": "APPROVED", "statusCheckRollup": [OK],
             "mergeStateStatus": "CLEAN", "mergeCommit": None}
     base.update(kw)
     return base
@@ -184,29 +185,65 @@ class RollupTests(unittest.TestCase):
 
 
 class PrTests(Base):
-    def pr(self, v, *extra):
-        rc, out, err, calls = self.run_with({"pr view": v}, "pr", "acme/app", "7", *extra)
+    def pr(self, v, *extra, checks=None):
+        table = {"pr view": v}
+        if checks is not None:
+            table["pr checks"] = checks
+        rc, out, err, calls = self.run_with(table, "pr", "acme/app", "7", *extra)
         self.assertEqual(rc, 0, err)
         return out
 
     def test_ready_approved_clean(self):
-        self.assertEqual(self.pr(view()), "READY 7 h1 approved")
+        self.assertEqual(self.pr(view()), f"READY 7 {H1} approved")
 
     def test_ready_no_review_required_when_decision_empty(self):
         for empty in ("", None):
-            self.assertEqual(self.pr(view(reviewDecision=empty)), "READY 7 h1 no-review-required")
+            self.assertEqual(self.pr(view(reviewDecision=empty)), f"READY 7 {H1} no-review-required")
 
     def test_ready_unstable_lists_failed_optional_checks(self):
         v = view(mergeStateStatus="UNSTABLE", statusCheckRollup=[OK, BAD])
-        self.assertEqual(self.pr(v), "READY 7 h1 approved optional-failed=lint")
+        checks = [{"name": "build", "bucket": "pass"}]
+        self.assertEqual(self.pr(v, checks=checks), f"READY 7 {H1} approved optional-failed=lint")
+        # no required checks at all: gh exits non-zero, GitHub still allows the merge
+        none = subprocess.CalledProcessError(1, ["gh"], stderr="no required checks reported on the 'x' branch")
+        self.assertEqual(self.pr(v, checks=none), f"READY 7 {H1} approved optional-failed=lint")
+
+    def test_ready_does_not_append_empty_optional_list(self):
+        self.assertEqual(self.pr(view(mergeStateStatus="UNSTABLE")), f"READY 7 {H1} approved")
+
+    def test_pending_checks_block_ready(self):
+        for ms in ("UNSTABLE", "CLEAN", "HAS_HOOKS"):
+            self.now, self.sleeps = 0.0, []
+            v = view(mergeStateStatus=ms, statusCheckRollup=[OK, PENDING])
+            self.assertEqual(self.pr(v, "--max", "10m"), "TIMEOUT pr acme/app#7")
+
+    def test_has_hooks_is_ready(self):
+        self.assertEqual(self.pr(view(mergeStateStatus="HAS_HOOKS")), f"READY 7 {H1} approved")
+
+    def test_optional_failure_while_blocked_does_not_fail_the_wait(self):
+        v = view(mergeStateStatus="BLOCKED", reviewDecision="REVIEW_REQUIRED", statusCheckRollup=[OK, BAD])
+        checks = [{"name": "build", "bucket": "pass"}]
+        self.assertEqual(self.pr(v, "--max", "10m", checks=checks), "TIMEOUT pr acme/app#7")
+
+    def test_conflict_behind_and_draft(self):
+        self.assertEqual(self.pr(view(mergeStateStatus="DIRTY")), "CONFLICT 7")
+        self.assertEqual(self.pr(view(mergeStateStatus="BEHIND")), "BEHIND 7")
+        self.assertEqual(self.pr(view(mergeStateStatus="DRAFT"), "--max", "10m"), "TIMEOUT pr acme/app#7")
+
+    def test_required_check_commands(self):
+        v = view(mergeStateStatus="BLOCKED", statusCheckRollup=[BAD])
+        rc, out, err, calls = self.run_with({"pr view": v, "pr checks": [{"name": "lint", "bucket": "fail"}]}, "pr", "acme/app", "7")
+        self.assertEqual(out, "FAILED 7 lint")
+        self.assertEqual(calls[1], ["gh", "pr", "checks", "7", "--repo", "acme/app", "--required", "--json", "name,bucket"])
 
     def test_failed_names_the_checks_and_cancelled_counts(self):
         v = view(mergeStateStatus="BLOCKED", statusCheckRollup=[OK, BAD, {"conclusion": "CANCELLED", "status": "COMPLETED", "name": "e2e"}])
-        self.assertEqual(self.pr(v), "FAILED 7 lint,e2e")
+        checks = [{"name": "build", "bucket": "pass"}, {"name": "lint", "bucket": "fail"}, {"name": "e2e", "bucket": "cancel"}]
+        self.assertEqual(self.pr(v, checks=checks), "FAILED 7 lint,e2e")
 
     def test_failed_status_context_uses_context_name(self):
         v = view(mergeStateStatus="BLOCKED", statusCheckRollup=[{"state": "FAILURE", "context": "ci/legacy"}])
-        self.assertEqual(self.pr(v), "FAILED 7 ci/legacy")
+        self.assertEqual(self.pr(v, checks=[{"name": "ci/legacy", "bucket": "fail"}]), "FAILED 7 ci/legacy")
 
     def test_merged_and_closed(self):
         self.assertEqual(self.pr(view(state="MERGED", mergeCommit={"oid": "m9"})), "MERGED 7 m9")
@@ -216,12 +253,12 @@ class PrTests(Base):
         self.assertEqual(self.pr(view(reviewDecision="CHANGES_REQUESTED", mergeStateStatus="BLOCKED")), "CHANGES_REQUESTED 7")
 
     def test_head_moved_only_with_sha(self):
-        self.assertEqual(self.pr(view(headRefOid="h2"), "--sha", "h1"), "HEAD_MOVED 7 h2")
-        self.assertEqual(self.pr(view(headRefOid="h2")), "READY 7 h2 approved")
-        self.assertEqual(self.pr(view(), "--sha", "h1"), "READY 7 h1 approved")
+        self.assertEqual(self.pr(view(headRefOid=H2), "--sha", H1), f"HEAD_MOVED 7 {H2}")
+        self.assertEqual(self.pr(view(headRefOid=H2)), f"READY 7 {H2} approved")
+        self.assertEqual(self.pr(view(), "--sha", H1), f"READY 7 {H1} approved")
 
     def test_terminal_states_win_over_head_moved(self):
-        self.assertEqual(self.pr(view(state="MERGED", headRefOid="h2", mergeCommit={"oid": "m9"}), "--sha", "h1"), "MERGED 7 m9")
+        self.assertEqual(self.pr(view(state="MERGED", headRefOid=H2, mergeCommit={"oid": "m9"}), "--sha", H1), "MERGED 7 m9")
 
     def test_keeps_waiting_then_times_out(self):
         for v in (view(statusCheckRollup=[OK, PENDING], mergeStateStatus="BLOCKED"),
@@ -239,7 +276,7 @@ class PrTests(Base):
         views = iter([view(mergeStateStatus="BLOCKED", statusCheckRollup=[PENDING]), view(mergeStateStatus="BLOCKED", statusCheckRollup=[PENDING]), view()])
         with mock.patch.object(W, "run_cmd", side_effect=lambda a: json.dumps(next(views))):
             rc, out, _ = self.main("pr", "acme/app", "7")
-        self.assertEqual((rc, out), (0, "READY 7 h1 approved"))
+        self.assertEqual((rc, out), (0, f"READY 7 {H1} approved"))
         self.assertEqual(self.sleeps, [300.0, 300.0])
 
     def test_gh_args(self):
@@ -268,7 +305,7 @@ class ErrorTests(Base):
 
         with mock.patch.object(W, "run_cmd", side_effect=run):
             rc, out, _ = self.main("pr", "acme/app", "7")
-        self.assertEqual((rc, out), (0, "READY 7 h1 approved"))
+        self.assertEqual((rc, out), (0, f"READY 7 {H1} approved"))
 
     def test_three_errors_in_a_row_exit_error_with_first_line(self):
         err = subprocess.CalledProcessError(1, ["gh"], stderr="HTTP 502: bad gateway\nsecond line")
@@ -289,7 +326,7 @@ class ErrorTests(Base):
 
         with mock.patch.object(W, "run_cmd", side_effect=run):
             rc, out, _ = self.main("pr", "acme/app", "7")
-        self.assertEqual(out, "READY 7 h1 approved")
+        self.assertEqual(out, f"READY 7 {H1} approved")
 
     def test_bad_json_counts_as_an_error(self):
         rc, out, _, _ = self.run_with({"pr view": "not json"}, "pr", "acme/app", "7")
@@ -308,6 +345,17 @@ class UsageTests(Base):
         rc, out, err = self.main("pr", "acme/app", "7", "--every", "soon")
         self.assertEqual((rc, out), (2, ""))
         self.assertIn("bad duration", err)
+
+    def test_every_under_ten_seconds_exits_2(self):
+        rc, out, err = self.main("pr", "acme/app", "7", "--every", "5s")
+        self.assertEqual((rc, out), (2, ""))
+        self.assertIn("10s", err)
+
+    def test_sha_must_be_forty_hex_chars(self):
+        for bad in ("abc123", "g" * 40, "a" * 39):
+            rc, out, err = self.main("pr", "acme/app", "7", "--sha", bad)
+            self.assertEqual((rc, out), (2, ""))
+            self.assertIn("40", err)
 
     def test_help_runs(self):
         r = subprocess.run([sys.executable, str(BIN / "wait-for"), "--help"], capture_output=True, text=True)
@@ -405,6 +453,21 @@ class DagsterTests(Base):
         self.assertEqual(W.backfill_state(mk("COMPLETED", 2, ["SUCCESS", "FAILURE"])), "FAILURE")
         self.assertEqual(W.backfill_state(mk("CANCELED", 2, ["SUCCESS", None])), "FAILURE")
         self.assertEqual(W.backfill_state({"__typename": "PythonError", "message": "x"}), "UNKNOWN")
+
+    def test_backfill_terminal_status_without_partition_results(self):
+        mk = lambda st: {"__typename": "PartitionBackfill", "status": st, "numPartitions": 0, "partitionStatuses": {"results": []}}
+        for st in ("COMPLETED", "COMPLETED_SUCCESS"):
+            self.assertEqual(W.backfill_state(mk(st)), "SUCCESS")
+        for st in ("COMPLETED_FAILED", "FAILED", "CANCELED", "CANCELLED"):
+            self.assertEqual(W.backfill_state(mk(st)), "FAILURE")
+        self.assertEqual(W.backfill_state(mk("REQUESTED")), "RUNNING")
+
+    def test_backfill_failed_status_beats_successful_partitions(self):
+        part = lambda s: {"partitionName": "p", "runId": "r", "runStatus": s}
+        b = {"__typename": "PartitionBackfill", "status": "COMPLETED_FAILED", "numPartitions": 1, "partitionStatuses": {"results": [part("SUCCESS")]}}
+        self.assertEqual(W.backfill_state(b), "FAILURE")
+        b["status"] = "COMPLETED_SUCCESS"
+        self.assertEqual(W.backfill_state(b), "SUCCESS")
 
     def test_run_running_then_success(self):
         run = lambda s: {"runOrError": {"__typename": "Run", "runId": "r1", "status": s}}
