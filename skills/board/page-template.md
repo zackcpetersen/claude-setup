@@ -25,6 +25,10 @@ Manual steps only, in the order to do them; logins from the access check first. 
 - [ ] `! <login or fix command>` (blocks: <work that waits on it>)
 - [ ] <merge / meeting / send / click the user must do by hand>
 
+## Delivered, not confirmed
+One line per delivery (a send, a release, a data drop, a report change) the person who asked has not confirmed yet. Sync adds and removes lines; rollover carries them; the Friday check walks them. Empty when everything delivered is confirmed.
+- <what> to <whom>, delivered <YYYY-MM-DD>, confirm by <YYYY-MM-DD, delivered + 5 business days>, confirmation shows as <reply, ticket comment, run, data check>
+
 ## Standup
 ### Say this
 3 to 5 sentences, one per project in priority order, as spoken: what moved, who the user is working with, what is next, what is parked. No ticket keys or technical detail.
@@ -158,4 +162,4 @@ Keyed by ticket. Rows persist across syncs and rollovers until stage is done. Su
 
 ## Standup section rules
 
-The first block of the row, above Today's goal. Built once, at rollover, by the `standup-builder` prompt in `dispatch-prompts.md`, which holds the selection, grouping, oncall and waiting-on rules. Grouped by project (at most 4, priority order, from the Projects data source when configured, else the tracker epics), one Done and one Next line per project plus a Live line when something reached production, ticket keys on the project line only; small follow-ups are dropped unless the project has nothing else. It mirrors how the user gives the standup aloud: by project, naming who they work with, saying what is parked. Sync never rewrites it; a full rewrite of Your view copies an existing Standup back verbatim and never writes the placeholder above. `/board done` appends to Done today only.
+The first block of the row after Your TODOs and Delivered, not confirmed, above Today's goal. Built once, at rollover, by the `standup-builder` prompt in `dispatch-prompts.md`, which holds the selection, grouping, oncall and waiting-on rules. Grouped by project (at most 4, priority order, from the Projects data source when configured, else the tracker epics), one Done and one Next line per project plus a Live line when something reached production, ticket keys on the project line only; small follow-ups are dropped unless the project has nothing else. It mirrors how the user gives the standup aloud: by project, naming who they work with, saying what is parked. Sync never rewrites it; a full rewrite of Your view copies an existing Standup back verbatim and never writes the placeholder above. `/board done` appends to Done today only.
