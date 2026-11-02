@@ -52,6 +52,7 @@ Return under 120 lines:
 - Dates in the next 30 days, including dates that only appear in ticket text.
 - "Things that look off": In Progress with 10+ quiet days, Done here but open elsewhere, unassigned High priority updated in 14 days, epics in the wrong status.
 - "Stale snapshots": every open ticket where the newest comment is by {{user_name}} and is 3+ business days old and reads as a status list, checklist or plan (it names other people's work, blockers or PRs). One line each: key, comment id, age in days, what it claims. The master session treats those claims as unverified until the GitHub report or the owner confirms them.
+- "Closed this week": one line per ticket {{user_name}} completed in the last 7 days: key, summary, resolved date, whether the ticket has a comment by {{user_name}} that walks the acceptance criteria (yes / no), and the consumer if the ticket names one.
 - "Activity since {{since_date}}": one line per ticket {{user_name}} resolved, transitioned or commented on since then: key, summary (the ticket title), parent key, labels, what happened, UTC timestamp.
 - "Unread notifications": one line each for items not already covered above: key, summary, who, what, when. If the tracker has no notifications tool, one line saying it was skipped.
 ```
