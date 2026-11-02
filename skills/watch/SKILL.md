@@ -56,6 +56,8 @@ The line carries the answer. Act in one short turn, no agent.
 | `BEHIND <n>` | "#n is behind its base branch." One line. Restart the wait after the update |
 | `CHANGES_REQUESTED`, `CLOSED`, `TIMEOUT`, `SUCCEEDED` | One line |
 
+For a `release-tag` repo, `DEPLOYED <sha> <tag>` means the release holds the sha and every workflow run that release started finished green. `DEPLOY_FAILED <sha> <tag> <run names>` names the runs that failed. `DEPLOYED <sha> <tag> no-release-runs` means no release-triggered runs appeared within 5 minutes, so only the release itself was checked. Say so.
+
 `FAILED` is decided by required checks only. `READY` waits until no check is still running. `READY` ending in `optional-failed=<names>` means only optional checks failed, or the repo has no required checks and GitHub allows the merge. Say so.
 
 After `FAILED`, `CONFLICT`, `BEHIND`, `CHANGES_REQUESTED` or `HEAD_MOVED`, start the same wait again once the user pushes a fix or re-approves.

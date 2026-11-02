@@ -420,13 +420,62 @@ class DeployTests(Base):
         self.assertEqual(out, "TIMEOUT deploy acme/web s1")
         self.assertEqual(len(calls), 3 * (1 + 5))  # three polls
 
-    def test_release_tag(self):
-        out, calls = self.deploy({"releases/latest": "v1.2\n", "compare": "behind\n"}, "acme/lib", "--max", "10m")
+    RELEASE = {"tag": "v1.3", "at": "2026-11-02T18:00:00Z"}
+
+    def release_runs(self, *states):
+        return [{"id": i, "name": name, "status": status, "conclusion": conclusion, "created_at": "2026-11-02T18:00:20Z"}
+                for i, (name, status, conclusion) in enumerate(states, 1)]
+
+    def release(self, runs, *extra, now="2026-11-02T18:02:00+00:00"):
+        table = {"releases/latest": self.RELEASE, "compare": "ahead\n", "commits/v1.3": "t9\n", "actions/runs": runs}
+        with mock.patch.object(W, "NOW", lambda: W.datetime.fromisoformat(now)):
+            return self.deploy(table, "acme/lib", *extra)
+
+    def test_release_tag_not_contained_keeps_waiting(self):
+        table = {"releases/latest": dict(self.RELEASE, tag="v1.2"), "compare": "behind\n"}
+        out, calls = self.deploy(table, "acme/lib", "--max", "10m")
         self.assertEqual(out, "TIMEOUT deploy acme/lib s1")
-        self.assertEqual(calls[0], ["gh", "api", "repos/acme/lib/releases/latest", "--jq", ".tag_name"])
+        self.assertEqual(calls[0][:3], ["gh", "api", "repos/acme/lib/releases/latest"])
         self.assertEqual(calls[1], ["gh", "api", "repos/acme/lib/compare/s1...v1.2", "--jq", ".status"])
-        out, _ = self.deploy({"releases/latest": "v1.3\n", "compare": "ahead\n"}, "acme/lib")
+        self.assertEqual(len(calls), 3 * 2)  # no run lookups until the release has the sha
+
+    def test_release_runs_in_progress_keep_polling(self):
+        runs = self.release_runs(("Deploy us", "in_progress", None), ("Deploy eu", "completed", "success"))
+        out, calls = self.release(runs, "--max", "10m")
+        self.assertEqual(out, "TIMEOUT deploy acme/lib s1")
+        self.assertIn("repos/acme/lib/actions/runs?event=release&head_sha=t9&per_page=100", calls[3][2])
+
+    def test_release_runs_all_success_deployed(self):
+        runs = self.release_runs(("Deploy us", "completed", "success"), ("Deploy eu", "completed", "success"))
+        out, _ = self.release(runs)
         self.assertEqual(out, "DEPLOYED s1 v1.3")
+
+    def test_release_run_failure_deploy_failed(self):
+        runs = self.release_runs(("Deploy us", "completed", "success"), ("Deploy eu", "completed", "failure"),
+                                 ("Notify", "completed", "cancelled"))
+        out, _ = self.release(runs)
+        self.assertEqual(out, "DEPLOY_FAILED s1 v1.3 Deploy eu,Notify")
+
+    def test_release_waits_for_every_run_before_failing(self):
+        runs = self.release_runs(("Deploy us", "in_progress", None), ("Deploy eu", "completed", "failure"))
+        out, _ = self.release(runs, "--max", "10m")
+        self.assertEqual(out, "TIMEOUT deploy acme/lib s1")
+
+    def test_release_rerun_replaces_failed_run(self):
+        runs = self.release_runs(("Deploy eu", "completed", "failure"), ("Deploy eu", "completed", "success"))
+        out, _ = self.release(runs)
+        self.assertEqual(out, "DEPLOYED s1 v1.3")
+
+    def test_release_no_runs_waits_out_the_grace_period(self):
+        out, _ = self.release([], "--max", "10m", now="2026-11-02T18:01:00+00:00")
+        self.assertEqual(out, "TIMEOUT deploy acme/lib s1")
+        out, _ = self.release([], now="2026-11-02T18:06:00+00:00")
+        self.assertEqual(out, "DEPLOYED s1 v1.3 no-release-runs")
+
+    def test_release_ignores_runs_from_an_earlier_release(self):
+        old = [dict(r, created_at="2026-10-01T00:00:00Z") for r in self.release_runs(("Deploy us", "completed", "success"))]
+        out, _ = self.release(old, "--max", "10m", now="2026-11-02T18:01:00+00:00")
+        self.assertEqual(out, "TIMEOUT deploy acme/lib s1")
 
     def test_repo_without_rule_exits_2(self):
         rc, out, err, calls = self.run_with({}, "deploy", "acme/other", "s1")

@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DEFAULT_CONFIG = "~/.claude/CLAUDE.md"
@@ -28,6 +28,8 @@ CONTEXT_PENDING = {"PENDING", "EXPECTED"}
 PR_FIELDS = "state,headRefOid,reviewDecision,statusCheckRollup,mergeStateStatus,mergeCommit"
 WORKFLOW_COMPARES = 5
 WORKFLOW_COUNTED = {"success", "failure", "timed_out"}  # cancelled, skipped and the rest are passed over
+RELEASE_GRACE = timedelta(minutes=5)  # time GitHub gets to start the runs a published release triggers
+RELEASE_RUN_OK = {"success", "skipped", "neutral"}
 DAGSTER_TERMINAL = {"SUCCESS", "FAILURE", "CANCELED"}
 RUN_QUERY = 'query($id:ID!){runOrError(runId:$id){__typename ... on Run{runId status}}}'
 BACKFILL_QUERY = (
@@ -37,6 +39,7 @@ BACKFILL_QUERY = (
 
 SLEEP = time.sleep
 CLOCK = time.monotonic
+NOW = lambda: datetime.now(timezone.utc)
 
 
 class WaitError(Exception):
@@ -298,8 +301,7 @@ def poll_deploy(repo, sha, rule):
         head = run_cmd(["gh", "api", f"repos/{repo}/branches/{rule['name']}", "--jq", ".commit.sha"]).strip()
         return f"DEPLOYED {sha} {head}" if contains(repo, sha, head) else None
     if rule["type"] == "release-tag":
-        tag = run_cmd(["gh", "api", f"repos/{repo}/releases/latest", "--jq", ".tag_name"]).strip()
-        return f"DEPLOYED {sha} {tag}" if contains(repo, sha, tag) else None
+        return poll_release(repo, sha)
     runs = json.loads(run_cmd([
         "gh", "run", "list", "--repo", repo, "--workflow", rule["name"], "--branch", rule["branch"],
         "--json", "databaseId,headSha,status,conclusion", "--limit", "20",
@@ -310,6 +312,34 @@ def poll_deploy(repo, sha, rule):
             word = "DEPLOYED" if r["conclusion"] == "success" else "DEPLOY_FAILED"
             return f"{word} {sha} {r['databaseId']}"
     return None
+
+
+def _parse_time(text):
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def poll_release(repo, sha):
+    """The latest release must contain the sha, then every run its publish triggered must finish green."""
+    release = json.loads(run_cmd(["gh", "api", f"repos/{repo}/releases/latest", "--jq", "{tag: .tag_name, at: .published_at}"]))
+    tag = release["tag"]
+    if not contains(repo, sha, tag):
+        return None
+    tag_sha = run_cmd(["gh", "api", f"repos/{repo}/commits/{tag}", "--jq", ".sha"]).strip()
+    runs = json.loads(run_cmd([
+        "gh", "api", f"repos/{repo}/actions/runs?event=release&head_sha={tag_sha}&per_page=100",
+        "--jq", "[.workflow_runs[] | {id, name, status, conclusion, created_at}]",
+    ]))
+    published = _parse_time(release["at"])
+    runs = [r for r in runs if _parse_time(r["created_at"]) >= published - timedelta(minutes=1)]  # skip older releases of this commit
+    if not runs:
+        return f"DEPLOYED {sha} {tag} no-release-runs" if NOW() - published >= RELEASE_GRACE else None
+    newest = {}
+    for r in sorted(runs, key=lambda r: r["id"]):  # a re-run of a workflow replaces its earlier run
+        newest[r["name"]] = r
+    if any(r["status"] != "completed" for r in newest.values()):
+        return None
+    failed = [name for name, r in newest.items() if r["conclusion"] not in RELEASE_RUN_OK]
+    return f"DEPLOY_FAILED {sha} {tag} {','.join(failed)}" if failed else f"DEPLOYED {sha} {tag}"
 
 
 def poll_dagster(kind, ident, dagster, token):

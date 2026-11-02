@@ -40,6 +40,7 @@ The registry, cursors, ticks and expiry stay behind and are deleted in PR 2.
   - Keep only runs whose conclusion is `success`, `failure` or `timed_out`; cancelled and skipped runs are passed over.
   - Of the newest five of those, the newest whose head contains the sha decides. "Contains" means `gh api compare` says `identical` or `ahead`.
   - Exits `DEPLOYED <sha> <run id or tag>` or `DEPLOY_FAILED <sha> <run id>`.
+  - `release-tag` (added 2026-11-02): once the latest release holds the sha, it also waits for every workflow run that release triggered. `DEPLOY_FAILED <sha> <tag> <run names>` on a failed run; `DEPLOYED <sha> <tag> no-release-runs` if none start within 5 minutes.
 - `wait-for dagster run|backfill <id>`: polls the Dagster GraphQL status, reading the token from the env file on the `Dagster` config line itself (never printed). Exits `SUCCEEDED` / `FAILED <status>`. A backfill counts as done only when every partition is terminal.
 - **Common to all three:**
   - Poll every 5m, with `--every` to override.
