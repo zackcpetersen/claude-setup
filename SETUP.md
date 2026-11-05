@@ -197,7 +197,7 @@ Work through these once per machine:
 - Needs `gh`, Python 3, and `~/bin/wait-for` (linked by `install.sh`). The sweep needs the Slack MCP plugin; Dagster waits need the `Dagster` config line.
 
 ### `skills/review-pr/SKILL.md`
-- No file edits. Needs `gh` and the built-in `/code-review` skill. Uses the writing-voice skill named in the `### Writing voice` section of `~/.claude/CLAUDE.md` when present, otherwise the voice rules written into `dispatch-prompt.md`.
+- No file edits. Needs `gh` and the built-in `/code-review` skill. Uses the writing-voice skill named in the `### Writing voice` section of `~/.claude/CLAUDE.md` when present, otherwise only the `reviewing-prs` comment rules it pastes into `dispatch-prompt.md`.
 
 ### `bin/query_db`
 - No script edits needed - it's fully generic: `query_db <env-file> "<sql>"`.

@@ -15,41 +15,27 @@ Default effort `medium`. The repo comes from the URL, from `--repo`, or from the
 
 ## Config
 
-- Rules: the `reviewing-prs` skill holds the triage, verdict, comment and posting rules; read it first. This file is the mechanics.
-- Voice: if `~/.claude/CLAUDE.md` has a `### Writing voice` section, invoke the skill it names (and fetch its voice page) before drafting comments. Otherwise use the voice rules in `dispatch-prompt.md`.
+- Rules: the `reviewing-prs` skill holds every rule for what gets said: triage, verdict, comment writing, the review body and posting approval. Read it first. This file is only the steps and does not restate them.
+- Voice: if `~/.claude/CLAUDE.md` has a `### Writing voice` section, invoke the skill it names (and fetch its voice page) before drafting comments. Otherwise the `reviewing-prs` comment rules pasted into `dispatch-prompt.md` are the whole style guide.
 - Tracker: the `### Issue Tracker` section gives the ticket URL format, used only to read the linked ticket for context.
-- Posting rule: GitHub review comments have no draft mechanism. The user approves each comment before anything is posted, every time, even when they asked for the review to be posted up front. Show the list, get a yes, then post.
 
 ## Procedure
 
 1. **Dispatch the reviewer** (`Agent`, `general-purpose`, `model: opus`) with the prompt in `dispatch-prompt.md`. It runs `/code-review <effort> <PR>` (effort first, never `--comment`, never `--fix`), reads the PR description, linked ticket and existing review threads, and returns a verdict plus drafted comments. It posts nothing. `/code-review` forks its own background reviewer, and that reviewer's findings arrive as a task notification in the main session, not inside the wrapper agent, which goes idle waiting. When that happens, forward the findings to the wrapper with `SendMessage` and let it draft; do not draft in the main session.
 
    If the review was asked for in Slack (a DM, a channel post or a thread), add `:eyes:` to that request message with `slack_add_reaction` as soon as the reviewer is dispatched.
-2. **Triage** the findings it returns:
-   - `high`: would break behaviour, data, security, or cost. Blocks approval. Posted as a normal inline comment.
-   - `medium`: worth fixing, does not block. Posted inline prefixed `nit: `.
-   - `low`: dropped and listed to the user in one line each, except a one-line fix, which is posted as `nit: `.
-   - Anything an existing review thread already raised is dropped as a duplicate.
-3. **Present** to the user: PR summary (3 lines), verdict (APPROVE when there are no highs, otherwise COMMENT), then each comment as `file:line`, severity, the drafted text. Ask for approval; the user can drop or reword any item or post only the highs. No review body (summary comment) is drafted or posted unless the user asks for one; the inline comments carry the review.
+2. **Triage** the findings it returns with the `reviewing-prs` triage table, and drop anything an existing review thread already raised.
+3. **Present** to the user: PR summary (3 lines), the verdict per `reviewing-prs`, then each comment as `file:line`, severity, the drafted text, plus a one-line review body only when `reviewing-prs` says one is needed. Ask for approval per its posting rules; the user can drop or reword any item or post only the highs.
 4. **Post** one review with every approved comment in a single call, so the author gets one notification:
 
    ```bash
    gh api repos/<owner>/<repo>/pulls/<n>/reviews --input review.json
    ```
 
-   where `review.json` is `{"event":"APPROVE"|"COMMENT","body":"","comments":[{"path":"<file>","line":<n>,"side":"RIGHT","body":"<text>"}]}`. `body` stays empty unless the user asked for a summary comment, and no comment or body ever carries a signature or attribution line. `line` is the line number in the new file for `RIGHT`, the old file for `LEFT`. If GitHub rejects a line as outside the diff, fall back to the nearest changed line in that hunk and say so.
+   where `review.json` is `{"event":"APPROVE"|"COMMENT","body":"","comments":[{"path":"<file>","line":<n>,"side":"RIGHT","body":"<text>"}]}`. `body` is the approved one-line summary from step 3, or empty. No signature or attribution line, per `reviewing-prs`. `line` is the line number in the new file for `RIGHT`, the old file for `LEFT`. If GitHub rejects a line as outside the diff, fall back to the nearest changed line in that hunk and say so.
 5. **Verify** with `gh pr view <n> --json reviews,reviewDecision` and report: review id, event, comment count, and the PR link.
 
    For a review asked for in Slack: once an APPROVE has posted, add the workspace's approval emoji to the same request message (`:approved_github:` where it exists; if `slack_search_emojis` finds nothing or the add fails with `invalid_name`, use `:white_check_mark:`). A COMMENT review gets no second reaction. Reactions need no approval. Log each one as a line under `## Reactions` in the board scratchpad (append-only, `HH:MMZ <emoji> on <channel> <ts>`), never in the Drafts table, which wrap checks as drafts.
-
-## Comment rules
-
-- Questions and suggestions, never verdicts. "Could this double-count when the account changes inside the window?" not "This double-counts." The reviewer may be wrong, and a question invites the author to explain.
-- One to three short sentences and under 60 words, plain English, acronyms spelled out on first use.
-- `nit: ` prefix on every medium.
-- No em-dashes or en-dashes, plain hyphens only. No "honestly", "genuinely", "hope", "maybe", "try", "if possible", "might want to consider". No exclamation hype.
-- Friendly and collaborative. Direct, not brusque.
-- No summary comment by default. When the user asks for one, it is one line: "LGTM, two small nits inline." or "Two questions inline before I approve, mostly around X."
 
 ## Model discipline
 
@@ -57,16 +43,14 @@ Reviewer agent: opus (judgment). The main session never reads the diff itself; i
 
 ## Common mistakes
 
+Rule mistakes (approving with a high, posting before the list, findings stated as facts, a summary body) are in `reviewing-prs`. These are the step mistakes.
+
 | Mistake | Fix |
 |---|---|
-| Posting before the user has seen the list | The user's "review and post" is the intent; the per-comment yes is the approval. Always show the list first |
 | `/code-review 2249 medium` | Effort level goes first. The skill reads its first token as the level |
 | Passing `--comment` or `--fix` to `/code-review` | Posting is this skill's step 4, with one combined review; fixes are the author's job |
-| Approving with a high finding outstanding | Highs block. Use `COMMENT` and say what needs an answer |
 | One `gh pr comment` per finding | One review submission, one notification, inline anchors |
 | Reviewing the user's own PR | That is `/pr`'s self review. Stop and say so |
-| Stating findings as facts | Turn every comment into a question or a suggestion before presenting it |
-| Posting a summary comment the user did not ask for | The review body is empty by default. Inline comments only |
 | Running the reviewer on sonnet | The wrapper agent runs on opus; its model is what puts the forked review on opus |
 | Logging a reaction in the Drafts table | Reactions go under `## Reactions` in the board scratchpad |
 | Waiting on the wrapper agent while `/code-review`'s findings sit in the main session | The forked reviewer reports to the main session. Forward its findings to the wrapper and let it draft |
