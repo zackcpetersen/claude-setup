@@ -22,13 +22,13 @@ These stand on their own. They are the complete rule set when no live page is co
 **Do**
 - Get to the point, then keep moving. Short kickers keep pace ("Let's get going." "We're in.")
 - Break intimidating things into small labeled chunks. Decompose, don't dumb down.
-- Lead with a map: numbered steps, clear headers. Steps over paragraphs.
+- In write-ups and announcements, lead with a map: numbered steps, clear headers. Steps over paragraphs.
 - Make a clear recommendation and say why. Commit to a position.
 - Call out gotchas explicitly: "Note:", "Pro tip:", "Important:" - include the why.
 - Every concept ships with a concrete example or command.
 - Flag security and best-practice issues proactively.
 - Brief, earned encouragement. Mark real wins, skip the cheerleading.
-- Warm and human in emails and messages. Collaborative framing: "we" and "let's".
+- Warm and human in emails and messages. First person: "I" for your own work, never "we". "let's" is fine for a shared next step.
 
 **Never**
 - "honestly" or "genuinely"
@@ -50,28 +50,20 @@ These stand on their own. They are the complete rule set when no live page is co
 
 Scan the draft for the em-dash character (U+2014), "honestly", "genuinely", "hope", "maybe", "if possible", "try to", "thanks in advance", and exclamation-heavy hype. Fix every hit, then deliver. The lead sentence must carry the point.
 
-## Thread replies in Slack (asks, acks, decisions, status updates)
+## Messages by situation
 
-Any reply inside an existing thread is one or two casual sentences: the outcome and who has it, then stop. This covers quick asks, agreeing with a teammate, and keeping a stakeholder updated. No evidence trail, no options menu, no rollout plan.
+Defaults for any reply inside an existing thread or DM: don't restate what the other person already knows (if they posted the numbers, don't quote them back), don't explain the mechanism or name internal systems to people outside engineering ("a better way forward" beats naming the component), and no offers of help or sign-off lines. "I think" is fine, and so are lowercase and a dash joining two thoughts; the banned hedge words above stay banned. Structured, numbered messages are only for announcements, write-ups and new top-level posts.
 
-- Don't restate what the other person already knows. If they posted the numbers, don't quote them back.
-- Don't explain the mechanism or name internal systems to people outside engineering. "a better way forward" beats naming the component.
-- Don't lay out next steps, promise timing, or commit to follow-up work in the reply. Say who is working on it; the rest comes later.
-- No offers of help, no sign-off lines.
-- A light hedge is fine ("I think I need the Launcher role"), so is lowercase and a dash joining two thoughts. It reads human.
+| Situation | Shape | Never | Sent example |
+|---|---|---|---|
+| Reply in a Slack thread (ask, ack, decision, status) | One or two casual sentences: the outcome and who has it, then stop | Evidence trail, options menu, rollout plan, next steps, timing promises, follow-up commitments | "@teammate I don't think I have the permissions to run the jobs - can you update it for me? I think I need Launcher" |
+| Delivering a write-up (a file or page carries the content) | One casual line: what it is, who produced it (say when an AI did the analysis), the ask ("lmk what you think") | Summarising the file or restating its headline findings; the reader opens the file | - |
+| Heads-up or plan change in a DM (time off, a date moving, a plan for while you are out) | Three to five plain sentences: the heads-up, the plan in one breath, what you want them to do, then a short check-in question ("does that work for you?", "Any issues with this?"). Open with "Heads up" or "Quick heads up". Say when things happen ("this week") | Ending on a statement, opening with "Quick one", name-dropping who already approved (ask for their own view: "Any concerns on your side with this approach?"), saying a process runs "on its own" | "Quick heads up on the agent move - I'm out Mon-Wed next week, so I'm pushing the prod flip to Thursday or Friday rather than leaving it running unwatched. Staging has been solid since this morning's deploy. Any issues with this?" |
+| Reply to a go-ahead in a group channel (people said yes, maybe with a side idea) | One line saying it is happening | Recapping who said what, answering each person, thanking the group, arguing scope or parking someone's bigger idea in the channel (an out-of-scope side idea goes on the board or in a ticket) | "Working on the permission change now!" |
+| Acking a PR author's DM after you reviewed their PR | One line: thanks plus "approved with some comments" | Repeating the findings; they live on the PR | - |
+| Asking for a PR review in a team channel | The one-line shape in the `reviewing-prs` skill (Your own PRs) | A request, CI state, dates, a closing sentence | - |
 
-Structured, numbered messages are for announcements, write-ups, and new top-level posts.
-
-When a file or page carries the content (a write-up, an analysis, a results doc), the message that delivers it is one casual line: what it is, who produced it (say when an AI did the analysis), and the ask ("lmk what you think"). Never summarise the file in the message; the reader opens the file. A draft that restates the headline findings is the file's job done twice.
-
-Examples (drafted vs sent):
-- Quick ask. Too much: "I'm a Viewer on every deployment, so I can't launch runs. Both the UI and a user token come back UnauthorizedError. Two options: 1) grant me Launcher and I'll run the jobs, 2) launch them yourself and I'll pull the logs." Right: "@teammate I don't think I have the permissions to run the jobs - can you update it for me? I think I need Launcher"
-- Agreeing to drop a PR after a teammate's analysis. Drafted: two paragraphs restating their numbers, naming the rule that broke, laying out a staged rollout, offering to use their doc. Sent: "This is good to know - I'll drop my pr and let's go with your approach instead"
-- Acking a PR author's DM after you reviewed their PR: one line, thanks plus "approved with some comments". The findings live on the PR; the DM never repeats them.
-- Updating a stakeholder on a fix that changed direction. Drafted: two paragraphs on the mechanism, the staged rollout, and a cleanup promise. Sent: "Update here - found out there's a better way forward than my proposed fix. Working with @teammate on it"
-
-## Review requests in team channels
-
-One line, matching how the team posts them. The PR link is the first word, as a hyperlink labelled "PR", then "for" and a plain description of what it does. No "Review request:" prefix, no CI state, no ask ("could someone take a pass"), no dates, no closing sentence.
-
-Shape: `<PR link|PR> for <what it does in plain words>`. The voice page holds the real examples.
+Drafted vs sent (what the cut looks like):
+- Thread reply, agreeing to drop a PR after a teammate's analysis. Drafted: two paragraphs restating their numbers, naming the rule that broke, laying out a staged rollout, offering to use their doc. Sent: "This is good to know - I'll drop my pr and let's go with your approach instead"
+- Thread reply, updating a stakeholder on a fix that changed direction. Drafted: two paragraphs on the mechanism, the staged rollout, and a cleanup promise. Sent: "Update here - found out there's a better way forward than my proposed fix. Working with @teammate on it"
+- Go-ahead reply. Drafted: thanks to the group, a recap of who would turn the switch on for whom, and a teammate's bigger idea parked in the channel. Sent: "Working on the permission change now!"
