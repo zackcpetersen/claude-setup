@@ -46,7 +46,8 @@ If there is nothing to report, reply with exactly `NOTHING`. Keep every line pla
 ## What the main session does with the report
 
 - `DRAFT` lines: relay them, with the draft link. The user sends nothing without approving.
-- `PROPOSE` and `NUDGE?` lines: ask them in one multi-select question, up to 4. A yes on a PROPOSE starts the matching `wait-for`. A yes on a NUDGE? means draft the nudge for approval. A no on either goes into `declined` with today's date.
+- `PROPOSE` and `NUDGE?` lines: first drop any line an existing rule, a declined entry or an earlier answer already settles (apply it and say so in one line). Ask the rest in one multi-select question, up to 4. A yes on a PROPOSE starts the matching `wait-for`. A yes on a NUDGE? means draft the nudge for approval. A no on either goes into `declined` with today's date.
+- `DRAFT` lines whose target thread a rule says to stay out of (for example, an external contact's thread the user does not answer unprompted): report "delete this one" with the reason instead of asking what to do.
 - `LEFTOVER`: write its timestamp as `last_sweep`. With no `LEFTOVER`, write now. Rollover items are never lost.
 - `NOTHING`: say nothing, and still update `last_sweep`.
 - The agent only reads the state file. The main session writes it, in the same turn it relays the report.

@@ -29,6 +29,7 @@
 - This applies to ALL written output, not just chat: PR descriptions, commit messages, ticket comments, Slack messages, docs pages, code comments, summaries, etc. Lead with plain-language "what changed and why it matters." Save deep technical detail for when it's asked for or truly required.
 - Answer a direct question first, before continuing work. For 'where is this session', give the project dir, worktree path and session id.
 - Interview me: whenever you have a batch of open questions (planning, missing details, decisions), ask them with the AskUserQuestion tool, up to 4 at a time, recommended option first and marked (Recommended). Do not bury questions in a prose list. A single quick yes/no can stay in chat.
+- Question gate: before asking, check (1) can a source answer it (Slack, GitHub, the tracker, Dagster, files, a database), (2) does a rule, a recorded decision or an earlier answer settle it, (3) is it mine to decide (a send, a merge, a prod run, money, scope, timeline, anything hard to undo). Ask only when all three pass. Otherwise check or apply, and report in one line. "Interview me" means ask what passes the gate, not everything pending.
 
 ## Review comments (GitHub reviews, PR replies, anything an agent posts on a PR)
 - Short: one to three sentences, under 60 words. One point per comment.

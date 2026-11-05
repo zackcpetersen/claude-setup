@@ -22,6 +22,7 @@ Nothing in this skill names a company, person, channel or repo. Those come from 
 - In the moment: the user opens a PR, pushes a deploy, starts a Dagster run, or says "tell me when". Ask once: "Watch #n? (a) merge when green and approved (b) just tell me (c) no".
 - From the sweep: it reports `PROPOSE` lines. Ask them together.
 - Never start a wait on your own.
+- Gate before asking: a PROPOSE or NUDGE? that an existing rule, a declined entry or an earlier answer in the session already settles is applied (or dropped into `declined`) and reported in one line, not asked again. The same goes for anything the session can verify itself (a thread already answered, a PR already merged). Only items that are the user's call reach the question.
 
 ## Start a wait
 
