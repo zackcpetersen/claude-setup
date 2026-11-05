@@ -23,6 +23,8 @@ Default effort `medium`. The repo comes from the URL, from `--repo`, or from the
 ## Procedure
 
 1. **Dispatch the reviewer** (`Agent`, `general-purpose`, `model: opus`) with the prompt in `dispatch-prompt.md`. It runs `/code-review <effort> <PR>` (effort first, never `--comment`, never `--fix`), reads the PR description, linked ticket and existing review threads, and returns a verdict plus drafted comments. It posts nothing. `/code-review` forks its own background reviewer, and that reviewer's findings arrive as a task notification in the main session, not inside the wrapper agent, which goes idle waiting. When that happens, forward the findings to the wrapper with `SendMessage` and let it draft; do not draft in the main session.
+
+   If the review was asked for in Slack (a DM, a channel post or a thread), add `:eyes:` to that request message with `slack_add_reaction` as soon as the reviewer is dispatched.
 2. **Triage** the findings it returns:
    - `high`: would break behaviour, data, security, or cost. Blocks approval. Posted as a normal inline comment.
    - `medium`: worth fixing, does not block. Posted inline prefixed `nit: `.
@@ -37,6 +39,8 @@ Default effort `medium`. The repo comes from the URL, from `--repo`, or from the
 
    where `review.json` is `{"event":"APPROVE"|"COMMENT","body":"","comments":[{"path":"<file>","line":<n>,"side":"RIGHT","body":"<text>"}]}`. `body` stays empty unless the user asked for a summary comment, and no comment or body ever carries a signature or attribution line. `line` is the line number in the new file for `RIGHT`, the old file for `LEFT`. If GitHub rejects a line as outside the diff, fall back to the nearest changed line in that hunk and say so.
 5. **Verify** with `gh pr view <n> --json reviews,reviewDecision` and report: review id, event, comment count, and the PR link.
+
+   For a review asked for in Slack: once an APPROVE has posted, add the workspace's approval emoji to the same request message (`:approved_github:` where it exists; if `slack_search_emojis` finds nothing or the add fails with `invalid_name`, use `:white_check_mark:`). A COMMENT review gets no second reaction. Reactions need no approval. Log each one as a line under `## Reactions` in the board scratchpad (append-only, `HH:MMZ <emoji> on <channel> <ts>`), never in the Drafts table, which wrap checks as drafts.
 
 ## Comment rules
 
@@ -63,4 +67,6 @@ Reviewer agent: opus (judgment). The main session never reads the diff itself; i
 | Reviewing the user's own PR | That is `/pr`'s self review. Stop and say so |
 | Stating findings as facts | Turn every comment into a question or a suggestion before presenting it |
 | Posting a summary comment the user did not ask for | The review body is empty by default. Inline comments only |
+| Running the reviewer on sonnet | The wrapper agent runs on opus; its model is what puts the forked review on opus |
+| Logging a reaction in the Drafts table | Reactions go under `## Reactions` in the board scratchpad |
 | Waiting on the wrapper agent while `/code-review`'s findings sit in the main session | The forked reviewer reports to the main session. Forward its findings to the wrapper and let it draft |

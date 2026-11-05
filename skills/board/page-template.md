@@ -139,6 +139,9 @@ Compact dumps per source: ticket keys, PR numbers, thread timestamps, branch nam
 |---|---|---|---|---|---|
 One row per draft the session created today (Slack draft id, email draft id, or "held" for a tracker comment awaiting approval). Expected is `send` or `discard` (superseded drafts). Status starts `pending` and becomes `sent HH:MMZ`, `scheduled`, `discarded` or `not found` when `wrap` verifies it.
 
+## Reactions
+Append-only, one line per Slack reaction the session added (review asks picked up or approved): `HH:MMZ <emoji> on <channel> <ts>`. Carried forward on every scratchpad rewrite that day; not a draft, so wrap does not check it.
+
 ## Work registry
 | Ticket | Repo | Worktree path | Branch | Stage | Plan file | PR | Last agent (name, session) | Updated |
 |---|---|---|---|---|---|---|---|---|
