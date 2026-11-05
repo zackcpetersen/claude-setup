@@ -117,7 +117,7 @@ Work through each blocker using the action matrix below.
    - Nit / style / subjective → ask the user whether to address or dismiss.
    - False positive (especially common from bots) → propose dismissing it with a brief reply, get user sign-off.
 4. After the user has approved the plan and you've made the agreed changes, use `/pr` to commit and push.
-5. Reply to each comment on GitHub confirming what was changed (or why it was dismissed):
+5. Draft a reply to each comment confirming what was changed (or why it was dismissed), following the `reviewing-prs` skill's rule for replies on your own PR (one line, thankful). Show the replies and post only the ones the user approves:
    ```bash
    gh api repos/{owner}/{repo}/pulls/<number>/comments/<comment-id>/replies \
      --method POST --field body="<response>"
@@ -143,11 +143,11 @@ gh pr update-branch <number>
 
 #### Awaiting Review (Stale)
 
-If a PR has been waiting for review for more than 1 day with no activity:
+If a PR has been waiting for review for more than 3 business days with no activity:
 1. Identify who was requested as a reviewer.
-2. Leave a gentle nudge comment:
+2. Draft a short nudge comment in the user's voice (the skill named in the `### Writing voice` section of CLAUDE.md, if any) and post it only after the user approves it:
    ```bash
-   gh pr comment <number> --body "Friendly reminder - this PR is ready for review whenever you get a chance!"
+   gh pr comment <number> --body "<approved nudge text>"
    ```
 3. Re-request the review if it was dismissed:
    ```bash
@@ -177,6 +177,7 @@ Once comments are clear AND CI is green AND the PR is approved, do not merge aut
 3. **Never modify PRs in repos you don't own** - check `gh repo view` ownership first if uncertain.
 4. **Confirm before pushing code changes** to a PR - summarize what you changed and get approval before running `/pr`.
 5. **Skip draft PRs** unless the user explicitly asks you to handle them.
+6. **Show every GitHub comment or reply before posting** - each one needs the user's yes; there is no draft mechanism.
 
 ---
 
@@ -189,7 +190,7 @@ After processing all PRs, provide a structured summary:
 
 ### ✅ Actions Taken
 - PR #42 - Fixed lint error in auth.py, pushed update
-- PR #38 - Left nudge comment for reviewer @alice
+- PR #38 - Posted the approved nudge comment for reviewer @alice
 
 ### ⚠️ Needs Your Input
 - PR #45 - Merge conflict in models.py (overlapping changes with main) - manual resolution needed

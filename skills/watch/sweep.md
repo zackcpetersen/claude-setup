@@ -23,7 +23,7 @@ For each item, oldest first, handle at most 4 in total. Leave the rest for the n
 
 - A reply is needed: create a threaded draft with `slack_send_message_draft`, in the user's voice as given in {{voice_rules}}. Report `DRAFT <channel> <thread> <draft id> <one-line gist>`.
 - Something is worth watching (an open PR, a thread waiting on a person): report `PROPOSE <one plain-English line>`. Put the key in brackets at the end: `[pr:<owner/repo>#<n>]` or `[slack:<channel>:<thread_ts>]`.
-- The user's own ask in a thread, older than 1 business day with no reply, and not in the declined list (look back up to 5 business days, not just since {{last_sweep}}): report `NUDGE? <one plain-English line> [slack:<channel>:<thread_ts>]`.
+- The user's own ask in a thread, older than 3 business days with no reply (the board's nudge-due rule), and not in the declined list (look back up to 5 business days, not just since {{last_sweep}}): report `NUDGE? <one plain-English line> [slack:<channel>:<thread_ts>]`.
 - A reply met the ask: report nothing, unless a follow-up is needed.
 
 If anything is left over because of the 4-item cap, end with `LEFTOVER <timestamp of the oldest item not handled>`.
