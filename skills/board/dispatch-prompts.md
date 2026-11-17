@@ -20,6 +20,8 @@ Every `{{placeholder}}` maps to a key in the `### Work board` section of `~/.cla
 | `slack_user_id`, `slack_channels`, `tracker_project`, `tracker_epics`, `github_org`, `worktree_config`, `worktree_script` | the `### Work board` section of `~/.claude/CLAUDE.md` |
 | `prev_done_today`, `prev_rollover_time` | the previous row's Done today section, and the `Rollover started:` line in its scratchpad's Rollover log (else its Date at 00:00 UTC) |
 | `drafts_today` | the scratchpad's `## Drafts today` table (wrap only) |
+| `declined` | the `declined` keys in the watch-slack state file (Work board section), dropping any older than 7 days; `none` when the file is missing |
+| `running_waits` | the main session's list of running `~/bin/wait-for` commands; `none` when there are none |
 | `tracker_report`, `github_report`, `slack_report`, `email_report` | this rollover's gatherer replies, verbatim |
 | `confirmed_goal`, `carried_needs_you`, `blocked_rows` | the new row's Today's goal, Needs you and Blocked sections after the carry |
 
@@ -72,6 +74,7 @@ Part 1, GitHub:
 5. Dependabot PRs on the main repos that fix an open security alert: count plus the ones that are major bumps.
 
 6. Activity since {{since_date}}: `gh search prs --author @me --merged ">={{since_date}}" --owner {{github_org}}` and `gh search prs --reviewed-by @me --updated ">={{since_date}}" --owner {{github_org}}`, plus approvals and reviews received on the user's PRs. One line each: repo, PR number, title, head branch, what happened, UTC timestamp, ticket key if the title or branch names one.
+7. Proposals: for each open PR by the user from step 1 that is not in the running waits and not in the declined list, one line `PROPOSE <plain-English line> [pr:<owner/repo>#<n>]`. Running waits: {{running_waits}}. Declined: {{declined}}.
 
 Part 2, local checkouts:
 1. `{{worktree_script}} list`, then loop over `.repos[].repo_path` and `.repos[].worktree_base` from the worktree config json ({{worktree_config}}) and scan each git checkout under them (the repo itself, and every directory inside each worktree base).
@@ -81,7 +84,7 @@ Part 2, local checkouts:
 Registry rows to check: {{registry_rows}}
 Epic child keys to search for: {{epic_child_keys}}
 
-Return under 120 lines: Table A open PRs; Table B review/reply owed; "Epic PRs by others"; "Activity since {{since_date}}"; named branch states; Table C local checkouts with a suggested disposition (active / at-risk / stale-remove); "Things that look off".
+Return under 120 lines: Table A open PRs; Table B review/reply owed; "Epic PRs by others"; "Activity since {{since_date}}"; named branch states; Table C local checkouts with a suggested disposition (active / at-risk / stale-remove); "Proposals" (the PROPOSE lines); "Things that look off".
 ```
 
 ## slack-status (model: opus, Explore)
@@ -97,10 +100,12 @@ Gather:
 3. Outreach threads the user owns (from the previous scratchpad, passed in below): new replies since last sync, who the ball is with, whether a nudge is due (3 business days of silence), whether a nudge already went out.
 4. On-call this week: {{oncall}}. If `no`, skip this step entirely, do not read the `(alerts)` channels, and leave the "Alerts possibly unhandled" section out. If `yes`: only for channels tagged `(alerts)` in {{slack_channels}}, anything in the last 3 days tagged to the user's area that has no recovery or reply. Skip untagged channels either way.
 5. `from:<@{{slack_user_id}}> after:{{since_date}}`: commitments the user made that are still open.
+6. Nudges: threads where the user asked something, older than 3 business days with no reply (look back up to 5 business days). Skip keys in the declined list. One line each: `NUDGE? <plain-English line> [slack:<channel>:<thread_ts>]`.
 
 Outreach threads to check: {{outreach_threads}}
+Declined (do not raise again): {{declined}}
 
-Return under 120 lines with thread ts values on every line: "Waiting on user" (with urgency today / this week / low), "Waiting on others" (per thread: ball with, since, nudge due or sent), "Commitments made since {{since_date}}", "Posts sent since {{since_date}}" (one line per post or reply by the user: channel, thread, gist, UTC time), "Alerts possibly unhandled", "Things that look off", and a one-line coverage caveat.
+Return under 120 lines with thread ts values on every line: "Waiting on user" (with urgency today / this week / low), "Waiting on others" (per thread: ball with, since, nudge due or sent), "Commitments made since {{since_date}}", "Posts sent since {{since_date}}" (one line per post or reply by the user: channel, thread, gist, UTC time), "Alerts possibly unhandled", "Nudges" (the NUDGE? lines), "Things that look off", and a one-line coverage caveat.
 ```
 
 ## email-status (model: sonnet, Explore)

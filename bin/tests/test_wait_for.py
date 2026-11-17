@@ -620,5 +620,189 @@ class DagsterTests(Base):
         self.assertNotIn("sekret-123", out + err)
 
 
+SLACK_MD = """### Work board (`board` skill)
+- Slack user id: U0SELF
+
+### Watches (`watch` skill)
+- Connectors: slack mcp__plugin_slack_slack__
+- Slack poll: on
+- Slack poll triggers: mentions, dms
+- Slack poll user groups: @team-a
+- Slack poll ignore: C0NOISE
+- Slack poll state file: {tmp}/state/slack-poll.json
+"""
+
+
+def claude_out(events, cost=0.004, wrap="Here you go: {}"):
+    answer = wrap.format(json.dumps({"events": events}))
+    return json.dumps([{"type": "system", "subtype": "init"},
+                       {"type": "result", "is_error": False, "result": answer, "total_cost_usd": cost}])
+
+
+def ev(ts, **kw):
+    base = {"channel_id": "D0DM", "channel_name": "DM with A", "ts": ts, "thread_ts": None, "author": "A",
+            "author_id": "U0OTHER", "kind": "dm", "text": "hi", "permalink": "https://example.invalid/p"}
+    base.update(kw)
+    return base
+
+
+class SlackTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.cfg_path.write_text(SLACK_MD.format(tmp=self.tmp))
+        self.state = self.tmp / "state" / "slack-poll.json"
+        for target, repl in (("NOW", lambda: W.datetime(2026, 1, 5, 12, 0, tzinfo=W.timezone.utc)),
+                             ("PLUGIN_CACHE", str(self.tmp / "no-cache")), ("USER_SETTINGS", ())):
+            p = mock.patch.object(W, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+        self.plugin = self.tmp / "no-cache" / "market" / "slack" / "1.0.0"
+        self.plugin.mkdir(parents=True)
+        (self.plugin / ".mcp.json").write_text(json.dumps({"mcpServers": {"slack": {"type": "http", "url": "https://example.invalid"}}}))
+
+    def slack(self, outputs, *argv):
+        seq = iter(outputs)
+        calls = []
+
+        def run(args, cwd):
+            calls.append((list(args), cwd))
+            out = next(seq)
+            if isinstance(out, Exception):
+                raise out
+            return out
+
+        with mock.patch.object(W, "run_claude", side_effect=run):
+            rc, out, err = self.main("slack", *argv)
+        return rc, out, err, calls
+
+    def test_once_no_events_prints_nothing_and_saves_cursor(self):
+        rc, out, err, calls = self.slack([claude_out([])], "--once")
+        self.assertEqual((rc, out), (0, "NOTHING"), err)
+        state = json.loads(self.state.read_text())
+        self.assertEqual(state["cursor"], int(W.NOW().timestamp()))
+        self.assertEqual(state["seen"], [])
+        prompt = calls[0][0][2]
+        self.assertIn("U0SELF", prompt)
+        self.assertIn(str(int(W.NOW().timestamp()) - 15 * 60), prompt)  # first run looks back 15 minutes
+        self.assertIn("mentions, dms", prompt)
+        self.assertNotIn("{{", prompt)
+
+    def test_new_events_write_file_and_print_one_line(self):
+        rc, out, err, calls = self.slack([claude_out([ev("1.1"), ev("1.2", text="x" * 900)])], "--once")
+        word, count, path = out.split(" ")
+        self.assertEqual((rc, word, count), (0, "SLACK", "2"))
+        data = json.loads(Path(path).read_text())
+        self.assertEqual([e["ts"] for e in data["events"]], ["1.1", "1.2"])
+        self.assertEqual(len(data["events"][1]["text"]), 500)
+        self.assertEqual(Path(path).parent, self.tmp / "state" / "slack-poll-events")
+        self.assertEqual(calls[0][1], str(self.tmp / "state" / "slack-poll-events"))  # neutral cwd
+        self.assertEqual(json.loads(self.state.read_text())["seen"], ["D0DM:1.1", "D0DM:1.2"])
+
+    def test_seen_messages_are_not_reported_again(self):
+        self.slack([claude_out([ev("1.1")])], "--once")
+        rc, out, _, calls = self.slack([claude_out([ev("1.1"), ev("1.3")])], "--once")
+        self.assertEqual(out.split(" ")[1], "1")
+        # the second run searches from the saved cursor minus the overlap
+        self.assertIn(str(int(W.NOW().timestamp()) - 60), calls[0][0][2])
+        rc, out, _, _ = self.slack([claude_out([ev("1.1"), ev("1.3")])], "--once")
+        self.assertEqual(out, "NOTHING")
+
+    def test_own_and_ignored_messages_dropped(self):
+        events = [ev("1.1", author_id="U0SELF"), ev("1.2", channel_id="C0NOISE"), ev("", channel_id="")]
+        rc, out, _, _ = self.slack([claude_out(events)], "--once")
+        self.assertEqual(out, "NOTHING")
+
+    def test_parse_failures_count_toward_max_errors(self):
+        bad = [json.dumps({"type": "result", "result": "no json here"}),
+               json.dumps([{"type": "result", "is_error": True, "subtype": "error_max_budget_usd"}]),
+               subprocess.CalledProcessError(1, ["claude"], stderr="not logged in")]
+        rc, out, _, calls = self.slack(bad)
+        self.assertEqual((rc, out), (0, "ERROR not logged in"))
+        self.assertEqual(len(calls), 3)
+        self.assertFalse(self.state.exists())
+
+    def test_once_reports_a_parse_failure_as_error(self):
+        rc, out, _, _ = self.slack(["not json"], "--once")
+        self.assertTrue(out.startswith("ERROR "))
+
+    def test_loop_sleeps_until_an_event(self):
+        rc, out, _, calls = self.slack([claude_out([]), claude_out([]), claude_out([ev("2.1")])], "--every", "1m")
+        self.assertTrue(out.startswith("SLACK 1 "))
+        self.assertEqual(self.sleeps, [60.0, 60.0])
+
+    def test_default_max_is_twelve_hours(self):
+        rc, out, _, calls = self.slack([claude_out([])] * 3, "--every", "6h")
+        self.assertEqual(out, "TIMEOUT slack")
+
+    def test_command_is_read_only_and_cheap(self):
+        _, _, _, calls = self.slack([claude_out([])], "--once")
+        args = calls[0][0]
+        self.assertEqual(args[:2], ["claude", "-p"])
+        for flag, value in (("--model", "haiku"), ("--tools", ""), ("--permission-mode", "dontAsk"),
+                            ("--output-format", "json")):
+            self.assertEqual(args[args.index(flag) + 1], value)
+        allowed = args[args.index("--allowedTools") + 1]
+        denied = args[args.index("--disallowedTools") + 1]
+        self.assertIn("mcp__plugin_slack_slack__slack_search_public_and_private", allowed)
+        self.assertNotIn("send", allowed)
+        self.assertIn("mcp__plugin_slack_slack__slack_send_message_draft", denied)
+
+    def test_missing_plugin_stops_once_with_error(self):
+        (self.plugin / ".mcp.json").unlink()
+        rc, out, _, calls = self.slack([claude_out([])], "--once")
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith("ERROR slack plugin-missing"), out)
+        self.assertEqual(calls, [])  # nothing is run without the plugin
+        self.assertFalse(self.state.exists())
+
+    def test_missing_plugin_stops_the_loop_at_once(self):
+        (self.plugin / ".mcp.json").unlink()
+        rc, out, _, calls = self.slack([claude_out([])])
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.startswith("ERROR slack plugin-missing"), out)
+        self.assertEqual(calls, [])
+
+    def test_plugin_mcp_config_is_found(self):
+        _, _, _, calls = self.slack([claude_out([])], "--once")
+        args = calls[0][0]
+        self.assertIn("--strict-mcp-config", args)
+        self.assertEqual(json.loads(args[args.index("--mcp-config") + 1]),
+                         {"mcpServers": {"plugin:slack:slack": {"type": "http", "url": "https://example.invalid"}}})
+
+    def test_since_overrides_cursor(self):
+        _, _, _, calls = self.slack([claude_out([])], "--once", "--since", "2h")
+        self.assertIn(str(int(W.NOW().timestamp()) - 7200), calls[0][0][2])
+
+    def test_poll_off_or_missing_user_exits_2(self):
+        self.cfg_path.write_text(SLACK_MD.format(tmp=self.tmp).replace("Slack poll: on", "Slack poll: off"))
+        rc, out, err, _ = self.slack([], "--once")
+        self.assertEqual((rc, out), (2, ""))
+        self.assertIn("Slack poll", err)
+        self.cfg_path.write_text(SLACK_MD.format(tmp=self.tmp).replace("U0SELF", "<U0XXXXXXX>"))
+        rc, out, err, _ = self.slack([], "--once")
+        self.assertEqual(rc, 2)
+        self.assertIn("Slack user id", err)
+
+    def test_unknown_trigger_and_empty_keywords_exit_2(self):
+        for line, msg in (("mentions, nope", "unknown"), ("mentions, keywords", "keywords")):
+            self.cfg_path.write_text(SLACK_MD.format(tmp=self.tmp).replace("mentions, dms", line))
+            rc, out, err, _ = self.slack([], "--once")
+            self.assertEqual(rc, 2)
+            self.assertIn(msg, err)
+
+    def test_shipped_prompt_has_one_text_block(self):
+        template = W.slack_prompt_template()
+        for name in ("slack_user_id", "after", "triggers", "user_groups", "keywords", "ignore"):
+            self.assertIn("{{" + name + "}}", template)
+
+    def test_shipped_template_slack_lines_parse(self):
+        template = (BIN.parent / "claude-md" / "CLAUDE.md.template").read_text()
+        self.assertIn("- Slack poll:", template)
+        self.cfg_path.write_text(template.replace("- Slack poll: <on|off>", "- Slack poll: on").replace("<U0XXXXXXX>", "U0SELF"))
+        cfg = W.load_slack_config(self.cfg_path)
+        self.assertEqual(cfg["triggers"], list(W.SLACK_DEFAULT_TRIGGERS))
+        self.assertEqual(cfg["model"], "haiku")
+
+
 if __name__ == "__main__":
     unittest.main()

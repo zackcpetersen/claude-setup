@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """wait-for: one background wait that prints one event line and exits.
 
-Modes: pr, deploy, dagster. Poll, print one event line, exit 0. Exit 2 on a usage
-or config error. Standard library only. See skills/watch/SKILL.md.
+Modes: pr, deploy, dagster, slack. Poll, print one event line, exit 0. Exit 2 on a
+usage or config error. Standard library only. See skills/watch/SKILL.md.
 """
 
 import argparse
@@ -18,7 +18,7 @@ from pathlib import Path
 
 DEFAULT_CONFIG = "~/.claude/CLAUDE.md"
 DEFAULT_EVERY = "5m"
-DEFAULT_MAX = {"pr": "3d", "deploy": "4h", "dagster": "12h"}
+DEFAULT_MAX = {"pr": "3d", "deploy": "4h", "dagster": "12h", "slack": "12h"}
 MAX_ERRORS = 3
 MIN_EVERY = timedelta(seconds=10)
 CMD_TIMEOUT = 60
@@ -32,6 +32,25 @@ RELEASE_GRACE = timedelta(minutes=5)  # time GitHub gets to start the runs a pub
 RELEASE_RUN_OK = {"success", "skipped", "neutral"}
 DAGSTER_TERMINAL = {"SUCCESS", "FAILURE", "CANCELED"}
 RUN_QUERY = 'query($id:ID!){runOrError(runId:$id){__typename ... on Run{runId status}}}'
+SLACK_TIMEOUT = 180
+SLACK_OVERLAP = 60  # seconds re-searched before the cursor, so a late-indexed message is not missed
+SLACK_FIRST_LOOKBACK = timedelta(minutes=15)
+SLACK_SEEN_CAP = 500
+SLACK_TEXT_CAP = 500
+SLACK_BUDGET_USD = "0.25"  # hard cap per poll run
+SLACK_STATE_FILE = "~/.claude/slack-poll.json"
+SLACK_TRIGGERS = ("mentions", "dms", "group-dms", "user-groups", "thread-replies", "keywords")
+SLACK_DEFAULT_TRIGGERS = ("mentions", "dms", "group-dms", "user-groups", "thread-replies")
+SLACK_READ_TOOLS = ("slack_search_public_and_private", "slack_search_public", "slack_read_thread", "slack_read_channel",
+                    "slack_read_user_profile", "slack_search_users", "slack_search_channels")
+SLACK_WRITE_TOOLS = ("slack_send_message", "slack_send_message_draft", "slack_schedule_message", "slack_add_reaction",
+                     "slack_create_canvas", "slack_update_canvas", "slack_create_conversation", "slack_create_list",
+                     "slack_update_list", "slack_add_list_record", "slack_update_list_record",
+                     "slack_get_file_upload_url", "slack_complete_file_upload")
+SLACK_PROMPT = Path(os.path.realpath(__file__)).parent.parent / "skills" / "watch" / "slack-poll.md"
+SLACK_PROMPT_FALLBACK = "~/.claude/skills/watch/slack-poll.md"
+PLUGIN_CACHE = "~/.claude/plugins/cache"
+USER_SETTINGS = ("~/.claude/settings.json", "~/.claude/settings.local.json")
 BACKFILL_QUERY = (
     'query($id:String!){partitionBackfillOrError(backfillId:$id){__typename ... on PartitionBackfill'
     '{id status numPartitions partitionStatuses{results{partitionName runId runStatus}}} ... on PythonError{message}}}'
@@ -40,6 +59,10 @@ BACKFILL_QUERY = (
 SLEEP = time.sleep
 CLOCK = time.monotonic
 NOW = lambda: datetime.now(timezone.utc)
+
+
+class StopWait(Exception):
+    """A problem a retry cannot fix. The wait prints one ERROR line and exits so the session hears about it."""
 
 
 class WaitError(Exception):
@@ -144,6 +167,47 @@ def load_config(path):
     return {"dagster": dagster, "deploy_rules": {repo: parse_deploy_rule(rule) for repo, rule in rules.items()}}
 
 
+def _split_list(text):
+    return [w.strip() for w in re.split(r"[,\n]", text or "") if w.strip()]
+
+
+def load_slack_config(path):
+    """Read the `Slack poll` lines of `### Watches` and the Slack user id from `### Work board`."""
+    path = Path(path).expanduser()
+    try:
+        lines = path.read_text().splitlines()
+    except OSError as e:
+        raise WaitError(f"cannot read config {path}: {e.strerror}")
+    watches, _ = _read_section(lines, "Watches")
+    board, _ = _read_section(lines, "Work board")
+    if watches.get("Slack poll", "").lower() != "on":
+        raise WaitError(f"Slack poll is not on; set `- Slack poll: on` in the ### Watches section of {path}")
+    user = board.get("Slack user id", "")
+    if not re.fullmatch(r"[UW][A-Z0-9]{2,}", user):
+        raise WaitError(f"no Slack user id in the ### Work board section of {path}")
+    conn = re.search(r"slack\s+(\S+)", watches.get("Connectors", ""))
+    if not conn or _is_unset(conn.group(1)):
+        raise WaitError(f"no slack prefix on the Connectors line in the ### Watches section of {path}")
+    triggers = [t.lower() for t in _split_list(watches.get("Slack poll triggers"))] or list(SLACK_DEFAULT_TRIGGERS)
+    bad = [t for t in triggers if t not in SLACK_TRIGGERS]
+    if bad:
+        raise WaitError(f"unknown Slack poll trigger {', '.join(bad)}; known: {', '.join(SLACK_TRIGGERS)}")
+    keywords = _split_list(watches.get("Slack poll keywords"))
+    if "keywords" in triggers and not keywords:
+        raise WaitError("the keywords trigger is on but the `Slack poll keywords` line is empty")
+    return {
+        "user": user,
+        "prefix": conn.group(1),
+        "every": watches.get("Slack poll every"),
+        "model": watches.get("Slack poll model", "haiku"),
+        "triggers": triggers,
+        "groups": _split_list(watches.get("Slack poll user groups")),
+        "keywords": keywords,
+        "ignore": _split_list(watches.get("Slack poll ignore")),
+        "state_file": _expand(watches.get("Slack poll state file", SLACK_STATE_FILE)),
+    }
+
+
 # ---------- helpers ----------
 
 def run_cmd(args):
@@ -221,6 +285,21 @@ def any_pending(rollup):
 
 def failed_names(rollup):
     return [c.get("name") or c.get("context") or "unknown" for c in rollup or [] if _check_failed(c)]
+
+
+def run_claude(args, cwd):
+    """One headless Claude run. stdin is /dev/null so it never waits for input."""
+    return subprocess.run(args, capture_output=True, text=True, timeout=SLACK_TIMEOUT, check=True, cwd=cwd,
+                          stdin=subprocess.DEVNULL).stdout
+
+
+def write_json(path, data):
+    """Write atomically: a temp file in the same folder, then rename."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.replace(tmp, path)
 
 
 def contains(repo, sha, ref):
@@ -360,6 +439,153 @@ def poll_dagster(kind, ident, dagster, token):
     return None
 
 
+# ---------- slack ----------
+
+def slack_prompt_template():
+    for p in (SLACK_PROMPT, Path(SLACK_PROMPT_FALLBACK).expanduser()):
+        try:
+            text = Path(p).read_text()
+        except OSError:
+            continue
+        m = re.search(r"^```text\n(.*?)^```", text, re.S | re.M)
+        if m:
+            return m.group(1)
+    raise WaitError(f"cannot find the prompt block in {SLACK_PROMPT} or {SLACK_PROMPT_FALLBACK}")
+
+
+def fill(template, values):
+    return re.sub(r"\{\{(\w+)\}\}", lambda m: str(values.get(m.group(1), m.group(0))), template)
+
+
+def other_allowed_tools(read_tools):
+    """MCP tools the user's settings allow outright, other than the Slack read tools. The poll denies them all."""
+    found = []
+    for f in USER_SETTINGS:
+        try:
+            allow = json.loads(Path(f).expanduser().read_text()).get("permissions", {}).get("allow", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        found += [a for a in allow if isinstance(a, str) and a.startswith("mcp__") and a not in read_tools]
+    return sorted(set(found))
+
+
+def _tool_part(name):
+    return re.sub(r"[^A-Za-z0-9]", "_", name)
+
+
+def slack_mcp_config(prefix):
+    """The Slack server's entry from its plugin's .mcp.json, as an --mcp-config string, or None.
+
+    Loading only this one server keeps the run small: with every MCP server's tools riding along on each turn a poll
+    costs about twenty times more, so a missing plugin stops the poll instead (see slack_command).
+    """
+    best = None
+    for f in Path(PLUGIN_CACHE).expanduser().glob("*/*/*/.mcp.json"):
+        plugin = f.parent.parent.name
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        servers = data.get("mcpServers", data) if isinstance(data, dict) else {}
+        for name, server in servers.items():
+            if isinstance(server, dict) and f"mcp__plugin_{_tool_part(plugin)}_{_tool_part(name)}__" == prefix:
+                mtime = f.stat().st_mtime
+                if best is None or mtime > best[0]:
+                    best = (mtime, f"plugin:{plugin}:{name}", server)
+    return json.dumps({"mcpServers": {best[1]: best[2]}}) if best else None
+
+
+def slack_command(cfg, prompt):
+    read = [cfg["prefix"] + t for t in SLACK_READ_TOOLS]
+    deny = [cfg["prefix"] + t for t in SLACK_WRITE_TOOLS] + other_allowed_tools(read)
+    cmd = ["claude", "-p", prompt, "--model", cfg["model"], "--tools", "", "--permission-mode", "dontAsk",
+           "--disable-slash-commands", "--allowedTools", ",".join(read), "--disallowedTools", ",".join(deny),
+           "--max-budget-usd", SLACK_BUDGET_USD, "--output-format", "json", "--no-session-persistence"]
+    mcp = slack_mcp_config(cfg["prefix"])
+    if not mcp:
+        raise StopWait(f"slack plugin-missing: no installed plugin provides {cfg['prefix']} (the Connectors line); "
+                       "install or sign in to the Slack plugin, then start the poll again")
+    return cmd + ["--strict-mcp-config", "--mcp-config", mcp]
+
+
+def parse_claude(stdout):
+    """Return (answer text, cost) from `--output-format json`: a list of events, or one result object."""
+    data = json.loads(stdout)
+    items = data if isinstance(data, list) else [data]
+    result = next((e for e in items if isinstance(e, dict) and e.get("type") == "result"), None)
+    if result is None:
+        raise RuntimeError("no result event in the claude output")
+    if result.get("is_error"):
+        raise RuntimeError(f"claude run failed: {result.get('subtype')} {str(result.get('result') or '')[:200]}".strip())
+    return result.get("result") or "", result.get("total_cost_usd")
+
+
+def parse_events(answer):
+    """Take the text from the first `{` to the last `}` and read its `events` list."""
+    start, end = answer.find("{"), answer.rfind("}")
+    if start < 0 or end < start:
+        raise RuntimeError("the poll answer has no JSON object")
+    events = json.loads(answer[start:end + 1]).get("events")
+    if not isinstance(events, list):
+        raise RuntimeError("the poll answer has no events list")
+    return [e for e in events if isinstance(e, dict) and e.get("channel_id") and e.get("ts")]
+
+
+def load_state(path):
+    try:
+        state = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return {"cursor": None, "seen": []}
+    except (OSError, ValueError) as e:
+        raise WaitError(f"cannot read the Slack poll state file {path}: {e}")
+    return {"cursor": state.get("cursor"), "seen": list(state.get("seen") or [])}
+
+
+def poll_slack(cfg, since=None):
+    """One poll. Returns `SLACK <n> <file>` when there are new events, else None. Saves the cursor either way."""
+    state_file = Path(cfg["state_file"])
+    events_dir = state_file.with_name(state_file.stem + "-events")
+    events_dir.mkdir(parents=True, exist_ok=True)
+    state = load_state(state_file)
+    started = NOW()
+    if since is not None:
+        after = started - since
+    elif state["cursor"]:
+        after = datetime.fromtimestamp(float(state["cursor"]) - SLACK_OVERLAP, timezone.utc)
+    else:
+        after = started - SLACK_FIRST_LOOKBACK
+    prompt = fill(slack_prompt_template(), {
+        "slack_user_id": cfg["user"],
+        "after": str(int(after.timestamp())),
+        "after_iso": after.strftime("%Y-%m-%d %H:%M UTC"),
+        "triggers": ", ".join(cfg["triggers"]),
+        "user_groups": ", ".join(cfg["groups"]) or "none",
+        "keywords": ", ".join(cfg["keywords"]) or "none",
+        "ignore": ", ".join(cfg["ignore"]) or "none",
+    })
+    answer, cost = parse_claude(run_claude(slack_command(cfg, prompt), str(events_dir)))
+    seen = set(state["seen"])
+    ignore = {i.lstrip("#@").lower() for i in cfg["ignore"]}
+    fresh = []
+    for e in parse_events(answer):
+        key = f"{e['channel_id']}:{e['ts']}"
+        names = {str(e.get(k) or "").lstrip("#@").lower() for k in ("channel_id", "channel_name", "author_id", "author")}
+        if key in seen or e.get("author_id") == cfg["user"] or names & ignore:
+            continue
+        seen.add(key)
+        e["text"] = str(e.get("text") or "")[:SLACK_TEXT_CAP]
+        fresh.append(e)
+    new_seen = (state["seen"] + [f"{e['channel_id']}:{e['ts']}" for e in fresh])[-SLACK_SEEN_CAP:]
+    line = None
+    if fresh:
+        out = events_dir / (started.strftime("%Y%m%dT%H%M%SZ") + ".json")
+        write_json(out, {"after": int(after.timestamp()), "polled_at": int(started.timestamp()), "events": fresh})
+        line = f"SLACK {len(fresh)} {out}"
+    write_json(state_file, {"cursor": int(started.timestamp()), "seen": new_seen,
+                            "last_poll": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "last_cost_usd": cost})
+    return line
+
+
 # ---------- the wait ----------
 
 def error_line(e, secrets=()):
@@ -379,6 +605,8 @@ def wait_loop(poll, what, every, max_wait, secrets=()):
         try:
             event = poll()
             errors = 0
+        except StopWait as e:  # not fixable by retrying: say so once and stop
+            return f"ERROR {e}"
         except Exception as e:  # transient gh or network trouble is retried
             errors += 1
             if errors >= MAX_ERRORS:
@@ -394,9 +622,9 @@ def wait_loop(poll, what, every, max_wait, secrets=()):
 def build_parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", default=os.environ.get("WAIT_FOR_CONFIG", DEFAULT_CONFIG), help="CLAUDE.md with the ### Watches section")
-    common.add_argument("--every", default=DEFAULT_EVERY, help="poll interval, like 5m (default 5m)")
+    common.add_argument("--every", default=None, help="poll interval, like 5m (default 5m)")
     common.add_argument("--max", dest="max_wait", default=None,
-                        help="give up after this long (pr 3d, deploy 4h, dagster 12h)")
+                        help="give up after this long (pr 3d, deploy 4h, dagster 12h, slack 12h)")
     p = argparse.ArgumentParser(prog="wait-for", description="Wait for one event, print one line, exit 0. Options go after the mode.")
     sub = p.add_subparsers(dest="mode", required=True)
     pr = sub.add_parser("pr", parents=[common], help="wait for a PR: MERGED CLOSED FAILED CHANGES_REQUESTED HEAD_MOVED CONFLICT BEHIND READY")
@@ -409,11 +637,15 @@ def build_parser():
     dg = sub.add_parser("dagster", parents=[common], help="wait for a Dagster run or backfill: SUCCEEDED FAILED")
     dg.add_argument("what", choices=("run", "backfill"))
     dg.add_argument("id")
+    sl = sub.add_parser("slack", parents=[common], help="poll Slack for messages aimed at you: SLACK <count> <events file>")
+    sl.add_argument("--once", action="store_true", help="poll once and print SLACK ... or NOTHING (setup check)")
+    sl.add_argument("--since", help="look back this long instead of from the saved cursor, like 2h")
     return p
 
 
 def run(args):
-    every = parse_duration(args.every)
+    slack = load_slack_config(args.config) if args.mode == "slack" else None
+    every = parse_duration(args.every or (slack and slack["every"]) or DEFAULT_EVERY)
     if every < MIN_EVERY:
         raise WaitError("--every must be 10s or more")
     if args.mode == "pr" and args.sha and not re.fullmatch(r"[0-9a-fA-F]{40}", args.sha):
@@ -430,6 +662,21 @@ def run(args):
             raise WaitError(f"no deploy rule for {args.repo} under Deploy rules in the ### Watches config")
         what = f"deploy {args.repo} {args.sha}"
         poll = lambda: poll_deploy(args.repo, args.sha, rule)
+    elif args.mode == "slack":
+        since = parse_duration(args.since) if args.since else None
+        if args.once:
+            try:
+                line = poll_slack(slack, since) or "NOTHING"
+            except Exception as e:
+                line = f"ERROR {error_line(e)}"
+            print(line, flush=True)
+            return 0
+        what = "slack"
+        first = [since]
+
+        def poll():
+            s, first[0] = first[0], None  # --since applies to the first poll only
+            return poll_slack(slack, s)
     else:
         dagster = load_config(args.config)["dagster"]
         if not dagster:

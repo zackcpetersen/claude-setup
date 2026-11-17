@@ -1,0 +1,264 @@
+<title>__TITLE__</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one colored canvas, white cards on top. A top bar with a menu button opens a drawer listing every page. Overview is a grid of glanceable project cards; detail lives on each project page. Single look by design (same in light and dark). build.py can override the tokens from a theme file. */
+:root{
+  --canvas:#1F2A37; --on-canvas:#FFFFFF; --on-canvas-muted:rgba(255,255,255,.72); --canvas-line:rgba(255,255,255,.2);
+  --card:#FFFFFF; --text:#4B5563; --strong:#111827; --muted:#7B8794; --line:#E5E9EC; --track:#E5E9EC;
+  --accent:#2F7FBF; --accent-soft:#A9CDEA; --gray:#B8C0C8; --alert:#E5484D; --alert-ink:#C2333A; --link:#1A63B8;
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif; --h-weight:600;
+  color-scheme:light;
+}
+/*__THEME__*/
+*{box-sizing:border-box}
+body{background:var(--canvas);color:var(--text);font-family:var(--font);font-size:15px;line-height:1.45}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--canvas)}
+a{color:var(--link)}
+a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.gut{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--canvas);border-bottom:1px solid var(--canvas-line)}
+.bar-in{max-width:1080px;margin-inline:auto;display:flex;align-items:center;gap:14px;padding-block:10px;color:var(--on-canvas)}
+.menu-btn{display:inline-flex;flex-direction:column;justify-content:center;gap:4px;width:40px;height:40px;padding:0 10px;border:1px solid var(--canvas-line);border-radius:8px;background:transparent;cursor:pointer;flex:none}
+.menu-btn span{display:block;height:2px;background:var(--on-canvas);border-radius:1px}
+.menu-btn:hover{background:rgba(255,255,255,.1)}
+.bar .where{font-size:15px;flex:1;min-width:0;overflow-wrap:anywhere}
+.bar .asof{font-size:12px;color:var(--on-canvas-muted);white-space:nowrap}
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:20}
+.drawer{position:fixed;inset:0 auto 0 0;width:min(340px,88vw);background:var(--card);z-index:21;overflow-y:auto;padding:calc(env(safe-area-inset-top,0px) + 16px) 12px calc(env(safe-area-inset-bottom,0px) + 16px) max(12px,env(safe-area-inset-left,0px));display:flex;flex-direction:column;gap:4px}
+.drawer .lbl{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:14px 10px 4px}
+.drawer a{display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;color:var(--strong);text-decoration:none;font-size:14px;line-height:1.25}
+.drawer a:hover{background:var(--line)}
+.drawer a[aria-current="page"]{background:var(--line);font-weight:700}
+.drawer .nm{flex:1;min-width:0}
+.drawer .pc{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.drawer .close{align-self:flex-end;border:0;background:transparent;color:var(--muted);font:inherit;font-size:13px;padding:6px 10px;cursor:pointer;border-radius:6px}
+main{padding-block:26px 64px}
+.page{max-width:1080px;margin-inline:auto;display:flex;flex-direction:column;gap:18px}
+.badge{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--alert);color:#FFFFFF;font-size:12px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;flex:none}
+.card{background:var(--card);border-radius:12px;padding:20px 22px;min-width:0}
+h1{margin:0;font-size:26px;font-weight:var(--h-weight);line-height:1.1;color:var(--strong);text-wrap:balance;min-width:0}
+h2{margin:0 0 12px;font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.hero{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.hero .t{flex:1;min-width:220px;display:flex;flex-direction:column;gap:10px}
+.hero .nm{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px}
+.chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;padding:3px 11px;color:var(--strong);white-space:nowrap}
+.chip.late{border-color:var(--alert);color:var(--alert-ink)}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex:none}
+.done{background:var(--accent)} .prog{background:var(--accent-soft)} .wait{background:var(--gray)} .block{background:var(--alert)} .none{background:var(--card);box-shadow:inset 0 0 0 2px var(--gray)}
+.sbar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--track);min-width:60px}
+.sbar .seg{height:100%} .sbar .seg.none{background:var(--track);box-shadow:none}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;margin-top:10px}
+.legend span{display:inline-flex;align-items:center;gap:7px} .legend b{color:var(--strong);font-variant-numeric:tabular-nums}
+/* overview */
+.stats{display:flex;flex-wrap:wrap;gap:10px 28px;color:var(--on-canvas);align-items:baseline;padding-block:6px}
+.stats .n{font-size:30px;line-height:1;font-variant-numeric:tabular-nums}
+.stats .s{display:flex;align-items:baseline;gap:8px;font-size:14px;color:var(--on-canvas-muted)}
+.stats .s .n{color:var(--on-canvas)}
+.stats a{color:inherit;text-decoration:none} .stats a:hover{text-decoration:underline}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:16px}
+a.pc-card{display:flex;flex-direction:column;gap:14px;text-decoration:none;color:var(--text)}
+a.pc-card:hover{box-shadow:0 0 0 2px var(--accent)}
+.pc-top{display:flex;align-items:center;gap:14px}
+.pc-name{flex:1;min-width:0;color:var(--strong);font-size:16px;font-weight:700;line-height:1.2}
+.pc-next{font-size:13px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.sect-on{font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--on-canvas-muted);margin-top:10px}
+.mini{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line);font-size:14px}
+.mini:first-of-type{border-top:0}
+.mini .tx{flex:1;min-width:0;color:var(--strong)}
+.mini .mt{font-size:12px;color:var(--muted);white-space:nowrap}
+/* project page */
+.needs{display:flex;flex-direction:column;gap:12px;margin:0;padding:0;list-style:none}
+.needs li{display:flex;gap:12px;align-items:flex-start}
+.needs .dot{margin-top:6px}
+.needs .ask{color:var(--strong);flex:1;min-width:0}
+.sub{font-size:12px;color:var(--muted);display:block;margin-top:2px}
+.sum{margin:0;max-width:70ch}
+.basis{font-size:12px;color:var(--muted);margin-top:8px}
+details{border-top:1px solid var(--line)}
+details:first-of-type{border-top:0}
+summary{display:flex;align-items:center;gap:14px;padding:12px 0;cursor:pointer;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary .g{flex:1;min-width:0;color:var(--strong);font-weight:700;font-size:14px}
+summary .sbar{width:120px;flex:none}
+summary .ct{font-size:12px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+summary::after{content:"";width:8px;height:8px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);flex:none;margin-right:4px}
+details[open] summary::after{transform:rotate(-135deg)}
+.item{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:flex-start;padding:8px 0 8px 2px;border-top:1px dashed var(--line);font-size:14px}
+.item .dot{margin-top:5px}
+.item .tx{flex:1;min-width:200px}
+.item .mt{font-size:12px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.item.is-done .tx{color:var(--muted)}
+.tools{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.tools button{border:1px solid var(--line);background:transparent;color:var(--text);font:inherit;font-size:12px;border-radius:999px;padding:3px 11px;cursor:pointer}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+.plain{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:9px;font-size:14px}
+.plain .d{display:block;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.person{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.person .who{color:var(--strong);font-weight:700;font-size:15px;flex:1;min-width:0}
+.count{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;border-radius:11px;background:var(--track);color:var(--strong);font-size:12px;font-weight:700;padding:0 6px}
+.late{color:var(--alert-ink);font-weight:700}
+.foot{font-size:12px;color:var(--on-canvas-muted)}
+.ring text{font-family:var(--font);font-variant-numeric:tabular-nums}
+@media (max-width:520px){ .card{padding:16px} summary .sbar{width:70px} h1{font-size:22px} .bar .asof{display:none} }
+@media (prefers-reduced-motion:no-preference){ a.pc-card{transition:box-shadow .12s} }
+</style>
+<div class="bar"><div class="bar-in gut">
+  <button class="menu-btn" id="menu-btn" aria-label="Open menu" aria-expanded="false" aria-controls="drawer"><span></span><span></span><span></span></button>
+  <div class="where" id="where"></div>
+  <div class="asof" id="asof"></div>
+</div></div>
+<div class="scrim" id="scrim" hidden></div>
+<nav class="drawer" id="drawer" aria-label="Pages" hidden></nav>
+<main class="gut"><div class="page" id="page"></div></main>
+<script type="application/json" id="data">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const C = D.config || {};
+const P = D.projects || [], W = D.waiting_on || [], O = D.one_offs || [];
+const SVG = 'http://www.w3.org/2000/svg';
+const today = (D.as_of || '').slice(0, 10);
+const $ = id => document.getElementById(id);
+function h(tag, attrs, ...kids){
+  const e = document.createElement(tag);
+  for (const k in (attrs || {})) { if (attrs[k] != null && attrs[k] !== false) e.setAttribute(k, attrs[k]); }
+  for (const c of kids.flat(3)) { if (c == null || c === false) continue; e.append(c.nodeType ? c : document.createTextNode(String(c))); }
+  return e;
+}
+function s(tag, attrs){ const e = document.createElementNS(SVG, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+function ring(pct, size){
+  const sw = size >= 40 ? Math.round(size / 9) : 3, r = (size - sw) / 2, c = 2 * Math.PI * r, p = Math.max(0, Math.min(100, pct || 0));
+  const g = s('svg', {class: 'ring', width: size, height: size, viewBox: `0 0 ${size} ${size}`, role: 'img', 'aria-label': p + ' percent done'});
+  g.style.flex = 'none';
+  g.append(s('circle', {cx: size/2, cy: size/2, r, fill: 'none', stroke: 'var(--track)', 'stroke-width': sw}));
+  g.append(s('circle', {cx: size/2, cy: size/2, r, fill: 'none', stroke: 'var(--accent)', 'stroke-width': sw, 'stroke-linecap': 'round', 'stroke-dasharray': `${c * p / 100} ${c}`, transform: `rotate(-90 ${size/2} ${size/2})`}));
+  if (size >= 40) { const fs = Math.round(size * .28); const t = s('text', {x: size/2, y: size/2 + fs * .36, 'text-anchor': 'middle', 'font-size': fs, 'font-weight': 700, fill: 'var(--strong)'}); t.textContent = p + '%'; g.append(t); }
+  return g;
+}
+function badge(n){ return n > 0 ? h('span', {class: 'badge', title: n + ' open item' + (n > 1 ? 's' : '') + ' for you', 'aria-label': n + ' open items need you'}, n) : null; }
+const ORDER = ['done', 'prog', 'wait', 'block', 'none'];
+const LABEL = {done: 'Done', prog: 'In progress', wait: 'Waiting', block: 'Blocked', none: 'Not started'};
+function key(st){ st = (st || '').toLowerCase(); return st === 'done' ? 'done' : st === 'in progress' ? 'prog' : st === 'waiting' ? 'wait' : st === 'blocked' ? 'block' : 'none'; }
+function tally(items){ const t = {done: 0, prog: 0, wait: 0, block: 0, none: 0}; items.forEach(i => t[key(i.state)]++); return t; }
+function sbar(t){
+  const n = ORDER.reduce((a, k) => a + t[k], 0) || 1;
+  return h('div', {class: 'sbar', role: 'img', 'aria-label': ORDER.filter(k => t[k]).map(k => t[k] + ' ' + LABEL[k].toLowerCase()).join(', ')}, ORDER.filter(k => t[k]).map(k => { const e = h('div', {class: 'seg ' + k}); e.style.width = (100 * t[k] / n) + '%'; return e; }));
+}
+function legend(t){ return h('div', {class: 'legend'}, ORDER.filter(k => t[k]).map(k => h('span', {}, h('span', {class: 'dot ' + k}), h('b', {}, t[k]), LABEL[k]))); }
+const allItems = p => (p.breakdown || []).flatMap(g => g.items || []);
+function days(d){ if (!/^\d{4}-\d\d-\d\d/.test(d || '') || !today) return null; return Math.round((Date.parse(d.slice(0, 10)) - Date.parse(today)) / 864e5); }
+function when(d){ const n = days(d); return n == null ? '' : n === 0 ? 'today' : n > 0 ? 'in ' + n + ' day' + (n > 1 ? 's' : '') : (-n) + ' day' + (n < -1 ? 's' : '') + ' late'; }
+function dueChip(d, word){ if (!d) return null; const n = days(d); return h('span', {class: 'chip' + (n != null && n <= 0 ? ' late' : '')}, (word || 'Due') + ' ' + d + (when(d) ? ' (' + when(d) + ')' : '')); }
+function statusChip(st){ if (!st) return null; const k = /risk|block/i.test(st) ? 'block' : /wait/i.test(st) ? 'wait' : 'done'; return h('span', {class: 'chip'}, h('span', {class: 'dot ' + k}), st); }
+function refNode(ref){
+  if (!ref) return null; let m;
+  if (C.tracker_url && /^[A-Z][A-Z0-9]+-\d+$/.test(ref)) return h('a', {href: C.tracker_url + ref, target: '_blank', rel: 'noopener'}, ref);
+  if (C.github_org && (m = /^([a-z][a-z0-9-]+)\s+#?(\d+)$/.exec(ref))) return h('a', {href: `https://github.com/${C.github_org}/${m[1]}/pull/${m[2]}`, target: '_blank', rel: 'noopener'}, ref);
+  return ref;
+}
+const byId = id => P.find(p => p.id === id);
+const needsOf = p => (p.needs_me || []).length;
+const openOff = O.filter(o => key(o.state) !== 'done');
+const offNeeds = openOff.filter(o => o.needs_me).length;
+function meta(parts){ const out = []; parts.filter(Boolean).forEach((x, i) => { if (i) out.push(' · '); out.push(x); }); return out; }
+
+function overviewPage(){
+  const needs = P.reduce((a, p) => a + needsOf(p), 0) + offNeeds;
+  const dl = P.filter(p => days(p.deadline) != null && days(p.deadline) >= 0).sort((a, b) => days(a.deadline) - days(b.deadline))[0];
+  return [
+    h('div', {class: 'stats'},
+      h('span', {class: 's'}, h('span', {class: 'n'}, P.length), 'projects'),
+      h('span', {class: 's'}, h('span', {class: 'n'}, needs), 'items need you'),
+      h('a', {class: 's', href: '#people'}, h('span', {class: 'n'}, W.length), 'waiting on others'),
+      dl ? h('a', {class: 's', href: '#p-' + dl.id}, h('span', {class: 'n'}, days(dl.deadline)), 'days to next deadline') : null),
+    h('div', {class: 'grid'}, P.map(p => { const t = tally(allItems(p)); return h('a', {class: 'card pc-card', href: '#p-' + p.id},
+      h('div', {class: 'pc-top'}, ring(p.progress_pct, 64), h('div', {class: 'pc-name'}, p.name), badge(needsOf(p))),
+      allItems(p).length ? sbar(t) : null,
+      h('div', {class: 'chips'}, statusChip(p.status), dueChip(p.deadline)),
+      p.next_milestone ? h('div', {class: 'pc-next'}, 'Next: ' + p.next_milestone) : null); })),
+    O.length ? h('div', {class: 'sect-on'}, 'One-offs') : null,
+    O.length ? h('a', {class: 'card', href: '#oneoffs', style: 'text-decoration:none;color:var(--text);display:flex;align-items:center;gap:14px;flex-wrap:wrap'},
+      h('span', {style: 'color:var(--strong);font-weight:700'}, openOff.length + ' open'), badge(offNeeds),
+      h('div', {style: 'flex:1;min-width:120px'}, sbar(tally(O))), h('span', {class: 'sub', style: 'margin:0'}, (O.length - openOff.length) + ' of ' + O.length + ' done')) : null,
+  ];
+}
+function projectPage(p){
+  const needs = p.needs_me || [], waits = W.filter(w => w.project_id === p.id), items = allItems(p), t = tally(items), groups = p.breakdown || [];
+  return [
+    h('div', {class: 'card'}, h('div', {class: 'hero'}, ring(p.progress_pct, 92),
+      h('div', {class: 't'}, h('div', {class: 'nm'}, h('h1', {}, p.name), badge(needs.length)),
+        h('div', {class: 'chips'}, statusChip(p.status), p.priority ? h('span', {class: 'chip'}, p.priority) : null, p.epic ? h('span', {class: 'chip'}, refNode(p.epic)) : null, dueChip(p.deadline, 'Deadline')))),
+      items.length ? h('div', {style: 'margin-top:18px'}, sbar(t), legend(t)) : null),
+    h('div', {class: 'card'}, h('h2', {}, 'Needed from you'), needs.length ? h('ul', {class: 'needs'}, needs.map(n => h('li', {}, h('span', {class: 'dot block'}),
+      h('span', {class: 'ask'}, n.ask, h('span', {class: 'sub'}, meta([refNode(n.ticket), n.due ? 'due ' + n.due + (when(n.due) ? ' (' + when(n.due) + ')' : '') : null])))))) : h('span', {style: 'color:var(--strong)'}, 'Nothing right now. This one is moving without you.')),
+    (p.summary || p.next_milestone) ? h('div', {class: 'card'}, h('h2', {}, 'Where it stands'), p.summary ? h('p', {class: 'sum'}, p.summary) : null,
+      p.next_milestone ? h('p', {class: 'sum', style: 'margin-top:10px;color:var(--strong)'}, 'Next: ' + p.next_milestone) : null,
+      p.progress_basis ? h('div', {class: 'basis'}, 'How the ' + (p.progress_pct || 0) + '% was worked out: ' + p.progress_basis) : null) : null,
+    groups.length ? h('div', {class: 'card'}, h('div', {class: 'tools'}, h('h2', {style: 'margin:0'}, 'Full breakdown'), h('button', {type: 'button', id: 'toggle-all'}, 'Open all')),
+      groups.map(g => { const gi = g.items || [], gt = tally(gi); return h('details', {}, h('summary', {}, h('span', {class: 'g'}, g.group), sbar(gt), h('span', {class: 'ct'}, gt.done + ' of ' + gi.length + ' done')),
+        gi.map(i => h('div', {class: 'item' + (key(i.state) === 'done' ? ' is-done' : '')}, h('span', {class: 'dot ' + key(i.state), title: LABEL[key(i.state)]}), h('span', {class: 'tx'}, i.text),
+          h('span', {class: 'mt'}, meta([LABEL[key(i.state)], i.owner, refNode(i.ref), i.date]))))); })) : null,
+    waits.length ? h('div', {class: 'card'}, h('h2', {}, 'Waiting on others'), waits.map(w => waitRow(w, true, false))) : null,
+    ((p.decisions || []).length || (p.recent_progress || []).length) ? h('div', {class: 'two'},
+      (p.decisions || []).length ? h('div', {class: 'card'}, h('h2', {}, 'Recent decisions'), h('ul', {class: 'plain'}, p.decisions.map(d => h('li', {}, h('span', {class: 'd'}, d.date || ''), d.decision)))) : null,
+      (p.recent_progress || []).length ? h('div', {class: 'card'}, h('h2', {}, 'Recent progress'), h('ul', {class: 'plain'}, p.recent_progress.map(d => h('li', {}, h('span', {class: 'd'}, d.date || ''), d.text)))) : null) : null,
+    (p.links || []).length ? h('div', {class: 'card'}, h('h2', {}, 'Links'), h('div', {class: 'chips'}, p.links.map(l => h('a', {class: 'chip', href: l.url, target: '_blank', rel: 'noopener'}, l.label)))) : null,
+  ];
+}
+function waitRow(w, withPerson, withProject){
+  const p = byId(w.project_id), n = days(w.since), late = days(w.nudge_due) != null && days(w.nudge_due) <= 0;
+  return h('div', {class: 'mini'}, h('span', {class: 'dot ' + (late ? 'block' : 'wait')}),
+    h('span', {class: 'tx'}, withPerson ? h('b', {}, w.person + ': ') : null, w.what,
+      h('span', {class: 'sub'}, meta([withProject && p ? h('a', {href: '#p-' + p.id}, p.name) : null, w.where, n != null ? 'waiting ' + (-n) + ' day' + (n === -1 ? '' : 's') : (w.since ? 'since ' + w.since : null)]))),
+    w.nudge_due ? h('span', {class: 'mt' + (late ? ' late' : '')}, 'nudge ' + w.nudge_due.slice(5) + (late ? ' (due)' : '')) : null);
+}
+function peoplePage(){
+  const by = {}; W.forEach(w => (by[w.person] = by[w.person] || []).push(w));
+  const names = Object.keys(by).sort((a, b) => by[b].length - by[a].length || a.localeCompare(b));
+  const late = W.filter(w => days(w.nudge_due) != null && days(w.nudge_due) <= 0).length;
+  return [
+    h('div', {class: 'stats'}, h('span', {class: 's'}, h('span', {class: 'n'}, names.length), 'people'), h('span', {class: 's'}, h('span', {class: 'n'}, W.length), 'things you are waiting for'), h('span', {class: 's'}, h('span', {class: 'n'}, late), 'nudges due')),
+    h('div', {class: 'two'}, names.map(n => h('div', {class: 'card'}, h('div', {class: 'person'}, h('span', {class: 'who'}, n), h('span', {class: 'count'}, by[n].length)), by[n].map(w => waitRow(w, false, true))))),
+  ];
+}
+function oneoffsPage(){
+  const sorted = O.slice().sort((a, b) => (key(a.state) === 'done') - (key(b.state) === 'done') || (b.needs_me ? 1 : 0) - (a.needs_me ? 1 : 0));
+  return [
+    h('div', {class: 'stats'}, h('span', {class: 's'}, h('span', {class: 'n'}, openOff.length), 'open one-offs'), h('span', {class: 's'}, h('span', {class: 'n'}, offNeeds), 'need you')),
+    h('div', {class: 'card'}, sbar(tally(O)), legend(tally(O))),
+    h('div', {class: 'grid'}, sorted.map(o => h('div', {class: 'card', style: 'display:flex;flex-direction:column;gap:10px'},
+      h('div', {class: 'pc-top'}, o.progress_pct != null ? ring(o.progress_pct, 48) : h('span', {class: 'dot ' + key(o.state), style: 'width:14px;height:14px'}), h('div', {class: 'pc-name', style: key(o.state) === 'done' ? 'color:var(--muted)' : ''}, o.title), o.needs_me && key(o.state) !== 'done' ? h('span', {class: 'badge', 'aria-label': 'needs you'}, '!') : null),
+      h('div', {class: 'chips'}, h('span', {class: 'chip'}, h('span', {class: 'dot ' + key(o.state)}), LABEL[key(o.state)]), key(o.state) !== 'done' ? dueChip(o.due) : null, o.ref ? h('span', {class: 'chip'}, refNode(o.ref)) : null),
+      o.note ? h('div', {style: 'font-size:13px'}, o.note) : null))),
+  ];
+}
+function navLink(hash, label, pre, pct, n){ return h('a', {href: '#' + hash, 'data-h': hash}, pre, h('span', {class: 'nm'}, label), pct != null ? h('span', {class: 'pc'}, pct + '%') : null, badge(n)); }
+function setMenu(open){ $('drawer').hidden = !open; $('scrim').hidden = !open; $('menu-btn').setAttribute('aria-expanded', open ? 'true' : 'false'); }
+function build(){
+  $('asof').textContent = 'As of ' + (D.as_of || '').replace('T', ' ');
+  const nav = $('drawer');
+  const close = h('button', {class: 'close', type: 'button', id: 'menu-close'}, 'Close');
+  nav.append(close, navLink('overview', 'Overview'), navLink('people', 'People you are waiting on', null, null, 0), O.length ? navLink('oneoffs', 'One-offs', null, null, offNeeds) : null, h('div', {class: 'lbl'}, 'Projects'));
+  P.forEach(p => nav.append(navLink('p-' + p.id, p.name, ring(p.progress_pct, 22), p.progress_pct || 0, needsOf(p))));
+  $('menu-btn').addEventListener('click', () => setMenu($('drawer').hidden));
+  $('scrim').addEventListener('click', () => setMenu(false));
+  close.addEventListener('click', () => setMenu(false));
+  nav.addEventListener('click', e => { if (e.target.closest && e.target.closest('a')) setMenu(false); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(false); });
+  document.addEventListener('click', e => { if (e.target && e.target.id === 'toggle-all') { const ds = [...document.querySelectorAll('#page details')], open = ds.some(d => !d.open); ds.forEach(d => d.open = open); e.target.textContent = open ? 'Close all' : 'Open all'; } });
+  show();
+}
+function show(){
+  const hash = (location.hash || '#overview').slice(1);
+  const p = hash.startsWith('p-') ? byId(hash.slice(2)) : null;
+  const cur = p ? 'p-' + p.id : hash === 'people' ? 'people' : hash === 'oneoffs' && O.length ? 'oneoffs' : 'overview';
+  const body = p ? projectPage(p) : cur === 'people' ? peoplePage() : cur === 'oneoffs' ? oneoffsPage() : overviewPage();
+  $('where').textContent = p ? p.name : cur === 'people' ? 'People you are waiting on' : cur === 'oneoffs' ? 'One-offs' : (C.title || 'Overview');
+  $('page').replaceChildren(...body.flat().filter(Boolean), h('div', {class: 'foot'}, (C.source_note ? C.source_note + ' ' : '') + 'Percent done is an estimate; each project page says how it was worked out.'));
+  document.querySelectorAll('#drawer a').forEach(a => a.dataset.h === cur ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current'));
+  const first = document.querySelector('#page details'); if (first) first.open = true;
+  window.scrollTo(0, 0);
+}
+addEventListener('hashchange', show);
+build();
+</script>

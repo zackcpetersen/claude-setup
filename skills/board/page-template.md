@@ -22,6 +22,8 @@ Default view: sorted by Date descending.
 ```
 ## Your TODOs
 Manual steps only, in the order to do them; logins from the access check first. The user ticks these; sync keeps ticks and appends.
+**Project status page:** <artifact link>
+(First line of the section, plain link, not a checkbox. Written only when `~/.claude/project-status/config.json` has an `artifact_url`; rollover carries it to every new row.)
 - [ ] `! <login or fix command>` (blocks: <work that waits on it>)
 - [ ] <merge / meeting / send / click the user must do by hand>
 

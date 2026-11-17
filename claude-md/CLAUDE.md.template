@@ -97,17 +97,25 @@ Reviews a teammate's pull request: `/review-pr <number or URL> [--effort medium]
 - GitHub org: <org-name>
 - Worktree config: ~/bin/.worktree-config.json; scripts: ~/bin/worktree, ~/bin/start-ticket
 - Memory dir: <path to the Claude memory directory for this machine>
-- Watch-slack state file: ~/.claude/watch-sweep.json <!-- the hourly sweep's state; the main session writes it -->
+- Watch-slack state file: ~/.claude/watch-sweep.json <!-- holds the declined list for the board's NUDGE? and PROPOSE questions; the main session writes it -->
 - WIP limits (starting values, tune after a week): max_streams 3, max_needs_you 7, carry_flag_days 3
 - Projects data source: <collection://... of the Projects database, optional> <!-- one row per workstream; the board appends progress and decisions to its pages -->
 - Oncall: <yes|no> <!-- flip at the start of each rotation week; `no` means the board never reads alert channels or tracks alerts -->
 - Access checks: per-machine list in `~/.claude/auth-checks.json`, run by the `daily-auth` skill (start from `skills/daily-auth/auth-checks.example.json`)
 
 ### Watches (`watch` skill)
-<!-- FILL IN: values for the watch skill and ~/bin/wait-for. Delete this section if you do not use it. Your Slack user id, watched channels and the sweep state file come from the Work board section above; do not repeat them here. -->
+<!-- FILL IN: values for the watch skill and ~/bin/wait-for. Delete this section if you do not use it. Your Slack user id comes from the Work board section above; do not repeat it here. -->
 - Time zone: <America/Denver> <!-- IANA name -->
-- Business hours: 08:00-18:00 <!-- Monday to Friday; the hourly sweep runs in these hours -->
-- Connectors: slack mcp__plugin_slack_slack__ <!-- tool name prefix for the sweep agent -->
+- Business hours: 08:00-18:00 <!-- Monday to Friday -->
+- Connectors: slack mcp__plugin_slack_slack__ <!-- Slack tool name prefix; the Slack poll loads only this plugin's server, which keeps each poll under a cent -->
+- Slack poll: <on|off> <!-- on means board rollover starts `~/bin/wait-for slack` in the background; this line is the standing yes -->
+- Slack poll every: 5m
+- Slack poll model: haiku <!-- the cheap model that reads Slack; it collects, the main session decides -->
+- Slack poll triggers: mentions, dms, group-dms, user-groups, thread-replies <!-- add `keywords` to also match the Keywords line -->
+- Slack poll user groups: <@team-handle, @other-handle> <!-- groups you belong to; the Slack tools cannot list membership, so this line is the source -->
+- Slack poll keywords: <your first name> <!-- only used when `keywords` is in the triggers -->
+- Slack poll ignore: <C0XXXXXXX, U0XXXXXXX> <!-- channels, people or groups to leave out; ids or names; optional -->
+- Slack poll state file: ~/.claude/slack-poll.json <!-- cursor and seen list, written by the script; events land in slack-poll-events/ and the triage log in slack-poll-triage.jsonl next to it -->
 - Dagster: https://<org>.dagster.cloud/<deployment>/graphql, env file ~/path/to/.env, token var DAGSTER_CLOUD_API_TOKEN <!-- optional; fill in <org> and <deployment> or delete this line; wait-for reads the token itself and never prints it -->
 - Deploy rules: <!-- one line per repo: `workflow <name> on <branch>`, `release-tag`, or `branch <name>` -->
   - <owner/repo>: workflow <deploy> on <main>
