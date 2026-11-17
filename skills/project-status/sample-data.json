@@ -1,0 +1,55 @@
+{
+ "as_of": "2026-01-12T17:00Z",
+ "projects": [
+  {
+   "id": "billing-migration",
+   "name": "Billing migration",
+   "priority": "P1",
+   "epic": "ENG-100",
+   "status": "On track",
+   "progress_pct": 60,
+   "progress_basis": "3 of 5 milestones done.",
+   "next_milestone": "Cut over the last region, 2026-01-20",
+   "deadline": "2026-01-30",
+   "needs_me": [
+    {"ask": "Approve the cutover window for the last region.", "ticket": "ENG-142", "due": "2026-01-15"}
+   ],
+   "summary": "Moving invoices from the old billing service to the new one. Two of three regions are live. The last region waits on a cutover window.",
+   "breakdown": [
+    {"group": "Milestones", "items": [
+     {"text": "New service deployed", "state": "done", "owner": "Sam", "ref": "ENG-101", "date": "2025-12-01"},
+     {"text": "Region 1 cut over", "state": "done", "owner": "Sam", "ref": "ENG-120", "date": "2025-12-15"},
+     {"text": "Region 2 cut over", "state": "done", "owner": "Ana", "ref": "billing 88", "date": "2026-01-08"},
+     {"text": "Region 3 cut over", "state": "waiting", "owner": "you", "ref": "ENG-142", "date": "2026-01-20"},
+     {"text": "Old service switched off", "state": "not started", "ref": "ENG-150"}
+    ]}
+   ],
+   "decisions": [{"date": "2026-01-05", "decision": "Cut over one region at a time."}],
+   "recent_progress": [{"date": "2026-01-08", "text": "Region 2 live with no failed invoices."}],
+   "links": [{"label": "Project notes", "url": "https://example.com/notes"}]
+  },
+  {
+   "id": "search-revamp",
+   "name": "Search revamp",
+   "status": "At risk",
+   "progress_pct": 25,
+   "deadline": "2026-02-15",
+   "breakdown": [
+    {"group": "Work", "items": [
+     {"text": "Index design", "state": "done"},
+     {"text": "Ranking tests", "state": "in progress", "owner": "Lee"},
+     {"text": "Vendor contract", "state": "blocked", "owner": "Legal"},
+     {"text": "Rollout", "state": "not started"}
+    ]}
+   ]
+  }
+ ],
+ "waiting_on": [
+  {"person": "Legal", "what": "Signed vendor contract", "project_id": "search-revamp", "since": "2026-01-02", "nudge_due": "2026-01-12", "where": "email thread"},
+  {"person": "Ana", "what": "Region 3 dry-run results", "project_id": "billing-migration", "since": "2026-01-09", "nudge_due": "2026-01-14", "where": "team channel"}
+ ],
+ "one_offs": [
+  {"title": "Renew the staging certificate", "state": "not started", "needs_me": true, "due": "2026-01-16"},
+  {"title": "Expense report", "state": "done"}
+ ]
+}

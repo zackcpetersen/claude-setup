@@ -1,0 +1,15 @@
+{
+  "title": "My Project Status",
+  "tracker_url": "https://FILL-IN.atlassian.net/browse/",
+  "github_org": "FILL-IN",
+  "source_note": "Snapshot from my project notes.",
+  "artifact_url": "",
+  "theme": {
+    "light": {
+      "--canvas": "#1F2A37",
+      "--accent": "#2F7FBF",
+      "--accent-soft": "#A9CDEA",
+      "--strong": "#111827"
+    }
+  }
+}

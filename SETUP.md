@@ -16,13 +16,14 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `skills/review-pr/` | `review-pr` skill - review a teammate's PR, approve or comment with per-comment approval | `~/.claude/skills/` (symlink) |
 | `skills/daily-auth/` | `daily-auth` skill - check and fix every login the day needs, from `~/.claude/auth-checks.json` | `~/.claude/skills/` (symlink) |
 | `skills/sync-repos/` | `sync-repos` skill - fast-forward every repo in `~/.claude/sync-repos.json` to `origin/main` | `~/.claude/skills/` (symlink) |
-| `skills/watch/` | `watch` skill - background waits on PRs, deploys and Dagster runs that wake the session once, plus an hourly Slack sweep that drafts replies and proposes watches | `~/.claude/skills/` (symlink) |
+| `skills/project-status/` | `project-status` skill - a visual project status page (progress rings, status bars, needs-you badges) built from a data file and published as a private Artifact | `~/.claude/skills/` (symlink) |
+| `skills/watch/` | `watch` skill - background waits on PRs, deploys and Dagster runs that wake the session once, plus a cheap 5-minute Slack poll that wakes the session only when you are messaged | `~/.claude/skills/` (symlink) |
 | `output-styles/direct.md` | "Direct" output style - answer first, plain english, no hedging | `~/.claude/output-styles/` (symlink) |
 | `output-styles/momentum.md` | "Momentum" output style - Direct plus progress tracking and one next action | `~/.claude/output-styles/` (symlink) |
 | `output-styles/tldr.md` | "TLDR" output style - 1-3 sentences, expands only on request | `~/.claude/output-styles/` (symlink) |
 | `bin/query_db` | Read-only Postgres query helper | `~/bin/` (symlink) |
 | `bin/worktree` | Multi-repo git worktree manager | `~/bin/` (symlink) |
-| `bin/wait-for` | Background wait the `watch` skill starts: PR, deploy or Dagster run, one event line then exit (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
+| `bin/wait-for` | Background wait the `watch` skill starts: PR, deploy, Dagster run or Slack poll, one event line then exit (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
 | `plugins/model-discipline/` | `model-discipline` plugin - the agent-model-guard hook, a SessionStart rules block, and the `playbook` skill | `/plugin install`, see section 4 |
 | `plugins/plan-gate/` | `plan-gate` plugin - blocks `ExitPlanMode` until `/self-review` records a pass | `/plugin install`, see section 4 |
@@ -99,6 +100,21 @@ The manual equivalent, and what `update.sh` does under the hood:
 Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
 
+- 2026-11-17: New `project-status` skill (a visual project status
+  page). Per machine: re-run `./install.sh` to link it, then follow
+  "`skills/project-status/SKILL.md`" in the fill-in checklist
+  (`~/.claude/project-status/config.json`).
+- 2026-11-17: The hourly Slack sweep is retired. `~/bin/wait-for slack`
+  polls Slack every 5 minutes on the cheapest model (about half a cent
+  a poll, around 9 seconds) and wakes the session only when someone
+  messaged you. Board sync took over the sweep's other jobs (NUDGE? and
+  PROPOSE). Per machine: re-run `./install.sh`; add the new
+  `Slack poll` lines from the `### Watches` block of the template to
+  `~/.claude/CLAUDE.md` (set `Slack poll: on`, list your user groups);
+  delete any hourly sweep cron (`CronList`, `CronDelete`); check it
+  with `~/bin/wait-for slack --once` (prints `SLACK ...` or `NOTHING`;
+  add `--since 2h` to look further back). Needs the `claude` command on
+  the PATH and the Slack MCP plugin signed in.
 - 2026-10-31: The `watch` skill dropped its registry. `bin/watch` is
   gone; waits are background `~/bin/wait-for` commands and Slack is
   swept hourly. Per machine: re-run `./install.sh`; `rm ~/bin/watch`;
@@ -189,12 +205,19 @@ Work through these once per machine:
 - Create one empty Notion page with an inline database (any name, only the default title property) and put its URL on the `Board page` line. The skill adds the columns it needs on first run.
 - Optional: add the `Projects data source` line. On the first run the skill creates a "Projects" database under the board page with the schema in `page-template.md` and gives you the `collection://` id to paste back; after that it keeps one page per workstream current.
 - Needs the Notion MCP plugin, the Slack MCP plugin, your tracker's MCP plugin, `gh`, and `~/bin/worktree` with its config. The ticket flow also needs `/start-ticket`, `/self-review`, `/pr` and the built-in `/code-review` skill.
-- The watch-slack state file path (`~/.claude/watch-sweep.json`); the `watch` skill's hourly sweep uses it.
+- The watch-slack state file path (`~/.claude/watch-sweep.json`); it holds the declined list for the sync's NUDGE? and PROPOSE questions.
 
 ### `skills/watch/SKILL.md`
 - No file edits. Copy the `### Watches` block from `claude-md/CLAUDE.md.template` into `~/.claude/CLAUDE.md` and fill it in; the skill stops with a clear message if the section is missing.
-- Add the allow rules listed in the skill's Install section to `~/.claude/settings.json` by hand: `Bash(~/bin/wait-for *)` plus the Slack read tools and `slack_send_message_draft`, so the sweep never stops on a permission prompt.
-- Needs `gh`, Python 3, and `~/bin/wait-for` (linked by `install.sh`). The sweep needs the Slack MCP plugin; Dagster waits need the `Dagster` config line.
+- Slack poll lines: `Slack poll` (on or off), `Slack poll every`, `Slack poll model`, `Slack poll triggers`, `Slack poll user groups` (the Slack tools cannot list your groups, so type them), `Slack poll keywords`, `Slack poll ignore`, `Slack poll state file`. Check with `~/bin/wait-for slack --once`.
+- Add the allow rules listed in the skill's Install section to `~/.claude/settings.json` by hand: `Bash(~/bin/wait-for *)` plus the Slack read tools and `slack_send_message_draft`, so triage and drafts never stop on a permission prompt.
+- Needs `gh`, Python 3, and `~/bin/wait-for` (linked by `install.sh`). The Slack poll needs the `claude` command and the Slack MCP plugin; Dagster waits need the `Dagster` config line.
+
+### `skills/project-status/SKILL.md`
+- No file edits. Per-machine files live in `~/.claude/project-status/`: `mkdir -p ~/.claude/project-status`, copy `skills/project-status/config.example.json` there as `config.json` and fill in the title, the tracker link prefix, the GitHub org and (optional) your colors under `theme.light`. Brand colors stay in that local file, never in the repo.
+- Try it: `python3 ~/.claude/skills/project-status/build.py ~/.claude/skills/project-status/sample-data.json /tmp/project-status.html --config ~/.claude/project-status/config.json`, then ask Claude to publish that file as an Artifact.
+- Then ask Claude for "my project status page". It gathers your projects into `~/.claude/project-status/projects.json`, builds, publishes, and saves the Artifact link in `config.json` so every refresh updates the same page. "Add a one-off: ..." adds a standalone item.
+- Needs Python 3 and the Artifact tool. Reads the board's `Projects data source` when you use the `board` skill; without it, tell Claude where your project notes live.
 
 ### `skills/review-pr/SKILL.md`
 - No file edits. Needs `gh` and the built-in `/code-review` skill. Uses the writing-voice skill named in the `### Writing voice` section of `~/.claude/CLAUDE.md` when present, otherwise only the `reviewing-prs` comment rules it pastes into `dispatch-prompt.md`.
