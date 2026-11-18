@@ -12,12 +12,12 @@ Rules for editing this file:
 |---|---|
 | `{{slack_user_id}}` | `Slack user id` line of `### Work board` |
 | `{{after}}`, `{{after_iso}}` | the state file cursor minus 60 seconds (first run: 15 minutes ago), as Unix time and as a readable time |
-| `{{triggers}}` | `Slack poll triggers` line |
+| `{{triggers}}` | `Slack poll triggers` line, plus `thread-replies-mpim` when group DMs are filtered and `thread-replies` is off |
 | `{{user_groups}}` | `Slack poll user groups` line |
 | `{{keywords}}` | `Slack poll keywords` line |
 | `{{ignore}}` | `Slack poll ignore` line |
-| `{{active_after}}` | now minus the `Slack poll group-dms lookback` line (default 60 minutes), as Unix time; `none` when the `group-dms` trigger is off or `Slack poll group-dms` is `all` |
-| `{{user_name}}` | `Slack poll user name` line, else the name an earlier poll looked up (kept in the state file), else `look up`; `not needed` when `{{active_after}}` is `none` |
+| `{{active_after}}` | the earlier of `{{after}}` and now, minus the `Slack poll group-dms lookback` line (default 60 minutes), as Unix time; `none` when the `group-dms` trigger is off or `Slack poll group-dms` is `all` |
+| `{{user_name}}` | `Slack poll user name` line, else a valid name an earlier poll looked up (one word of 2 or more letters, kept in the state file), else `look up`; `not needed` when `{{active_after}}` is `none` |
 
 ```text
 You collect new Slack messages aimed at one person, Slack user {{slack_user_id}} (called "the user" below). You only collect. You never judge how urgent anything is.
@@ -34,15 +34,16 @@ User first name: {{user_name}}
 
 For each enabled trigger, run its recipe below with `slack_search_public_and_private`. Run only the recipes for enabled triggers. Every call uses: after "{{after}}", sort "timestamp", sort_dir "asc", response_format "detailed", include_context false, limit 20. If a result says there is a next page, fetch it with the cursor, at most 3 pages per recipe.
 
-- mentions: keywords ["<@{{slack_user_id}}>"], channel_types "public_channel,private_channel". kind "mention".
+- mentions: keywords ["<@{{slack_user_id}}>"], channel_types "public_channel,private_channel,mpim". kind "mention".
 - dms: filters "to:<@{{slack_user_id}}>", channel_types "im". kind "dm".
 - group-dms: filters "to:<@{{slack_user_id}}>", channel_types "mpim". kind "group-dm".
 - user-groups: once per group handle, keywords ["@<handle>"] (for example ["@team-name"]), channel_types "public_channel,private_channel,mpim", include_bots true. kind "user-group". Skip if the group list is "none".
 - thread-replies: filters "is:thread with:<@{{slack_user_id}}> -from:<@{{slack_user_id}}>", channel_types "public_channel,private_channel,mpim". kind "thread-reply".
+- thread-replies-mpim: the thread-replies recipe with channel_types "mpim" only. kind "thread-reply".
 - keywords: once per keyword, keywords ["<keyword>"], channel_types "public_channel,private_channel,mpim,im". kind "keyword". Skip if the keyword list is "none".
 
 Two collect-only extras. They add no events:
-- active group DMs: skip if the activity window above is "none". Otherwise run one search with filters "from:<@{{slack_user_id}}>", channel_types "mpim", after the activity window start (not the search window), limit 20, one page. Put the channel ID of every result in "user_active_mpims", each ID once.
+- active group DMs: skip if the activity window above is "none". Otherwise run one search with filters "from:<@{{slack_user_id}}>", channel_types "mpim", after the activity window start (not the search window), sort_dir "desc" (newest first, unlike the other searches), limit 20, one page. Put the channel ID of every result in "user_active_mpims", each ID once.
 - first name: only if the user first name above is "look up", read the profile of {{slack_user_id}} with `slack_read_user_profile` and put their first name in "user_first_name". Otherwise leave it "".
 
 Keep every message found, except these, which you drop:
