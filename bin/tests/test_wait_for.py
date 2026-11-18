@@ -804,5 +804,115 @@ class SlackTests(Base):
         self.assertEqual(cfg["model"], "haiku")
 
 
+def claude_answer(obj, cost=0.004):
+    return json.dumps([{"type": "result", "is_error": False, "result": json.dumps(obj), "total_cost_usd": cost}])
+
+
+def gdm(ts, **kw):
+    return ev(ts, **{"channel_id": "G0GROUP", "channel_name": "group", "kind": "group-dm", "text": "lunch?", **kw})
+
+
+class GroupDmTests(SlackTests):
+    def setUp(self):
+        super().setUp()
+        self.md = SLACK_MD.format(tmp=self.tmp).replace("mentions, dms", "mentions, dms, group-dms, thread-replies")
+        self.cfg_path.write_text(self.md)
+        self.held = self.tmp / "state" / "slack-poll-held.jsonl"
+
+    def poll(self, events, **extra):
+        rc, out, err, calls = self.slack([claude_answer({"events": events, **extra})], "--once")
+        self.assertEqual(rc, 0, err)
+        return out, calls
+
+    def held_lines(self):
+        return [json.loads(l) for l in self.held.read_text().splitlines()] if self.held.exists() else []
+
+    def reported(self, out):
+        return [] if out == "NOTHING" else [e["ts"] for e in json.loads(Path(out.split(" ")[2]).read_text())["events"]]
+
+    def test_chatter_is_held_marked_seen_and_wakes_no_one(self):
+        out, _ = self.poll([gdm("1.1"), gdm("1.2")], user_first_name="Sam")
+        self.assertEqual(out, "NOTHING")
+        held = self.held_lines()
+        self.assertEqual([h["ts"] for h in held], ["1.1", "1.2"])
+        self.assertEqual(held[0]["held_at"], "2026-01-05T12:00:00Z")
+        self.assertEqual(held[0]["text"], "lunch?")
+        self.assertEqual(json.loads(self.state.read_text())["seen"], ["G0GROUP:1.1", "G0GROUP:1.2"])
+        out, _ = self.poll([gdm("1.1")])
+        self.assertEqual(out, "NOTHING")
+        self.assertEqual(len(self.held_lines()), 2)  # not held twice
+
+    def test_rule1_id_mention_is_reported(self):
+        out, _ = self.poll([gdm("1.1", text="can <@U0SELF> look?"), gdm("1.2")])
+        self.assertEqual(self.reported(out), ["1.1"])
+        self.assertEqual([h["ts"] for h in self.held_lines()], ["1.2"])
+
+    def test_rule1_first_name_whole_word_only(self):
+        self.cfg_path.write_text(self.md + "- Slack poll user name: Sam Smith\n")
+        events = [gdm("1.1", text="sam, can you check?"), gdm("1.2", text="Samantha said so"),
+                  gdm("1.3", text="ask Sam."), gdm("1.4", text="the sample is ready")]
+        out, calls = self.poll(events)
+        self.assertEqual(self.reported(out), ["1.1", "1.3"])
+        self.assertEqual([h["ts"] for h in self.held_lines()], ["1.2", "1.4"])
+        self.assertIn("User first name: Sam\n", calls[0][0][2])
+
+    def test_rule2_thread_reply_kind_is_reported(self):
+        out, _ = self.poll([gdm("1.1", kind="thread-reply", thread_ts="1.0"), gdm("1.2")])
+        self.assertEqual(self.reported(out), ["1.1"])
+        prompt = W.slack_prompt_template()
+        self.assertIn("thread-reply, keyword, group-dm.", prompt)  # thread replies win over group-dm
+
+    def test_rule3_user_active_group_dm_is_reported(self):
+        out, calls = self.poll([gdm("1.1"), gdm("1.2", channel_id="G0OTHER")], user_active_mpims=["G0GROUP"])
+        self.assertEqual(self.reported(out), ["1.1"])
+        self.assertEqual([h["channel_id"] for h in self.held_lines()], ["G0OTHER"])
+        self.assertIn(f"window starts at Unix time: {int(W.NOW().timestamp()) - 3600}", calls[0][0][2])
+
+    def test_lookback_is_configurable(self):
+        self.cfg_path.write_text(self.md + "- Slack poll group-dms lookback: 2h\n")
+        _, calls = self.poll([])
+        self.assertIn(f"window starts at Unix time: {int(W.NOW().timestamp()) - 7200}", calls[0][0][2])
+
+    def test_other_kinds_are_never_held(self):
+        out, _ = self.poll([ev("1.1"), ev("1.2", kind="mention", channel_id="C0X"),
+                            ev("1.3", kind="user-group", channel_id="G0GROUP")])
+        self.assertEqual(self.reported(out), ["1.1", "1.2", "1.3"])
+        self.assertEqual(self.held_lines(), [])
+
+    def test_off_switch_reports_everything(self):
+        self.cfg_path.write_text(self.md + "- Slack poll group-dms: all\n")
+        out, calls = self.poll([gdm("1.1"), gdm("1.2")])
+        self.assertEqual(self.reported(out), ["1.1", "1.2"])
+        self.assertFalse(self.held.exists())
+        self.assertIn("window starts at Unix time: none", calls[0][0][2])
+        self.assertIn("User first name: not needed", calls[0][0][2])
+
+    def test_bad_mode_exits_2(self):
+        self.cfg_path.write_text(self.md + "- Slack poll group-dms: some\n")
+        rc, out, err, _ = self.slack([], "--once")
+        self.assertEqual(rc, 2)
+        self.assertIn("group-dms", err)
+
+    def test_old_answer_format_without_extras_still_works(self):
+        rc, out, err, _ = self.slack([claude_out([gdm("1.1"), ev("1.2")])], "--once")
+        self.assertEqual(self.reported(out), ["1.2"])
+        self.assertEqual([h["ts"] for h in self.held_lines()], ["1.1"])
+        self.assertEqual(W.parse_extras('{"events": []}'), (set(), ""))
+        self.assertEqual(W.parse_extras('{"events": [], "user_active_mpims": "G1", "user_first_name": 3}'), (set(), ""))
+
+    def test_name_is_looked_up_once_then_cached(self):
+        _, calls = self.poll([gdm("1.1", text="Sam?")], user_first_name="Sam")
+        self.assertIn("User first name: look up", calls[0][0][2])
+        self.assertEqual(json.loads(self.state.read_text())["user_name"], "Sam")
+        out, calls = self.poll([gdm("1.2", text="Sam?")])
+        self.assertIn("User first name: Sam\n", calls[0][0][2])
+        self.assertEqual(self.reported(out), ["1.2"])
+
+    def test_trigger_off_skips_the_extra_search(self):
+        self.cfg_path.write_text(SLACK_MD.format(tmp=self.tmp))
+        _, calls = self.poll([])
+        self.assertIn("window starts at Unix time: none", calls[0][0][2])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -209,7 +209,7 @@ Work through these once per machine:
 
 ### `skills/watch/SKILL.md`
 - No file edits. Copy the `### Watches` block from `claude-md/CLAUDE.md.template` into `~/.claude/CLAUDE.md` and fill it in; the skill stops with a clear message if the section is missing.
-- Slack poll lines: `Slack poll` (on or off), `Slack poll every`, `Slack poll model`, `Slack poll triggers`, `Slack poll user groups` (the Slack tools cannot list your groups, so type them), `Slack poll keywords`, `Slack poll ignore`, `Slack poll state file`. Check with `~/bin/wait-for slack --once`.
+- Slack poll lines: `Slack poll` (on or off), `Slack poll every`, `Slack poll model`, `Slack poll triggers`, `Slack poll user groups` (the Slack tools cannot list your groups, so type them), `Slack poll keywords`, `Slack poll ignore`, `Slack poll state file`, and the optional group DM lines `Slack poll group-dms` (aimed-only or all, default aimed-only), `Slack poll group-dms lookback` (default 60m) and `Slack poll user name`. Check with `~/bin/wait-for slack --once`.
 - Add the allow rules listed in the skill's Install section to `~/.claude/settings.json` by hand: `Bash(~/bin/wait-for *)` plus the Slack read tools and `slack_send_message_draft`, so triage and drafts never stop on a permission prompt.
 - Needs `gh`, Python 3, and `~/bin/wait-for` (linked by `install.sh`). The Slack poll needs the `claude` command and the Slack MCP plugin; Dagster waits need the `Dagster` config line.
 
