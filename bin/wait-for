@@ -41,6 +41,11 @@ SLACK_BUDGET_USD = "0.25"  # hard cap per poll run
 SLACK_STATE_FILE = "~/.claude/slack-poll.json"
 SLACK_TRIGGERS = ("mentions", "dms", "group-dms", "user-groups", "thread-replies", "keywords")
 SLACK_DEFAULT_TRIGGERS = ("mentions", "dms", "group-dms", "user-groups", "thread-replies")
+SLACK_GROUP_DM_MODES = ("aimed-only", "all")
+SLACK_GROUP_DM_LOOKBACK = "60m"  # the user posted in a group DM this recently: they are in the conversation
+SLACK_HELD_KEEP = timedelta(days=14)  # held group DM lines older than this are dropped on the next append
+SLACK_HELD_TAIL = 200  # lines checked for a duplicate key before appending
+_warned = set()
 SLACK_READ_TOOLS = ("slack_search_public_and_private", "slack_search_public", "slack_read_thread", "slack_read_channel",
                     "slack_read_user_profile", "slack_search_users", "slack_search_channels")
 SLACK_WRITE_TOOLS = ("slack_send_message", "slack_send_message_draft", "slack_schedule_message", "slack_add_reaction",
@@ -195,6 +200,11 @@ def load_slack_config(path):
     keywords = _split_list(watches.get("Slack poll keywords"))
     if "keywords" in triggers and not keywords:
         raise WaitError("the keywords trigger is on but the `Slack poll keywords` line is empty")
+    group_dms = watches.get("Slack poll group-dms", "").lower() or "aimed-only"
+    if group_dms not in SLACK_GROUP_DM_MODES:
+        raise WaitError(f"unknown `Slack poll group-dms` value {group_dms}; known: {', '.join(SLACK_GROUP_DM_MODES)}")
+    name = watches.get("Slack poll user name", "")
+    lookback = parse_duration(watches.get("Slack poll group-dms lookback") or SLACK_GROUP_DM_LOOKBACK)
     return {
         "user": user,
         "prefix": conn.group(1),
@@ -205,6 +215,9 @@ def load_slack_config(path):
         "keywords": keywords,
         "ignore": _split_list(watches.get("Slack poll ignore")),
         "state_file": _expand(watches.get("Slack poll state file", SLACK_STATE_FILE)),
+        "group_dms": group_dms,
+        "user_name": "" if _is_unset(name) else name.split()[0],
+        "group_dm_lookback": lookback,
     }
 
 
@@ -520,25 +533,98 @@ def parse_claude(stdout):
     return result.get("result") or "", result.get("total_cost_usd")
 
 
-def parse_events(answer):
-    """Take the text from the first `{` to the last `}` and read its `events` list."""
+def _answer_object(answer):
+    """Take the text from the first `{` to the last `}` as one JSON object."""
     start, end = answer.find("{"), answer.rfind("}")
     if start < 0 or end < start:
         raise RuntimeError("the poll answer has no JSON object")
-    events = json.loads(answer[start:end + 1]).get("events")
+    data = json.loads(answer[start:end + 1])
+    if not isinstance(data, dict):
+        raise RuntimeError("the poll answer is not a JSON object")
+    return data
+
+
+def parse_events(data):
+    """Read the `events` list of the parsed poll answer."""
+    events = data.get("events")
     if not isinstance(events, list):
         raise RuntimeError("the poll answer has no events list")
     return [e for e in events if isinstance(e, dict) and e.get("channel_id") and e.get("ts")]
+
+
+def parse_extras(data):
+    """The optional keys next to `events`: group DM ids the user posted in lately, and the user's first name.
+
+    A missing or malformed key reads as empty, so an answer in the older format still works.
+    """
+    active = data.get("user_active_mpims")
+    active = {str(c) for c in active if c} if isinstance(active, list) else set()
+    name = data.get("user_first_name")
+    name = name.split()[0] if isinstance(name, str) and name.split() else ""
+    return active, name
+
+
+def valid_name(name):
+    """A first name worth matching: one alphabetic word of 2 or more letters."""
+    return bool(re.fullmatch(r"[^\W\d_]{2,}", name or ""))
+
+
+def warn_once(key, text):
+    if key not in _warned:
+        _warned.add(key)
+        print(f"WARN {text}", file=sys.stderr)
+
+
+def aimed_at_user(event, cfg, name, active):
+    """True when a group DM message should reach the user, False when it is chatter to hold back."""
+    text = str(event.get("text") or "")
+    words = ([name] if name else []) + (cfg["keywords"] if "keywords" in cfg["triggers"] else [])
+    return (f"<@{cfg['user']}>" in text
+            or any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", text, re.I) for w in words)
+            or event.get("channel_id") in active)
+
+
+def held_path(state_file):
+    state_file = Path(state_file)
+    return state_file.with_name(state_file.stem + "-held.jsonl")
+
+
+def append_held(path, events, now):
+    """Add held events to the held file, once each, and drop lines older than SLACK_HELD_KEEP. Atomic rewrite."""
+    path = Path(path)
+    cutoff = (now - SLACK_HELD_KEEP).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        old = path.read_text().splitlines()
+    except FileNotFoundError:
+        old = []
+    kept = []
+    for line in old:
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(item, dict) and str(item.get("held_at") or "") >= cutoff:
+            kept.append(item)
+    tail = {f"{h.get('channel_id')}:{h.get('ts')}" for h in kept[-SLACK_HELD_TAIL:]}
+    held_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    for e in events:
+        if f"{e['channel_id']}:{e['ts']}" not in tail:
+            kept.append({**e, "held_at": held_at})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("".join(json.dumps(h) + "\n" for h in kept))
+    os.replace(tmp, path)
 
 
 def load_state(path):
     try:
         state = json.loads(Path(path).read_text())
     except FileNotFoundError:
-        return {"cursor": None, "seen": []}
+        return {"cursor": None, "seen": [], "user_name": ""}
     except (OSError, ValueError) as e:
         raise WaitError(f"cannot read the Slack poll state file {path}: {e}")
-    return {"cursor": state.get("cursor"), "seen": list(state.get("seen") or [])}
+    return {"cursor": state.get("cursor"), "seen": list(state.get("seen") or []),
+            "user_name": str(state.get("user_name") or "")}
 
 
 def poll_slack(cfg, since=None):
@@ -554,35 +640,59 @@ def poll_slack(cfg, since=None):
         after = datetime.fromtimestamp(float(state["cursor"]) - SLACK_OVERLAP, timezone.utc)
     else:
         after = started - SLACK_FIRST_LOOKBACK
+    filtering = "group-dms" in cfg["triggers"] and cfg["group_dms"] == "aimed-only"
+    cached = state["user_name"] if valid_name(state["user_name"]) else ""
+    name = cfg["user_name"] or cached
+    # cover the whole search window, so an older message is judged against the hour before it too
+    active_after = min(after, started) - cfg["group_dm_lookback"]
+    triggers = list(cfg["triggers"])
+    if filtering and "thread-replies" not in triggers:
+        triggers.append("thread-replies-mpim")  # rule 2 needs thread replies in group DMs even with the trigger off
     prompt = fill(slack_prompt_template(), {
         "slack_user_id": cfg["user"],
         "after": str(int(after.timestamp())),
         "after_iso": after.strftime("%Y-%m-%d %H:%M UTC"),
-        "triggers": ", ".join(cfg["triggers"]),
+        "triggers": ", ".join(triggers),
         "user_groups": ", ".join(cfg["groups"]) or "none",
         "keywords": ", ".join(cfg["keywords"]) or "none",
         "ignore": ", ".join(cfg["ignore"]) or "none",
+        "active_after": str(int(active_after.timestamp())) if filtering else "none",
+        "user_name": (name or "look up") if filtering else "not needed",
     })
     answer, cost = parse_claude(run_claude(slack_command(cfg, prompt), str(events_dir)))
     seen = set(state["seen"])
     ignore = {i.lstrip("#@").lower() for i in cfg["ignore"]}
-    fresh = []
-    for e in parse_events(answer):
+    data = _answer_object(answer)
+    active, found_name = parse_extras(data)
+    if filtering and not name:
+        if valid_name(found_name):
+            name = cached = found_name
+        else:
+            warn_once("user-name", "slack user-name: could not read your first name from your Slack profile, so group "
+                      "DM messages are not matched by name; set `Slack poll user name:` in the ### Watches section")
+    fresh, held = [], []
+    for e in parse_events(data):
         key = f"{e['channel_id']}:{e['ts']}"
         names = {str(e.get(k) or "").lstrip("#@").lower() for k in ("channel_id", "channel_name", "author_id", "author")}
         if key in seen or e.get("author_id") == cfg["user"] or names & ignore:
             continue
         seen.add(key)
         e["text"] = str(e.get("text") or "")[:SLACK_TEXT_CAP]
-        fresh.append(e)
-    new_seen = (state["seen"] + [f"{e['channel_id']}:{e['ts']}" for e in fresh])[-SLACK_SEEN_CAP:]
+        if filtering and e.get("kind") == "group-dm" and not aimed_at_user(e, cfg, name, active):
+            held.append(e)
+        else:
+            fresh.append(e)
+    new_seen = (state["seen"] + [f"{e['channel_id']}:{e['ts']}" for e in fresh + held])[-SLACK_SEEN_CAP:]
     line = None
     if fresh:
         out = events_dir / (started.strftime("%Y%m%dT%H%M%SZ") + ".json")
         write_json(out, {"after": int(after.timestamp()), "polled_at": int(started.timestamp()), "events": fresh})
         line = f"SLACK {len(fresh)} {out}"
     write_json(state_file, {"cursor": int(started.timestamp()), "seen": new_seen,
-                            "last_poll": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "last_cost_usd": cost})
+                            "last_poll": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "last_cost_usd": cost,
+                            "user_name": cached})
+    if held:  # after the state file, so a failure here never holds a message twice
+        append_held(held_path(state_file), held, started)
     return line
 
 
