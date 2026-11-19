@@ -61,6 +61,10 @@ check "prompt with the marker is untouched" empty "$out"
 out="$(run '{"tool_input":{"subagent_type":"fork","prompt":"carry on"}}')"
 check "fork is untouched" empty "$out"
 
+out="$(run '{"tool_input":{"subagent_type":"general-purpose","model":"sonnet","prompt":"x"}}')"
+check "rules say report once and never by SendMessage" \
+  bash -c 'p=$(printf %s "$1" | jq -r ".hookSpecificOutput.updatedInput.prompt"); [[ "$p" == *"Never also send it with SendMessage"* && "$p" != *"If you report by SendMessage"* ]]' _ "$out"
+
 out="$(printf %s 'not json {' | bash "$HOOK" 2>/dev/null)"
 code=$?
 check "bad JSON exits 0 with no output" test "$code" -eq 0 -a -z "$out"

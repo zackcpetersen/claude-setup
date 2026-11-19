@@ -9,7 +9,7 @@
     {
       "name": "model-discipline",
       "source": "./plugins/model-discipline",
-      "description": "Keeps expensive-model spend on judgment work: a PreToolUse guard that denies unpinned subagent dispatches, an always-on session rules block, and a playbook skill for dispatch and session hygiene."
+      "description": "Keeps expensive-model spend on judgment work: a PreToolUse guard that denies unpinned subagent dispatches, an always-on session rules block, a context-size warning and a code-review target check, and a playbook skill for dispatch and session hygiene."
     },
     {
       "name": "plan-gate",

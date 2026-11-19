@@ -39,8 +39,9 @@ IFS= read -r -d '' rules <<'EOF'
 Unless this prompt asks for a different output format or workflow:
 - Own environment: unset `VIRTUAL_ENV` and use the worktree's own env, never the main checkout's venv.
 - Batch changes into one push, not a push per fix.
-- Report exactly once at the end: `DONE: <summary or sha>` or `BLOCKED: <reason>`.
-- If you report by SendMessage, send to `main`, never `team-lead` (that inbox can stall on a held prompt).
+- Deliver your report once: `DONE: <summary or sha>` or `BLOCKED: <reason>`, by the hand-back tool when you have one, else as your final message. Never also send it with SendMessage.
+- A mid-task message (a question, a blocker) goes by SendMessage to `main`, never `team-lead`. End that turn with the single word `sent`, so your idle notice repeats nothing.
+- If you work from a plan file, re-read its `## Decisions` section right before your report and drop any question it already answers.
 - One owner per file or Notion page: never edit what another agent owns.
 - If you dispatch agents yourself, check on any that is silent for more than 10 minutes and unblock it.
 EOF
