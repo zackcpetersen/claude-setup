@@ -46,6 +46,7 @@ WAIT_FOR_PR = re.compile(r"wait-for\s+pr\s+(\S+)\s+(\d+)\b")
 APPLY_KINDS = {"remove_worktree", "worktree_gone", "prune_worktree", "delete_branch", "branch_gone",
                "branch_no_pr", "remove_empty", "archive_file", "trim_log", "stop_process"}
 WORKTREE_KINDS = ("remove_worktree", "worktree_gone", "prune_worktree")
+STATUS_FAILED = "<git status failed>"  # a worktree whose status cannot be read is never removed
 MODES = ("daily", "stale", "weekly")
 PR_FIELDS = "number,state,headRefName,headRefOid,baseRefName"
 
@@ -139,12 +140,13 @@ def load_config(path, home):
 
 
 def poll_files(cfg):
-    """(events folder, triage log) next to the Slack poll state file, named from its stem the way
-    wait-for names the events folder, or (None, None) without a poll."""
+    """(events folder, triage log) next to the Slack poll state file, or (None, None) without a poll.
+    The events folder is named from the state file's stem, as wait-for names it. The triage log is
+    written by the watch skill's session under a fixed name next to the state file."""
     state = cfg["poll_state"]
     if not state:
         return None, None
-    return state.with_name(state.stem + "-events"), state.with_name(state.stem + "-triage.jsonl")
+    return state.with_name(state.stem + "-events"), state.with_name("slack-poll-triage.jsonl")
 
 
 def load_repos(cfg):
@@ -362,14 +364,16 @@ def worktree_check(wt, main, repo):
     files, dirs = copy_map(repo)
     rows = _status(wt, "--untracked-files=all")
     if rows is None:
-        return ["<git status failed>"], []
+        return [STATUS_FAILED], []
     edits = []
     for code, path in rows:
         kind, src = classify_copy(path, files, dirs)
         if kind == "excluded" or (kind == "copy" and "D" not in code and _same(wt / path, main / src)):
             continue
         edits.append(path)
-    ignored = _status(wt, "--ignored=traditional", "--untracked-files=normal") or []
+    ignored = _status(wt, "--ignored=traditional", "--untracked-files=normal")
+    if ignored is None:
+        return [STATUS_FAILED], []
     other = []
     copy_roots = list(files) + [d for d, _ in dirs]
     for code, path in ignored:
@@ -393,6 +397,14 @@ def worktree_check(wt, main, repo):
                 continue
             other.append(rel)
     return edits, other
+
+
+def staged_patch(wt):
+    """The worktree's staged changes as a binary patch (empty bytes when nothing is staged)."""
+    p = subprocess.run(["git", "-C", str(wt), "diff", "--cached", "--binary"], capture_output=True)
+    if p.returncode != 0:
+        raise TidyError(f"cannot read staged changes in {wt}")
+    return p.stdout
 
 
 def process_cwds():
@@ -488,7 +500,12 @@ def scan_repo(repo, cfg, now, fetch, mode):
         item = {"tier": "report", "repo": repo["key"], "repo_path": str(path), "target": str(wt), "path": str(wt),
                 "sha": head}
         if not wt.exists():
-            found.append({**item, "kind": "worktree_missing", "note": "folder gone; `git worktree prune` clears it"})
+            # Report only: removing the entry leaves the detached commits reachable from nothing, so the
+            # command keeps them under refs/tidy-archive/ first.
+            found.append({**item, "kind": "worktree_missing",
+                          "note": f"folder gone; removing the entry makes commit {head[:9]} unreachable unless kept",
+                          "command": f"git -C {q(path)} update-ref refs/tidy-archive/{head} {head} && "
+                                     f"git -C {q(path)} worktree remove {q(wt)}"})
         else:
             edits, _ = worktree_check(wt, main_path, repo)
             found.append({**item, "kind": "worktree_detached", "files": edits[:20]})
@@ -497,7 +514,9 @@ def scan_repo(repo, cfg, now, fetch, mode):
         name, sha = b["branch"], b["sha"]
         if name == default or name == main_branch:
             continue
-        looked_up = prs_for_branch(path, prs, name)
+        # Per-branch PR lookups cost one gh call each, so only the weekly scan (the one that offers old
+        # branches) makes them.
+        looked_up = prs_for_branch(path, prs, name) if mode == "weekly" else prs
         pr = pick_pr(looked_up or None, name, sha)
         if pr and pr["state"] == "OPEN":
             continue
@@ -516,13 +535,18 @@ def scan_repo(repo, cfg, now, fetch, mode):
                 # The folder was deleted by hand: git still lists it as prunable.
                 if how:
                     found.append({**item, "tier": 1, "kind": "prune_worktree",
-                                  "note": "folder gone; git worktree prune, then delete the merged branch"})
+                                  "note": "folder gone; remove its worktree entry, then delete the merged branch"})
                 else:
                     found.append({**item, "tier": "report", "kind": "worktree_missing",
-                                  "note": "folder gone; `git worktree prune` clears it, then the branch is offered "
-                                          "like any other old branch"})
+                                  "note": "folder gone; the branch keeps its commits. Removing the entry lets the "
+                                          "branch be offered like any other old branch",
+                                  "command": f"git -C {q(path)} worktree remove {q(wt)}"})
                 continue
             edits, ignored = worktree_check(wt, main_path, repo)
+            if STATUS_FAILED in edits:
+                found.append({**item, "tier": "report", "kind": "worktree_unreadable",
+                              "note": "git status failed (a corrupt index?); never removed until it can be read"})
+                continue
             nested = nested_worktrees(wt, wts)
             busy = in_use(wt, cwds)
             if how:
@@ -545,6 +569,9 @@ def scan_repo(repo, cfg, now, fetch, mode):
                 found.append({**item, "tier": "report", "kind": "worktree_in_use", "note": busy})
             elif edits or nested:
                 found.append({**item, "tier": "report", "kind": "worktree_edits", "files": (edits + nested)[:20]})
+            elif closed:
+                found.append({**item, "tier": "report", "kind": "worktree_closed", "reason": reason,
+                              "note": "clean; the weekly offers it once the branch is older than Branch age"})
             continue
         if how:
             found.append({**base, "tier": 1, "kind": "delete_branch", "target": f"{repo['key']}:{name}",
@@ -903,6 +930,8 @@ def recheck_branch(item, repo):
             return "worktree moved or gone", None
         wt = Path(item["path"])
         edits, ignored = worktree_check(wt, wts[0][0], repo)
+        if STATUS_FAILED in edits:
+            return "cannot read git status in the worktree", None
         if item["kind"] == "remove_worktree" and edits:
             return f"worktree has real edits: {', '.join(edits[:3])}", None
         if item["kind"] == "worktree_gone" and (sorted(edits) != sorted(item.get("edits") or [])
@@ -957,13 +986,19 @@ def plan_item(cfg, item, repos):
         wt = Path(item.get("path") or "")
         stash = free(cfg["tidy_dir"] / "archive" / date.today().isoformat() / "worktrees" / repo["key"] / wt.name) \
             if saved else None
+        # Staged changes (the index) are kept as a patch beside the archived files, so a file staged at one
+        # version and edited again keeps both versions.
+        patch = staged_patch(wt) if saved else b""
+        patch_file = free(stash.with_name(stash.name + ".staged.patch")) if patch else None
         if kind in ("remove_worktree", "worktree_gone"):
             restore += f" && git -C {q(rp)} worktree add {q(wt)} {q(name)}"
             if saved:
                 restore += f" && cp -Rp {q(stash)}/. {q(wt)}/"
+            if patch:
+                restore += f" && git -C {q(wt)} apply --cached {q(patch_file)}"
             restore += " # setup copies are not restored"
         verb = {"remove_worktree": "remove worktree", "worktree_gone": "remove worktree",
-                "prune_worktree": "prune missing worktree"}.get(kind)
+                "prune_worktree": "remove missing worktree entry"}.get(kind)
         what = f"{verb + ' ' + item['path'] + ' and ' if verb else ''}" \
                f"delete {name} at {sha[:9]}{', commits kept at ' + keep_ref if keep else ''}" \
                f"{', files kept at ' + str(stash) if saved else ''}"
@@ -971,13 +1006,20 @@ def plan_item(cfg, item, repos):
         def act():
             if keep:
                 git(rp, "update-ref", keep_ref, sha)
-            for rel in saved:
-                src = wt / rel
-                if src.exists() or src.is_symlink():
-                    (stash / rel).parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(src), str(stash / rel))
+            if saved:
+                stash.mkdir(parents=True, exist_ok=True)  # exists even when nothing is left to move
+                if patch:
+                    patch_file.write_bytes(patch)
+                for rel in saved:
+                    src = wt / rel
+                    if src.exists() or src.is_symlink():
+                        (stash / rel).parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(src), str(stash / rel))
+                left = [rel for rel in saved if (wt / rel).exists() or (wt / rel).is_symlink()]
+                if left:
+                    raise TidyError(f"archive step left files behind, worktree not removed: {', '.join(left[:3])}")
             if kind == "prune_worktree":
-                git(rp, "worktree", "prune")
+                git(rp, "worktree", "remove", str(wt))  # this one entry only; works on a missing folder
             elif verb:
                 git(rp, "worktree", "remove", "--force", str(wt))
             git(rp, "branch", "-D", name)
@@ -1093,14 +1135,21 @@ def apply(cfg, items, mode, dry):
     results = []
     for item in items:
         if not isinstance(item, dict):
-            results.append({"status": "failed", "kind": None, "target": None,
-                            "detail": f"not a finding object: {item!r}"[:200], "restore": None})
+            detail = f"not a finding object: {item!r}"[:200]
+            if not dry:
+                _log(cfg, {"mode": mode, "tier": None, "kind": None, "target": None, "phase": "result",
+                           "result": "failed", "action": detail, "restore": None})
+            results.append({"status": "failed", "kind": None, "target": None, "detail": detail, "restore": None})
             continue
         # One bad item (a missing field, a gh hiccup) is recorded as failed and the rest still run.
         try:
             status, detail, restore, act = plan_item(cfg, item, repos)
         except Exception as e:
             status, detail, restore, act = "failed", f"{type(e).__name__}: {e}", None, None
+            if not dry:
+                _log(cfg, {"mode": mode, "tier": item.get("tier"), "kind": item.get("kind"),
+                           "target": item.get("target"), "phase": "result", "result": "failed",
+                           "action": detail, "restore": None})
         if status == "ready" and dry:
             status = "would"
         elif status == "ready":

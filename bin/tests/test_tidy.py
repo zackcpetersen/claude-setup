@@ -315,8 +315,14 @@ class TestBranchTiers(Base):
         sha = self.branch("feat-ancient", push=True)
         self.pr(1, "feat-ancient", sha)
         self.hidden = {1}
-        hits = self.find(self.scan("daily"), branch="feat-ancient")
+        hits = self.find(self.scan(), branch="feat-ancient")
         self.assertEqual([(h["tier"], h["kind"], h["merged_by"]) for h in hits], [(1, "delete_branch", "pr")])
+
+    def test_daily_scan_makes_no_per_branch_pr_lookups(self):
+        self.branch("feat-a1")
+        self.branch("feat-a2")
+        self.scan("daily")
+        self.assertFalse([c for c in T.gh_pr_list.call_args_list if c.kwargs.get("branch") or len(c.args) > 1])
 
     def test_failed_per_branch_lookup_does_not_offer_the_branch(self):
         self.branch("feat-unknown")
@@ -518,23 +524,103 @@ class TestWorktrees(Base):
         self.assertEqual([(h["tier"], h["kind"]) for h in self.find(found, path=str(det))],
                          [("report", "worktree_detached")])
 
-    def test_missing_worktree_folder_offers_prune_and_branch_delete(self):
+    def detached_with_commit(self, where):
+        sh(self.repo, "git", "worktree", "add", "-q", "--detach", str(where), "main")
+        (where / "solo.txt").write_text("solo")
+        sh(where, "git", "add", "solo.txt")
+        sh(where, "git", "commit", "-qm", "solo")
+        return sh(where, "git", "rev-parse", "HEAD")
+
+    def test_missing_worktree_folder_removes_only_its_own_entry(self):
         wt = self.make_wt()
+        det = self.home / "wt-det"
+        self.detached_with_commit(det)
         shutil.rmtree(wt)
+        shutil.rmtree(det)
         hits = self.find(self.scan("daily"), branch="feat-w")
         self.assertEqual([(h["tier"], h["kind"]) for h in hits], [(1, "prune_worktree")])
         res = self.apply(hits, "daily")
         self.assertEqual(res[0]["status"], "done", res)
         self.assertFalse(self.has_branch("feat-w"))
-        self.assertEqual(len(T.worktrees(self.repo)), 1)
+        self.assertEqual([p for p, _, _ in T.worktrees(self.repo)][1:], [det])
 
-    def test_missing_unmerged_worktree_folder_is_reported(self):
+    def test_missing_unmerged_worktree_folder_is_reported_with_one_entry_command(self):
         self.branch("feat-lost")
         wt = self.home / "wt-lost"
         sh(self.repo, "git", "worktree", "add", "-q", str(wt), "feat-lost")
         shutil.rmtree(wt)
         hits = self.find(self.scan("daily"), branch="feat-lost")
         self.assertEqual([(h["tier"], h["kind"]) for h in hits], [("report", "worktree_missing")])
+        subprocess.run(hits[0]["command"], shell=True, check=True)
+        self.assertEqual(len(T.worktrees(self.repo)), 1)
+        self.assertTrue(self.has_branch("feat-lost"))
+
+    def test_missing_detached_worktree_command_keeps_its_commit(self):
+        det = self.home / "wt-det"
+        head = self.detached_with_commit(det)
+        shutil.rmtree(det)
+        hits = self.find(self.scan("daily"), path=str(det))
+        self.assertEqual([(h["tier"], h["kind"]) for h in hits], [("report", "worktree_missing")])
+        self.assertIn(head[:9], hits[0]["note"])
+        subprocess.run(hits[0]["command"], shell=True, check=True)
+        self.assertEqual(len(T.worktrees(self.repo)), 1)
+        self.assertEqual(sh(self.repo, "git", "rev-parse", f"refs/tidy-archive/{head}"), head)
+
+    def closed_wt(self, name):
+        sha = self.branch(name, push=True)
+        self.pr(77, name, sha, state="CLOSED")
+        wt = self.home / f"wt-{name}"
+        sh(self.repo, "git", "worktree", "add", "-q", str(wt), name)
+        return wt
+
+    def test_unreadable_worktree_is_never_removed(self):
+        wt = self.closed_wt("feat-bad")
+        (wt / "new.py").write_text("work\n")
+        item = self.find(self.scan(), branch="feat-bad")[0]
+        Path(sh(wt, "git", "rev-parse", "--absolute-git-dir"), "index").write_text("junk")
+        hits = self.find(self.scan(), branch="feat-bad")
+        self.assertEqual([(h["tier"], h["kind"]) for h in hits], [("report", "worktree_unreadable")])
+        forged = {**item, "edits": [T.STATUS_FAILED], "edits_count": 1}
+        for it in (item, forged):
+            self.assertEqual(self.apply([it])[0]["detail"], "cannot read git status in the worktree")
+        self.assertEqual((wt / "new.py").read_text(), "work\n")
+
+    def test_failed_archive_step_never_force_removes(self):
+        wt = self.closed_wt("feat-stuck")
+        (wt / "new.py").write_text("work\n")
+        item = self.find(self.scan(), branch="feat-stuck")[0]
+        with mock.patch.object(T.shutil, "move"):
+            res = self.apply([item])
+        self.assertEqual(res[0]["status"], "failed")
+        self.assertIn("left files behind", res[0]["detail"])
+        self.assertEqual((wt / "new.py").read_text(), "work\n")
+
+    def test_staged_and_working_versions_both_restored(self):
+        wt = self.closed_wt("feat-mm")
+        (wt / "feat-mm.txt").write_text("staged\n")
+        sh(wt, "git", "add", "feat-mm.txt")
+        (wt / "feat-mm.txt").write_text("working\n")
+        item = self.find(self.scan(), branch="feat-mm")[0]
+        res = self.apply([item])
+        self.assertEqual(res[0]["status"], "done", res)
+        subprocess.run(res[0]["restore"], shell=True, check=True)
+        self.assertEqual(sh(wt, "git", "show", ":feat-mm.txt"), "staged")
+        self.assertEqual((wt / "feat-mm.txt").read_text(), "working\n")
+
+    def test_restore_works_when_listed_files_vanished_before_apply(self):
+        wt = self.make_wt()
+        (wt / ".env.local").write_text("S=1\n")
+        item = self.find(self.scan(), branch="feat-w")[0]
+        (wt / ".env.local").unlink()
+        res = self.apply([item])
+        self.assertEqual(res[0]["status"], "done", res)
+        subprocess.run(res[0]["restore"], shell=True, check=True)
+        self.assertTrue((wt / "feat-w.txt").exists())
+
+    def test_clean_closed_pr_worktree_is_reported_in_daily(self):
+        self.closed_wt("feat-quiet")
+        hits = self.find(self.scan("daily"), branch="feat-quiet")
+        self.assertEqual([(h["tier"], h["kind"], h["reason"]) for h in hits], [("report", "worktree_closed", "PR closed")])
 
 
 class TestApplyGuards(Base):
@@ -745,6 +831,9 @@ class TestApplyGuards(Base):
                          "weekly")
         self.assertEqual([r["status"] for r in res], ["done", "failed", "failed", "done"], res)
         self.assertIn("KeyError", res[1]["detail"])
+        failed = [l for l in self.log() if l.get("result") == "failed"]
+        self.assertEqual(len(failed), 2, failed)
+        self.assertIn("KeyError", failed[0]["action"])
         self.assertIn("last_weekly", json.loads((self.claude / "tidy" / "state.json").read_text()))
 
     def test_refuses_without_tidy_section(self):
@@ -909,7 +998,7 @@ class TestFiles(Base):
         old = events / "old.json"
         old.write_text("{}")
         os.utime(old, (OLD, OLD))
-        (self.claude / "watch" / "poll-triage.jsonl").write_text("".join(f"{i}\n" for i in range(700)))
+        (self.claude / "watch" / "slack-poll-triage.jsonl").write_text("".join(f"{i}\n" for i in range(700)))
         found = self.scan("daily")
         item = self.find(found, bucket="poll_event")[0]
         self.assertEqual((item["tier"], item["path"]), (1, str(old)))
