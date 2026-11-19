@@ -16,12 +16,12 @@ Default effort `medium`. The repo comes from the URL, from `--repo`, or from the
 ## Config
 
 - Rules: the `reviewing-prs` skill holds every rule for what gets said: triage, verdict, comment writing, the review body and posting approval. Read it first. This file is only the steps and does not restate them.
-- Voice: if `~/.claude/CLAUDE.md` has a `### Writing voice` section, invoke the skill it names (and fetch its voice page) before drafting comments. Otherwise the `reviewing-prs` comment rules pasted into `dispatch-prompt.md` are the whole style guide.
+- Voice: if `~/.claude/config/writing-voice.md` (or, on older installs, `~/.claude/CLAUDE.md`) has a `### Writing voice` section, invoke the skill it names (and fetch its voice page) before drafting comments. Otherwise the `reviewing-prs` comment rules pasted into `dispatch-prompt.md` are the whole style guide.
 - Tracker: the `### Issue Tracker` section gives the ticket URL format, used only to read the linked ticket for context.
 
 ## Procedure
 
-1. **Dispatch the reviewer** (`Agent`, `general-purpose`, `model: opus`) with the prompt in `dispatch-prompt.md`. It runs `/code-review <effort> <PR>` (effort first, never `--comment`, never `--fix`), reads the PR description, linked ticket and existing review threads, and returns a verdict plus drafted comments. It posts nothing. `/code-review` forks its own background reviewer, and that reviewer's findings arrive as a task notification in the main session, not inside the wrapper agent, which goes idle waiting. When that happens, forward the findings to the wrapper with `SendMessage` and let it draft; do not draft in the main session.
+1. **Dispatch the reviewer** (`Agent`, `general-purpose`, `model: opus`) with the prompt in `dispatch-prompt.md`. It runs `/code-review <effort> <PR URL>` (effort first, never `--comment`, never `--fix`), reads the PR description, linked ticket and existing review threads, and returns a verdict plus drafted comments. It posts nothing. `/code-review` forks its own background reviewer, and that reviewer's findings arrive as a task notification in the main session, not inside the wrapper agent, which goes idle waiting. When that happens, forward the findings to the wrapper with `SendMessage` and let it draft; do not draft in the main session.
 
    If the review was asked for in Slack (a DM, a channel post or a thread), add `:eyes:` to that request message with `slack_add_reaction` as soon as the reviewer is dispatched.
 2. **Triage** the findings it returns with the `reviewing-prs` triage table, and drop anything an existing review thread already raised.
@@ -48,6 +48,7 @@ Rule mistakes (approving with a high, posting before the list, findings stated a
 | Mistake | Fix |
 |---|---|
 | `/code-review 2249 medium` | Effort level goes first. The skill reads its first token as the level |
+| `/code-review medium <n>` with a bare number | Resolves against the current directory's repo. Always pass the full PR URL |
 | Passing `--comment` or `--fix` to `/code-review` | Posting is this skill's step 4, with one combined review; fixes are the author's job |
 | One `gh pr comment` per finding | One review submission, one notification, inline anchors |
 | Reviewing the user's own PR | That is `/pr`'s self review. Stop and say so |

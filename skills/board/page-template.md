@@ -73,7 +73,7 @@ Example row: `| PR 123 review | reviewer name | 2026-01-05 | 2026-01-08 |`. Nudg
 ## Pacing
 - Capacity note: what is reasonable today and what is deliberately deferred.
 - Items carried `carry_flag_days`+ days, with a close / defer / delegate proposal for each.
-- `Loose ends: N items, oldest D days` with a link to the Loose ends list (only with a `### Tidy` section). Never copy the list here.
+- `Loose ends: N items, oldest D days` with a link to the Loose ends list (only with tidy config). Never copy the list here.
 
 ## Deferred
 - Items past the WIP limit, kept here so they are not lost.
@@ -104,7 +104,7 @@ One row per long-lived workstream, created under the board page when the `Projec
 | Daily rows | relation to the Daily Board, two-way (synced property "Projects") | Every day row that touched the project |
 | Summary | text | One line: where we are |
 
-The `tidy` skill's Loose ends list is one Projects row named by the `Loose ends` line of `### Tidy`, Status Parked, no Priority. Its page body is only a checklist (`- [ ] <item> (added YYYY-MM-DD) <link>`). Standup, the project status page and tidy's stale check skip it.
+The `tidy` skill's Loose ends list is one Projects row named by the `Loose ends` line of tidy config (`~/.claude/config/tidy.md`), Status Parked, no Priority. Its page body is only a checklist (`- [ ] <item> (added YYYY-MM-DD) <link>`). Standup, the project status page and tidy's stale check skip it.
 
 Page body, identical for every project:
 

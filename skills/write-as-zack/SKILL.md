@@ -9,7 +9,7 @@ Zack's voice: direct, momentum-driven, structure-first, opinionated with reasoni
 
 ## Pull the live voice guide first (when one is configured)
 
-If the user's CLAUDE.md has a section whose heading starts with `### Writing voice` and it lists a voice page URL, fetch that page before drafting. Use the Notion fetch tool (its name ends in `notion-fetch`; load it with ToolSearch if it is deferred).
+If `~/.claude/config/writing-voice.md` or the user's CLAUDE.md has a section whose heading starts with `### Writing voice` and it lists a voice page URL, fetch that page before drafting. Use the Notion fetch tool (its name ends in `notion-fetch`; load it with ToolSearch if it is deferred).
 
 When a live page is configured and reachable it is the source of truth: where it differs from the rules below, the live page wins. Treat it as read-only, never write to it unless explicitly asked. If CLAUDE.md lists no voice page or the fetch tool is unavailable, use the rules below and say which source you used.
 

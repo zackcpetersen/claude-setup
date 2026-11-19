@@ -9,9 +9,9 @@ Cleanup on a schedule instead of when someone notices. Three modes, one script (
 
 ## Config
 
-Read the `### Tidy` section of `~/.claude/CLAUDE.md`: `Weekly` (day whose wrap runs the weekly clean), `Extra repos`, `Report folders`, `Branch age`, `Plan age`, `Handoff age`, `Memory age`, `Loose ends`, `Loose ends max`, `Loose ends age`, `Never touch`. The handoff folder comes from `## Handoffs`; the worktree config, memory dir, Projects data source and `carry_flag_days` from `### Work board`; the Slack poll files from `### Watches`. Archive, log and state live in `~/.claude/tidy/`.
+Read `~/.claude/config/tidy.md` (its `### Tidy` section; older installs keep it in `~/.claude/CLAUDE.md`; `~/bin/tidy` reads both): `Weekly` (day whose wrap runs the weekly clean), `Extra repos`, `Report folders`, `Branch age`, `Plan age`, `Handoff age`, `Memory age`, `Loose ends`, `Loose ends max`, `Loose ends age`, `Never touch`. The handoff folder comes from `## Handoffs`; the worktree config, memory dir, Projects data source and `carry_flag_days` from `~/.claude/config/board.md` (`### Work board`); the Slack poll files from `~/.claude/config/watch.md` (`### Watches`); older installs keep both sections in `~/.claude/CLAUDE.md`. Archive, log and state live in `~/.claude/tidy/`.
 
-Without a `### Tidy` section, tidy is list-only: run `scan`, print the findings, change nothing (`apply` refuses).
+Without tidy config (`~/.claude/config/tidy.md` or a `### Tidy` section in CLAUDE.md), tidy is list-only: run `scan`, print the findings, change nothing (`apply` refuses).
 
 ## Modes
 
@@ -26,7 +26,7 @@ Every mode takes `--dry-run`: run `scan --no-fetch` and `apply --dry-run`, print
 Steps for any mode:
 
 1. `~/bin/tidy scan --mode <mode> --json`. It is read-only except `git fetch --prune` per repo (`--no-fetch` skips that). A non-empty `errors` list (for example an unreadable worktree config; the command exits 2) stops the run: report it and fix the config before cleaning anything.
-2. For `stale` and `weekly`, dispatch the board's `tidy-board-check` (sonnet, read-only) for board lines and Projects rows.
+2. For `stale` and `weekly`, dispatch the board's `tidy-board-check` (sonnet, read-only; see the board skill's Dispatching agents) for board lines and Projects rows.
 3. Agents first: `ListAgents`, then `TaskStop` every idle agent whose work is done (read anything still needed from it first). Background shells the session started: stop those whose log says done. A worktree that any live process still works in is never removed (scan and apply both check).
 4. Pipe the Tier 1 findings, as a JSON list, to `~/bin/tidy apply --mode <mode>`. No question. Never pipe the scan output itself: `apply` refuses anything but a list.
 5. Tier 2: one grouped question per category (below). On a yes, add `"approved": true` to exactly the approved findings and pipe them as a JSON list to `apply`. `apply` refuses any Tier 2 item without that marker.

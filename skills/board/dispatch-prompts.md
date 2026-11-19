@@ -1,29 +1,6 @@
 # Board dispatch prompts
 
-Every `{{placeholder}}` maps to a key in the `### Work board` section of `~/.claude/CLAUDE.md`. Fill them in before dispatching. Pass `model` on every dispatch. Gatherers use `subagent_type: Explore`; planner, implementer, reviewer and pr agents use `general-purpose`. Never use `isolation: "worktree"`.
-
-## Placeholder sources
-
-| Placeholder | Comes from |
-|---|---|
-| `user_name` | `git config user.name`, or a name line in `~/.claude/CLAUDE.md` if present |
-| `tracker_site`, `tracker_mcp_prefix` | the `### Issue Tracker` section of `~/.claude/CLAUDE.md` |
-| `ticket_url` | that section's ticket URL format |
-| `master_session_name` | this session's name from `ListAgents` |
-| `since_date` | the previous row's Date, else 7 days ago |
-| `today` | local `date +%F` |
-| `approved_files` | the user's ship-it turn |
-| `epic_child_keys` | the child keys under `tracker_epics` listed under those epics in the previous scratchpad's "Epic rollups" section, never from the project fallback (empty on the first run or when `tracker_epics` is empty; the GitHub gatherer then skips step 4) |
-| `registry_rows`, `outreach_threads`, peer answers | the previous scratchpad; empty on the first run, which the prompts tolerate |
-| `oncall` | the `Oncall` line of the `### Work board` section (`yes` or `no`) |
-| `email_mcp_prefix`, `email_address` | the `Email` line of the `### Work board` section; when absent, skip the email gatherer |
-| `slack_user_id`, `slack_channels`, `tracker_project`, `tracker_epics`, `github_org`, `worktree_config`, `worktree_script` | the `### Work board` section of `~/.claude/CLAUDE.md` |
-| `prev_done_today`, `prev_rollover_time` | the previous row's Done today section, and the `Rollover started:` line in its scratchpad's Rollover log (else its Date at 00:00 UTC) |
-| `drafts_today` | the scratchpad's `## Drafts today` table (wrap only) |
-| `declined` | the `declined` keys in the watch-slack state file (Work board section), dropping any older than 7 days; `none` when the file is missing |
-| `running_waits` | the main session's list of running `~/bin/wait-for` commands; `none` when there are none |
-| `tracker_report`, `github_report`, `slack_report`, `email_report` | this rollover's gatherer replies, verbatim |
-| `confirmed_goal`, `carried_needs_you`, `blocked_rows` | the new row's Today's goal, Needs you and Blocked sections after the carry |
+Each agent reads its own section; the main session does not read this file (see SKILL.md, Dispatching agents). Placeholder sources are listed there.
 
 Read-only rule, included verbatim in every gatherer prompt:
 
@@ -81,7 +58,7 @@ Part 2, local checkouts:
 2. Per checkout: branch, `git -C <path> status --short | wc -l` plus top files, unpushed commits (`git -C <path> log --oneline @{upstream}..HEAD 2>/dev/null | wc -l`), last commit date, open PR for the branch.
 3. Flag: uncommitted real work (at risk), branches never pushed, stale (PR merged or closed, or no own commits), broken worktrees, files that look like secrets (`.env*` untracked).
 
-Registry rows to check: {{registry_rows}}
+Registry rows to check: read the "Work registry" section of {{scratchpad_url}} (none on the first run).
 Epic child keys to search for: {{epic_child_keys}}
 
 Return under 120 lines: Table A open PRs; Table B review/reply owed; "Epic PRs by others"; "Activity since {{since_date}}"; named branch states; Table C local checkouts with a suggested disposition (active / at-risk / stale-remove); "Proposals" (the PROPOSE lines); "Things that look off".
@@ -102,7 +79,7 @@ Gather:
 5. `from:<@{{slack_user_id}}> after:{{since_date}}`: commitments the user made that are still open.
 6. Nudges: threads where the user asked something, older than 3 business days with no reply (look back up to 5 business days). Skip keys in the declined list. One line each: `NUDGE? <plain-English line> [slack:<channel>:<thread_ts>]`.
 
-Outreach threads to check: {{outreach_threads}}
+Outreach threads to check: read the outreach thread list in the "Raw findings" section of {{scratchpad_url}} (none on the first run).
 Declined (do not raise again): {{declined}}
 
 Return under 120 lines with thread ts values on every line: "Waiting on user" (with urgency today / this week / low), "Waiting on others" (per thread: ball with, since, nudge due or sent), "Commitments made since {{since_date}}", "Posts sent since {{since_date}}" (one line per post or reply by the user: channel, thread, gist, UTC time), "Alerts possibly unhandled", "Nudges" (the NUDGE? lines), "Things that look off", and a one-line coverage caveat.
@@ -118,7 +95,7 @@ You are gathering a read-only snapshot of what is waiting on {{user_name}} in em
 3. Outreach threads {{user_name}} owns (passed in below): new replies since the last sync, who the ball is with, whether a nudge is due (3 business days of silence).
 4. `from:{{email_address}} newer_than:3d`: commitments {{user_name}} made that are still open.
 
-Outreach threads to check: {{outreach_threads}}
+Outreach threads to check: read the outreach thread list in the "Raw findings" section of {{scratchpad_url}} (none on the first run).
 
 Return under 60 lines with thread ids on every line: "Waiting on user" (urgency today / this week / low; external senders first), "Waiting on others" (per thread: ball with, since, nudge due or sent), "Commitments made since {{since_date}}", "Sent since {{since_date}}" (one line per message by {{user_name}}: to, gist, UTC time), "Automated mail worth a look" (at most 5 lines: review requests or alerts not already on the board), and a one-line coverage caveat.
 ```
@@ -128,8 +105,7 @@ Return under 60 lines with thread ids on every line: "Waiting on user" (urgency 
 ```
 You are verifying, read-only, that each draft {{user_name}} (Slack user {{slack_user_id}}, mailbox {{email_address}}) created today ({{today}}) went out as intended. READ-ONLY. Never send, draft, react, label or post anything.
 
-Drafts to check (one per line: id | channel or mailbox | thread ts or message id | gist | expected outcome):
-{{drafts_today}}
+Drafts to check: read the "Drafts today" table of {{scratchpad_url}} (one row per draft: id | channel or mailbox | thread ts or message id | gist | status or expected outcome).
 
 For each line: read the target (thread tool with channel id plus thread ts; channel read for a direct message; the mailbox search for email) and report one of: SENT <HH:MMZ> <message ts or id> "<first six words>", SCHEDULED (visible as scheduled, not yet posted), DISCARDED (expected outcome was discard and nothing from {{user_name}} appears in that thread after the draft time), NOT FOUND (expected sent but nothing from {{user_name}} after the draft time), or POSTED BY MISTAKE "<first six words>" (expected discard but something appears). Quote at most six words of any message.
 
@@ -215,6 +191,23 @@ BLOCKED:
 {{blocked_rows}}
 ```
 
+## board-writer (model: sonnet, general-purpose, one-shot)
+
+```
+You write {{user_name}}'s work board in Notion for {{today}}, then end. One batch of edits; never wait for more messages.
+Mode: {{mode}} (sync, rollover or edit).
+Pages: row {{row_url}}, scratchpad {{scratchpad_url}}, board page {{board_page}}.
+1. Read notion://docs/enhanced-markdown-spec and ~/.claude/skills/board/writer.md in full. For sync and rollover, also read ~/.claude/skills/board/page-template.md. Do the Notion setup in the "Config" section of ~/.claude/skills/board/SKILL.md (add missing schema columns only).
+2. sync: fetch the row and the scratchpad; read `Row last edited after sync` from the scratchpad; read the Slack poll files {{poll_files}} for lines since the last sync; merge everything by the Merge rules; write the row (replace_content only when its Last edited equals the stored value, else targeted update_content per line) and rewrite the scratchpad from the previous one plus the inputs. Set Last sync, then read the row's Last edited and store it.
+   rollover: create or reuse today's row and scratchpad and carry lines as ~/.claude/skills/board/rollover.md says; close the previous row.
+   edit: apply exactly the edits listed below and nothing else.
+3. Every write passes allow_async: false. Never trash a page, a data source or a property.
+Return under 60 lines: Your view as written (sync), or the carried Needs-you, unmet outcomes with reasons, deadlines and meetings (rollover), or one line per edit (edit); then for sync and rollover the Session state block from writer.md; then "Proposed goal swaps" and "Could not place", each possibly empty.
+
+INPUTS:
+{{writer_inputs}}
+```
+
 ## Peer session handoff (SendMessage, only on rollover or `--sessions`)
 
 ```
@@ -223,7 +216,7 @@ Status handoff request from the master session. Reply read-only, no actions, und
 
 ---
 
-## Planner (model: opus, general-purpose, name `<TICKET>-planner`)
+## Planner (model: opus, general-purpose, name `<key>-planner`)
 
 ```
 You are planning ticket {{ticket}} in the worktree at {{worktree_path}} (repo {{repo}}, branch {{ticket}}). The Agent tool cannot set your working directory: every command must use `git -C {{worktree_path}}` or `cd {{worktree_path}} && ...`, and every file path you read or write must be absolute under {{worktree_path}}.
@@ -234,17 +227,20 @@ Steps:
    - Run `/self-review plan` on it and fold the findings in.
    - SKIP the plan-gate marker command at the end of /self-review (it would unlock the master session's plan gate, not this worktree's).
    - Do NOT call ExitPlanMode. Do NOT edit any file in the repo.
-2. Return: the plan path, a summary of at most 10 lines, the test strategy in 3 lines, and the open questions for the user.
+   - Every fact the plan relies on cites a file:line under {{worktree_path}}. Search only that worktree, never the main checkout or the parent folder.
+   - Apply /start-ticket Step 2 items 5 to 7 and Step 3b.
+2. Return: the plan path, a summary of at most 10 lines, the test strategy in 3 lines, the open questions (only ones that pass the question gate), and the Decided by default list.
 ```
 
-## Implementer (model: opus, general-purpose, name `<TICKET>-impl`)
+## Implementer (model: opus, general-purpose, name `<key>-impl`)
 
 ```
 You are implementing ticket {{ticket}} in the worktree at {{worktree_path}} (repo {{repo}}, branch {{ticket}}) from the approved plan at ~/.claude/plans/{{ticket}}.md. The Agent tool cannot set your working directory: use `git -C {{worktree_path}}` or `cd {{worktree_path}} && ...` in every command and absolute paths under {{worktree_path}} for every edit.
 
 Rules:
 - Invoke `superpowers:executing-plans` and follow the plan task by task.
-- Write tests alongside the code. Do NOT run the test suite or the linter; CI verifies (unless the plan says the user asked for a local run).
+- Write tests alongside the code. When the code is done, run `~/bin/pr-precheck fix --repo {{worktree_path}}` once: it autocorrects lint on changed files and runs only the tests tied to them. Fix what it reports and run it once more; report anything left. Never run the full suite.
+- Before your final report, re-read the plan's `## Decisions` section.
 - Do NOT commit, push, stash or checkout.
 - Do NOT stage or touch .gitignore, lock files, CLAUDE.md or AGENTS.md changes the worktree setup left behind.
 User notes from approval: {{approval_notes}}
@@ -252,29 +248,30 @@ User notes from approval: {{approval_notes}}
 Return: `git -C {{worktree_path}} status --short`, a diff summary per file (what changed and why), tests added, and anything in the plan you could not do.
 ```
 
-## Reviewer (model: opus, general-purpose, name `<TICKET>-review`)
+## Reviewer (model: opus, general-purpose, name `<key>-review`)
 
 ```
 You are a fresh reviewer for ticket {{ticket}}, implemented in the worktree at {{worktree_path}} (repo {{repo}}, branch {{ticket}}). You have not seen the conversation. Use `git -C {{worktree_path}}` for every git command.
 
 Nothing is committed yet, so review the WORKING TREE, not the branch: `git -C {{worktree_path}} diff HEAD` plus the untracked files listed by `git -C {{worktree_path}} status --short` (read each one).
 
-1. Read the ticket ({{ticket_url}}) and the plan at ~/.claude/plans/{{ticket}}.md.
-2. Run `/self-review implementation` on that working-tree diff against the plan and the ticket's acceptance criteria. Skip the plan-gate marker.
+1. Read the ticket ({{ticket_url}}) and the plan at ~/.claude/plans/{{ticket}}.md (skip the ticket in a no-ticket repo; review against the plan and the user's request).
+2. Run `/self-review implementation` on that working-tree diff against the plan and the ticket's acceptance criteria. Skip the plan-gate marker. Also check the plan itself against the repo rules (self-review Repo rules), not only the diff against the plan.
+2b. Run `~/bin/pr-precheck report --repo {{worktree_path}}` and include its output.
 3. Do not run `/code-review` here; the `/pr` step runs it on the real PR.
 4. Do NOT edit, commit or push anything.
 
 Return only problems, each marked must-fix or recommend: file, line, one-sentence defect, failure scenario, confidence. If nothing was found, say what you checked.
 ```
 
-## PR agent (model: opus, general-purpose, name `<TICKET>-pr`)
+## PR agent (model: opus, general-purpose, name `<key>-pr`)
 
 ```
 You are finalizing ticket {{ticket}} in the worktree at {{worktree_path}} (repo {{repo}}, branch {{ticket}}). Use `cd {{worktree_path}} && ...` for every command.
 
 The user has approved committing and pushing exactly these files: {{approved_files}}. That approval covers the commit and the push only. Do not stage lock files, .gitignore, or worktree setup noise (CLAUDE.md, AGENTS.md, .claude/ changes).
 
-Run `/pr --review-effort medium`. It commits with the CLAUDE.md commit format, pushes, opens the PR from the repo template, runs the background self code review, and watches CI. Never merge and never start a `~/bin/wait-for` wait or ask about one; the master session proposes the wait and merges only through the `watch` skill with the user's per-PR approval. If the self review or CI produces fixes, do NOT apply them and do NOT invoke `/babysit-pr`: report the combined list (CI failures grouped by cause, review findings with file and line) and stop. The master session asks the user and dispatches a fix pass.
+Run `/pr --review-effort medium`. It commits with the CLAUDE.md commit format, pushes, opens the PR from the repo template, runs the background self code review, and watches CI. Never merge and never start a `~/bin/wait-for` wait or ask about one; the master session starts the wait the user chose at ship-it and merges only through the `watch` skill with the user's per-PR approval. If the self review or CI produces fixes, do NOT apply them and do NOT invoke `/babysit-pr`: report the combined list (CI failures grouped by cause, review findings with file and line, review-bot comments) and stop. The master session dispatches the fix pass under the ship-it approval.
 
 Return: commit SHA and message, PR number and URL, final CI state, self review findings and what was applied, and next steps.
 ```
