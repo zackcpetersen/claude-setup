@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# PreToolUse hook for the Skill and Agent tools: deny a /code-review call
+# whose target is a bare PR number (`123` or `#123`). A bare number resolves
+# against the current directory's repo, which is often the wrong one, so the
+# review silently covers the wrong PR. The full PR URL always works.
+#
+# Skill call: skill `code-review` with args like `medium 123`.
+# Agent call: a prompt that contains `/code-review [effort] 123`.
+# Placeholder text such as `/code-review <effort> <PR URL>` passes, and so does
+# backticked text in a prompt (a quoted example, not an instruction to run).
+# Matching runs inside jq with test(), which is portable (bash =~ has no \s).
+# Fails open: any error exits 0 with no output (the call goes ahead).
+
+set -u
+
+pass() { exit 0; }
+
+command -v jq >/dev/null 2>&1 || pass
+
+input=$(cat) || pass
+
+bare=$(printf %s "$input" | jq -r '
+  def effort: "(low|medium|high|xhigh|max|ultra)";
+  if .tool_name == "Skill" or (.tool_input.skill? != null) then
+    ((.tool_input.skill // "") == "code-review"
+     and ((.tool_input.args // "") | type == "string")
+     and ((.tool_input.args // "") | test("^\\s*(" + effort + "\\s+)?#?[0-9]+(\\s|$)")))
+  else
+    ((.tool_input.prompt // "") | type == "string"
+     and (gsub("`[^`]*`"; "") | test("/code-review(\\s+" + effort + ")?\\s+#?[0-9]+(\\s|$)")))
+  end' 2>/dev/null) || pass
+
+[[ "$bare" == "true" ]] || pass
+
+jq -cn '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
+  permissionDecisionReason: "Pass the full PR URL to /code-review (https://github.com/<owner>/<repo>/pull/<n>). A bare number resolves against the current directory'"'"'s repo, which is often the wrong one."}}' 2>/dev/null || pass
+exit 0

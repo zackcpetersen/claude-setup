@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# PostToolUse hook (all tools): warn the main session once when its context
+# passes a size line, so it writes a handoff and asks for /clear at the next
+# pause instead of paying to re-read a huge conversation every turn.
+#
+# Size: the newest main-session assistant entry in the last 50 lines of the
+# transcript; tokens = input_tokens + cache_read_input_tokens +
+# cache_creation_input_tokens.
+# Sub-agents: their PostToolUse input carries a non-empty `agent_id` (checked
+# with a probe; their `transcript_path` is the parent's file), so the hook
+# skips any input with one. Sidechain entries are skipped as a backstop.
+# Line: env CLAUDE_CONTEXT_WARN_AT (tokens), default 150000; 0 or off turns
+# it off. A marker in ~/.claude/context-warn/<session_id> makes the warning
+# print once per crossing; dropping below the line (after /clear or a compact)
+# removes the marker and re-arms it.
+# Fails open: any error exits 0 with no output.
+
+set -u
+
+pass() { exit 0; }
+
+command -v jq >/dev/null 2>&1 || pass
+
+input=$(cat) || pass
+
+agent_id=$(printf %s "$input" | jq -r '.agent_id // empty' 2>/dev/null) || pass
+[[ -z "$agent_id" ]] || pass
+session_id=$(printf %s "$input" | jq -r '.session_id // empty' 2>/dev/null) || pass
+transcript=$(printf %s "$input" | jq -r '.transcript_path // empty' 2>/dev/null) || pass
+[[ -n "$session_id" && -n "$transcript" && -r "$transcript" ]] || pass
+[[ "$session_id" =~ ^[A-Za-z0-9_-]+$ ]] || pass
+
+limit="${CLAUDE_CONTEXT_WARN_AT:-150000}"
+[[ "$limit" == "off" || "$limit" == "0" ]] && pass
+[[ "$limit" =~ ^[0-9]+$ ]] || pass
+
+tokens=$(tail -n 50 "$transcript" 2>/dev/null | jq -R -s '
+  [split("\n")[] | (try fromjson catch null)
+   | select(type == "object" and .type == "assistant" and .isSidechain != true and (.message.usage | type) == "object")
+   | .message.usage
+   | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0)]
+  | last // empty' 2>/dev/null) || pass
+[[ "$tokens" =~ ^[0-9]+$ ]] || pass
+
+dir="$HOME/.claude/context-warn"
+marker="$dir/$session_id"
+
+if (( tokens < limit )); then
+  rm -f "$marker" 2>/dev/null
+  pass
+fi
+[[ -e "$marker" ]] && pass
+
+mkdir -p "$dir" 2>/dev/null || pass
+: > "$marker" 2>/dev/null || pass
+find "$dir" -type f -mtime +7 -delete 2>/dev/null
+
+msg="Context is at $((tokens / 1000))k tokens (warning line $((limit / 1000))k). At the next natural pause, write the handoff and ask the user for /clear. Tell the user in one line."
+jq -cn --arg m "$msg" '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $m}}' 2>/dev/null || pass
+exit 0

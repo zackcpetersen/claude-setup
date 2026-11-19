@@ -11,9 +11,9 @@ Nothing is watched without a yes from the user.
 
 ## Config
 
-Read the `### Watches` section of `~/.claude/CLAUDE.md`: `Time zone`, `Business hours`, the Slack connector prefix on `Connectors`, the `Slack poll` lines, and the optional `Dagster` and `Deploy rules` lines. The user's Slack id comes from the `### Work board` section.
+Read `~/.claude/config/watch.md` (its `### Watches` section; older installs keep it in `~/.claude/CLAUDE.md`): `Time zone`, `Business hours`, the Slack connector prefix on `Connectors`, the `Slack poll` lines, and the optional `Dagster` and `Deploy rules` lines. The user's Slack id comes from `~/.claude/config/board.md`.
 
-If `### Watches` is missing, stop with: "Add the `### Watches` section to ~/.claude/CLAUDE.md (see claude-md/CLAUDE.md.template in claude-setup)."
+If `### Watches` is missing, stop with: "Add ~/.claude/config/watch.md (copy config/watch.example.md from claude-setup)."
 
 Nothing in this skill names a company, person, channel or repo. Those come from config.
 
@@ -75,6 +75,7 @@ The goal: watch Slack the way the user would, and interrupt only when they are a
 - Each poll runs a headless Claude on the `Slack poll model` with only the Slack read and search tools, using the prompt in `slack-poll.md`. It collects messages aimed at the user (the enabled `Slack poll triggers`) since the last poll. No new messages: it sleeps and polls again, every 5 minutes by default. A poll costs about half a cent.
 - Restart it in the same turn after every `SLACK` event, and after `ERROR` once the cause is fixed. `ERROR slack plugin-missing` means the Slack plugin is not installed or its tool prefix changed: tell the user in one line with the fix (install or sign in to the plugin, or correct the `Connectors` line), put it under Your TODOs, and do not restart the poll until `~/bin/wait-for slack --once` passes. `TIMEOUT slack` after 12 hours: restart it if it is still a working day.
 - Group DMs: by default (`Slack poll group-dms: aimed-only`) a group DM message wakes this session only when it mentions the user (their `<@id>` or their first name as a whole word), replies in a thread they posted in, or lands in a group DM they posted in within the `Slack poll group-dms lookback` (default 60m). The script holds the rest back: it appends each held message to `slack-poll-held.jsonl` next to the state file, with a `held_at` time, marks it seen and prints nothing. Lines older than 14 days are dropped on the next append. The board sync lists them as FYI. `Slack poll group-dms: all` reports every group DM message, as before. The first name comes from the optional `Slack poll user name` line; without it, the poll reads it from the user's Slack profile and keeps it in the state file, and prints a `WARN slack user-name` line on stderr if the profile gives no usable name.
+- Quiet items: the poll asks the cheap model for a hint per message (ack, bot, fyi, ask). Messages whose hint is on the `Slack poll quiet` line (off by default; for example `ack, bot, fyi`) never wake this session, except DMs and direct mentions, which always wake: the script marks them seen and appends them to `slack-poll-digest.jsonl` next to the state file. The board sync lists them as one FYI line. A missing or unknown hint wakes the session, so the cheap model errs toward waking.
 - Stop it at wrap (`TaskStop` on its task id).
 - Setup check: `~/bin/wait-for slack --once` prints `SLACK ...` or `NOTHING`. Add `--since 2h` to look further back.
 

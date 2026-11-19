@@ -143,7 +143,7 @@ class ConfigTests(Base):
         self.assertIn("`Dagster` line", err)
 
     def test_shipped_template_watches_block_parses(self):
-        template = BIN.parent / "claude-md" / "CLAUDE.md.template"
+        template = BIN.parent / "config" / "watch.example.md"
         lines = [l for l in template.read_text().splitlines() if not l.startswith("- Dagster:")]
         self.cfg_path.write_text("\n".join(lines))
         self.assertIsNone(W.load_config(self.cfg_path)["dagster"])
@@ -796,12 +796,13 @@ class SlackTests(Base):
             self.assertIn("{{" + name + "}}", template)
 
     def test_shipped_template_slack_lines_parse(self):
-        template = (BIN.parent / "claude-md" / "CLAUDE.md.template").read_text()
+        template = "\n".join((BIN.parent / "config" / f"{n}.example.md").read_text() for n in ("board", "watch"))
         self.assertIn("- Slack poll:", template)
         self.cfg_path.write_text(template.replace("- Slack poll: <on|off>", "- Slack poll: on").replace("<U0XXXXXXX>", "U0SELF"))
         cfg = W.load_slack_config(self.cfg_path)
         self.assertEqual(cfg["triggers"], list(W.SLACK_DEFAULT_TRIGGERS))
         self.assertEqual(cfg["model"], "haiku")
+        self.assertEqual(cfg["quiet"], [])  # the example line is a placeholder: nothing is quiet by default
 
 
 def claude_answer(obj, cost=0.004):
@@ -996,6 +997,116 @@ class GroupDmTests(SlackTests):
         self.poll([gdm("1.1")])
         self.assertEqual([h["ts"] for h in self.held_lines()], ["0.2", "1.1"])
         self.assertFalse(self.held.with_name(self.held.name + ".tmp").exists())
+
+
+class QuietTests(SlackTests):
+    def setUp(self):
+        super().setUp()
+        self.digest = self.tmp / "state" / "slack-poll-digest.jsonl"
+        self.cfg_path.write_text(SLACK_MD.format(tmp=self.tmp) + "- Slack poll quiet: ack, bot, fyi\n")
+
+    def poll(self, events):
+        rc, out, err, _ = self.slack([claude_answer({"events": events})], "--once")
+        self.assertEqual(rc, 0, err)
+        return out
+
+    def digest_lines(self):
+        return [json.loads(l) for l in self.digest.read_text().splitlines()] if self.digest.exists() else []
+
+    def test_ack_and_bot_go_to_the_digest_and_wake_no_one(self):
+        out = self.poll([ev("1.1", hint="ack", kind="thread-reply"), ev("1.2", hint="bot", kind="user-group")])
+        self.assertEqual(out, "NOTHING")
+        lines = self.digest_lines()
+        self.assertEqual([l["ts"] for l in lines], ["1.1", "1.2"])
+        self.assertEqual(lines[0]["quiet_at"], "2026-01-05T12:00:00Z")
+        self.assertEqual(json.loads(self.state.read_text())["seen"], ["D0DM:1.1", "D0DM:1.2"])
+
+    def test_mixed_batch_wakes_with_only_the_ask(self):
+        out = self.poll([ev("1.1", hint="fyi", kind="user-group"), ev("1.2", hint="ask", kind="user-group"),
+                         ev("1.3", hint="ACK", kind="thread-reply")])
+        word, count, path = out.split(" ")
+        self.assertEqual((word, count), ("SLACK", "1"))
+        self.assertEqual([e["ts"] for e in json.loads(Path(path).read_text())["events"]], ["1.2"])
+        self.assertEqual([l["ts"] for l in self.digest_lines()], ["1.1", "1.3"])
+
+    def test_missing_or_unknown_hint_wakes(self):
+        out = self.poll([ev("1.1"), ev("1.2", hint="maybe")])
+        self.assertTrue(out.startswith("SLACK 2 "), out)
+        self.assertFalse(self.digest.exists())
+
+    def test_dms_and_mentions_always_wake(self):
+        out = self.poll([ev("1.1", hint="fyi"), ev("1.2", hint="ack", kind="mention", channel_id="C0X")])
+        self.assertTrue(out.startswith("SLACK 2 "), out)
+        self.assertFalse(self.digest.exists())
+
+    def test_no_quiet_line_quiets_nothing(self):
+        self.cfg_path.write_text(SLACK_MD.format(tmp=self.tmp))
+        out = self.poll([ev("1.1", hint="fyi", kind="user-group"), ev("1.2", hint="bot", kind="thread-reply")])
+        self.assertTrue(out.startswith("SLACK 2 "), out)
+        self.assertFalse(self.digest.exists())
+
+    def test_quiet_none_wakes_on_everything(self):
+        self.cfg_path.write_text(SLACK_MD.format(tmp=self.tmp) + "- Slack poll quiet: none\n")
+        out = self.poll([ev("1.1", hint="ack", kind="user-group"), ev("1.2", hint="bot", kind="user-group")])
+        self.assertTrue(out.startswith("SLACK 2 "), out)
+        self.assertFalse(self.digest.exists())
+
+    def test_bad_quiet_word_exits_2(self):
+        self.cfg_path.write_text(SLACK_MD.format(tmp=self.tmp) + "- Slack poll quiet: ack, chatter\n")
+        rc, out, err, _ = self.slack([], "--once")
+        self.assertEqual(rc, 2)
+        self.assertIn("chatter", err)
+        self.assertIn("ack, bot, fyi", err)
+
+
+class SplitConfigTests(unittest.TestCase):
+    """No --config and no WAIT_FOR_CONFIG: read ~/.claude/CLAUDE.md plus ~/.claude/config/*.md."""
+
+    def setUp(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.home = Path(td.name)
+        (self.home / ".claude" / "config").mkdir(parents=True)
+        p = mock.patch.dict(os.environ, {"HOME": str(self.home)})
+        p.start()
+        self.addCleanup(p.stop)
+        os.environ.pop("WAIT_FOR_CONFIG", None)
+        p = mock.patch.object(W.Path, "home", classmethod(lambda cls: self.home))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def write(self, rel, text):
+        (self.home / ".claude" / rel).write_text(text)
+
+    def test_reads_sections_from_config_files(self):
+        self.write("config/board.md", "# Board config\n\n### Work board (`board` skill)\n- Slack user id: U0SELF\n")
+        self.write("config/watch.md", "### Watches\n- Connectors: slack mcp__slack__\n- Slack poll: on\n"
+                                      "- Deploy rules:\n  - acme/app: release-tag\n")
+        cfg = W.load_slack_config()
+        self.assertEqual((cfg["user"], cfg["prefix"]), ("U0SELF", "mcp__slack__"))
+        self.assertEqual(W.load_config()["deploy_rules"], {"acme/app": {"type": "release-tag"}})
+
+    def test_placeholder_in_config_file_does_not_hide_claude_md_value(self):
+        self.write("CLAUDE.md", "### Work board\n- Slack user id: U0SELF\n\n### Watches\n"
+                                "- Connectors: slack mcp__real__\n- Slack poll: on\n- Slack poll model: sonnet\n")
+        self.write("config/watch.md", "### Watches\n- Connectors: slack <prefix>\n- Slack poll model: <haiku|sonnet>\n")
+        cfg = W.load_slack_config()
+        self.assertEqual((cfg["prefix"], cfg["model"]), ("mcp__real__", "sonnet"))
+
+    def test_config_file_value_wins_and_sections_do_not_run_across_files(self):
+        self.write("CLAUDE.md", "### Work board\n- Slack user id: U0SELF\n\n### Watches\n"
+                                "- Connectors: slack mcp__a__\n- Slack poll: on\n- Slack poll model: sonnet")
+        self.write("config/watch.md", "- Slack poll model: opus\n### Watches\n- Slack poll model: haiku\n")
+        self.assertEqual(W.load_slack_config()["model"], "haiku")
+        self.write("config/watch.md", "- Slack poll model: opus\n")  # outside any section: ignored
+        self.assertEqual(W.load_slack_config()["model"], "sonnet")
+
+    def test_no_config_anywhere_exits_2(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = W.main(["deploy", "acme/app", "s1"])
+        self.assertEqual(rc, 2)
+        self.assertIn("cannot read config", err.getvalue())
 
 
 if __name__ == "__main__":

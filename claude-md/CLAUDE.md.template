@@ -11,12 +11,13 @@
 - Do not enter or exit plan mode unless explicitly asked. Deliver results directly in chat.
 - Run what you are allowed to run: if you have permission for a command (logins, scripts, hook swaps, installs), run it yourself. Hand a step to the user only when it needs a browser, an app, or `/mcp`, and say which.
 - Default to dev environment for all operations unless told otherwise.
+- Main session: no single read over 5KB. Larger files, pages, transcripts or artifacts go to a sub-agent that returns only what is needed.
 <!-- FILL IN: any per-tool exceptions to the default environment, e.g. "database queries default to staging" -->
 
 ## External Communications
 - Slack and email: NEVER send directly. Create a draft (e.g. `slack_send_message_draft`, an email draft) and link to it for approval before anything goes out.
 - Before a draft states a fact about someone else's work (their PR merged, a blocker still open, a report failing), verify it against the primary source the same day (the PR, the thread, the ticket history), or phrase it as a question. Notes, memory and older tracker comments are snapshots, not current state.
-- GitHub PR comments and issue tracker comments have no draft mechanism: get explicit per-item approval before posting. This covers `/babysit-pr` reply and reminder comments.
+- GitHub PR comments have no draft mechanism: get explicit per-item approval before posting. This covers `/babysit-pr` reply and reminder comments. Comments and transitions on my own tracker tickets go straight on.
 <!-- FILL IN: any pre-approved channels -->
 
 ## Communication Style
@@ -28,14 +29,12 @@
 - If a topic genuinely requires some technical detail to be correct, include the minimum needed and offer to go deeper if I want.
 - This applies to ALL written output, not just chat: PR descriptions, commit messages, ticket comments, Slack messages, docs pages, code comments, summaries, etc. Lead with plain-language "what changed and why it matters." Save deep technical detail for when it's asked for or truly required.
 - Answer a direct question first, before continuing work. For 'where is this session', give the project dir, worktree path and session id.
-- Interview me: whenever you have a batch of open questions (planning, missing details, decisions), ask them with the AskUserQuestion tool, up to 4 at a time, recommended option first and marked (Recommended). Do not bury questions in a prose list. A single quick yes/no can stay in chat.
+- Interview me: whenever you have a batch of open questions (planning, missing details, decisions), ask them with the AskUserQuestion tool, up to 4 at a time, recommended option first and marked (Recommended). Do not bury questions in a prose list. Every question goes through AskUserQuestion, even a single yes/no.
 - Question gate: before asking, check (1) can a source answer it (Slack, GitHub, the tracker, Dagster, files, a database), (2) does a rule, a recorded decision or an earlier answer settle it, (3) is it mine to decide (a send, a merge, a prod run, money, scope, timeline, anything hard to undo). Ask only when all three pass. Otherwise check or apply, and report in one line. "Interview me" means ask what passes the gate, not everything pending.
+- Standing default: for reversible choices inside a ticket's own work (design options, test approach, fix-or-defer a review finding, wording), take the recommended option, list it under "Decided by default" in the plan or PR, and keep going. A ticket gets at most two asks: plan approval and ship it. Sends to people, merges, prod runs, money, scope, timeline and anything hard to undo still come to me.
 
 ## Review comments (GitHub reviews, PR replies, anything an agent posts on a PR)
-- Short: one to three sentences, under 60 words. One point per comment.
-- Kind and plain English: friendly, collaborative, direct without being brusque. Spell out an acronym the first time it appears.
-- Suggestions and questions, never verdicts: "Could this double-count when X?" or "Suggest moving this into Z so it runs once." Never "This is wrong" or "This will fail." The reviewer may be wrong, and a question invites the author to explain.
-- Mark priority: "nit: " on anything that does not block. Lows and nice-to-haves are not posted (one exception: a one-line fix goes out as a nit). Approve only when the PR is good to merge as it stands; a high or a blocker means comment, not approve. No summary comments unless needed, never praise summaries, never a signature. Every post still needs my per-item approval, even after a "post and approve" ask. Full rules: the `reviewing-prs` skill.
+- PR review comments and replies follow the `reviewing-prs` skill. Every post needs my per-item approval.
 
 ## Plan Review
 - After drafting any implementation plan, run `/self-review` before presenting. Always include the self-review output so the user can see it was done.
@@ -47,26 +46,30 @@
 ## CI/CD Policy
 <!-- FILL IN: machine-specific. Leave empty to run tests and lint locally before pushing (the default in "Before Submitting Work" below).
      If your CI re-runs everything anyway and local runs only cost time, add:
-     "Do NOT run tests or linters locally unless explicitly asked. Push and let CI handle verification." -->
+     "Do NOT run the full test suite or linters locally unless explicitly asked. Push and let CI handle full verification. Exception: once before the first push, `~/bin/pr-precheck fix` lints changed files with autocorrect and runs only the tests tied to them." -->
 - The "Before Submitting Work" checklist is for final pre-PR review only, not after every edit.
 
 ## Git and Version Control
 - Commit message format: `type: description` <!-- FILL IN: e.g. `[TICKET] type: description` if your team prefixes commits with the ticket key -->
+- No-ticket repos: <repo folder names, comma separated> <!-- FILL IN: repos whose work is never ticketed. There, commits follow the repo's own style (read `git log --oneline -20`, for example `type(scope): description`), branches, worktrees and plan files use a short name, and no tracker lookup happens. Leave empty if every repo is ticketed. -->
 - do not include the claude signature in any commits
 - do not commit files until I have approved them
 - do not include the claude code signature anywhere
 - NEVER commit .gitignore or lock file (poetry.lock, package-lock.json, Gemfile.lock, etc.) changes unless explicitly asked
-- Only tag work with a ticket the user named or one that clearly matches. Never reuse an unrelated key; ask or create a new ticket.
+- Only tag work with a ticket the user named or one that clearly matches. Never reuse an unrelated key; ask or create a new ticket. In a no-ticket repo, never add a ticket key anywhere (branch, commit, PR title, repo text).
 - Syncing main: use `/sync-repos`, or by hand `git fetch` then `git merge --ff-only origin/main`. Never discard local edits.
 
 ## Handoffs
 <!-- FILL IN: this machine's handoff folder, e.g. ~/handoffs/ -->
 - Handoff folder: <path>
 - Long or multi-day sessions end with a handoff doc in the handoff folder above: open PRs with CI/review state, blockers and on whom, unposted drafts verbatim, the exact next command. Drafts never live only in the scratchpad.
+- A handoff holds today's state only (goal, live agents and waits, open asks, unsent drafts verbatim, the next command), never standing rules from skills. Keep it under 6KB.
 
 ## Available Tools
 
 These tools are available globally. Use them proactively when relevant - don't wait for the user to invoke the slash command.
+
+Skill config lives in `~/.claude/config/`: `board.md`, `watch.md`, `tidy.md`, `writing-voice.md`, plus optional `self-review.md` and `pr-precheck.json`. Each skill reads only its own file. Start from `config/*.example.*` in claude-setup.
 
 ### Database Access
 Use `~/bin/query_db <env-file> "<sql>"` to query databases (read-only). Credentials live in each repo as gitignored `.env.db.<env>` files at the repo root; run from the repo root, e.g. `query_db .env.db.local "SELECT ..."`. Discover schema via information_schema before querying.
@@ -76,69 +79,7 @@ Use `~/bin/query_db <env-file> "<sql>"` to query databases (read-only). Credenti
 <!-- FILL IN -->
 - Tracker: <Jira | Linear | GitHub Issues>, via <MCP plugin name>
 - Ticket URL format: <base url>/<TICKET>
-- Write operations (create, update, comment, transition) require user confirmation.
-
-### Start Ticket (`/start-ticket`)
-Fetches ticket context from the issue tracker and creates an implementation plan. Usage: `/start-ticket <ticket-number>`
-
-### Review PR (`/review-pr`)
-Reviews a teammate's pull request: `/review-pr <number or URL> [--effort medium]`. Runs `/code-review` in a background opus agent, drafts comments as questions and suggestions in your writing voice (highs inline, mediums as `nit:`, lows dropped), asks for per-comment approval, then posts one GitHub review and approves when nothing blocks.
-
-### Writing voice (`write-as-zack` skill)
-<!-- FILL IN: optional. A page the skill fetches for live voice rules; delete the bullet to run on the skill's built-in rules. -->
-- Voice page: <URL>
-
-### Work board (`board` skill)
-<!-- FILL IN: every value the board skill needs. Delete this section if you do not use it. -->
-- Board page: <Notion page URL or id; the page holds one inline database>
-- Slack user id: <U0XXXXXXX>
-- Watched channels: <#project-channel C0XXXXXXX, #alerts-channel C0XXXXXXX (alerts), ...> <!-- tag alert channels with (alerts) so the board also scans them for unhandled alerts -->
-- Tracker project: <PROJ>; epics to roll up: <PROJ-100, PROJ-200>
-- GitHub org: <org-name>
-- Worktree config: ~/bin/.worktree-config.json; scripts: ~/bin/worktree, ~/bin/start-ticket
-- Memory dir: <path to the Claude memory directory for this machine>
-- Watch-slack state file: ~/.claude/watch-sweep.json <!-- holds the declined list for the board's NUDGE? and PROPOSE questions; the main session writes it -->
-- WIP limits (starting values, tune after a week): max_streams 3, max_needs_you 7, carry_flag_days 3
-- Projects data source: <collection://... of the Projects database, optional> <!-- one row per workstream; the board appends progress and decisions to its pages -->
-- Oncall: <yes|no> <!-- flip at the start of each rotation week; `no` means the board never reads alert channels or tracks alerts -->
-- Access checks: per-machine list in `~/.claude/auth-checks.json`, run by the `daily-auth` skill (start from `skills/daily-auth/auth-checks.example.json`)
-
-### Watches (`watch` skill)
-<!-- FILL IN: values for the watch skill and ~/bin/wait-for. Delete this section if you do not use it. Your Slack user id comes from the Work board section above; do not repeat it here. -->
-- Time zone: <America/Denver> <!-- IANA name -->
-- Business hours: 08:00-18:00 <!-- Monday to Friday -->
-- Connectors: slack mcp__plugin_slack_slack__ <!-- Slack tool name prefix; the Slack poll loads only this plugin's server, which keeps each poll under a cent -->
-- Slack poll: <on|off> <!-- on means board rollover starts `~/bin/wait-for slack` in the background; this line is the standing yes -->
-- Slack poll every: 5m
-- Slack poll model: haiku <!-- the cheap model that reads Slack; it collects, the main session decides -->
-- Slack poll triggers: mentions, dms, group-dms, user-groups, thread-replies <!-- add `keywords` to also match the Keywords line -->
-- Slack poll user groups: <@team-handle, @other-handle> <!-- groups you belong to; the Slack tools cannot list membership, so this line is the source -->
-- Slack poll keywords: <your first name> <!-- only used when `keywords` is in the triggers -->
-- Slack poll group-dms: aimed-only <!-- aimed-only: a group DM message wakes the session only if it names you, replies in your thread, or you posted there lately; the rest goes to slack-poll-held.jsonl for the board. all: report every group DM message -->
-- Slack poll group-dms lookback: 60m <!-- how recently you must have posted in a group DM for its messages to count as aimed at you -->
-- Slack poll user name: <your first name> <!-- optional; matched as a whole word in group DMs; leave it out and the poll reads it from your Slack profile -->
-- Slack poll ignore: <C0XXXXXXX, U0XXXXXXX> <!-- channels, people or groups to leave out; ids or names; optional -->
-- Slack poll state file: ~/.claude/slack-poll.json <!-- cursor and seen list, written by the script; events land in slack-poll-events/, the triage log in slack-poll-triage.jsonl and held group DM messages in slack-poll-held.jsonl next to it -->
-- Dagster: https://<org>.dagster.cloud/<deployment>/graphql, env file ~/path/to/.env, token var DAGSTER_CLOUD_API_TOKEN <!-- optional; fill in <org> and <deployment> or delete this line; wait-for reads the token itself and never prints it -->
-- Deploy rules: <!-- one line per repo: `workflow <name> on <branch>`, `release-tag`, or `branch <name>` -->
-  - <owner/repo>: workflow <deploy> on <main>
-
-### Tidy (`tidy` skill)
-<!-- FILL IN: values for the tidy skill. Delete this section to turn tidy off; board wrap then only lists leftovers. The handoff folder comes from the Handoffs section; the archive, log and state live in ~/.claude/tidy/. -->
-- Weekly: <Fri> <!-- day whose wrap runs the weekly deep clean; a missed run is offered at the next rollover -->
-- Extra repos: <~/Projects/other-repo> <!-- repos not in the worktree config whose branches tidy also checks; optional -->
-- Report folders: <~/Desktop> <!-- listed in the weekly report only, never changed; optional -->
-- Branch age: 30 <!-- days before an unmerged branch is offered -->
-- Plan age: 14
-- Handoff age: 14
-- Memory age: 30
-- Loose ends: <Loose ends> <!-- name of the catch-all Projects row, or of the daily-row section without a Projects data source -->
-- Loose ends max: 12
-- Loose ends age: 14
-- Never touch: <paths or globs> <!-- optional -->
-
-### Finalize PR (`/pr`)
-Commits changes and creates pull requests. Handles commit message formatting (per the Git and Version Control section above), branch management, and PR creation using the repo's PR template. After the PR is created it runs a self code review (`/code-review` on opus, default `medium`, override with `--review-effort`) in the background while CI runs, then applies CI fixes and review findings together in one approved push.
+- Creating tickets needs a yes. Comments and transitions on my own tickets go straight on.
 
 <!-- FILL IN: add sections for any other machine-specific tools here (log search, ticket tracker MCP, etc.) -->
 
@@ -151,11 +92,11 @@ Commits changes and creates pull requests. Handles commit message formatting (pe
 | myrepo     | `main`         | `<test cmd>`   | `<lint cmd>`   |
 
 ### Before Submitting Work
-1. Run tests and linter for the relevant repo
+1. Run `~/bin/pr-precheck fix` once before the first push (lint with autocorrect and the tests tied to changed files)
 2. Fix any failures before proceeding
 3. Self-review:
    - Re-read ticket acceptance criteria - verify each is met
    - Check for leftover debug code, TODOs, or commented-out code
    - Verify no unintended file changes (migrations, lock files, configs)
-   - Confirm tests cover the happy path and at least one edge case
+   - Confirm each lock, guard and allow-list has a test where it triggers
 4. Commit using the format from Git and Version Control

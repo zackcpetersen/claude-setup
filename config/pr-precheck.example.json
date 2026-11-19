@@ -1,0 +1,15 @@
+{
+  "max_lines": 500,
+  "hook_langs": ["rb"],
+  "generated": [],
+  "generated_pairs": [],
+  "lock_patterns": [],
+  "external_call_patterns": [],
+  "repos": {
+    "<repo folder name>": {
+      "tests": "<optional command that runs this repo's changed-file tests>",
+      "sql": {"fix": "<optional>", "check": "<optional>"},
+      "skip": ["<lang to skip, for example ts>"]
+    }
+  }
+}

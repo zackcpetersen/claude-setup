@@ -1,6 +1,6 @@
 # Setup on a New Machine
 
-Everything in this repo is generic - nothing references a specific company, repo, or tracker. Commands are fully generic and read machine-specific values from `~/.claude/CLAUDE.md`. `FILL IN` markers remain only in `claude-md/` and `bin/worktree`. This file walks through all of them.
+Everything in this repo is generic - nothing references a specific company, repo, or tracker. Commands are fully generic and read machine-specific values from `~/.claude/CLAUDE.md` and `~/.claude/config/`. `FILL IN` markers remain only in `claude-md/` and `bin/worktree`. This file walks through all of them.
 
 ## What's in here
 
@@ -24,7 +24,9 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `bin/query_db` | Read-only Postgres query helper | `~/bin/` (symlink) |
 | `bin/worktree` | Multi-repo git worktree manager | `~/bin/` (symlink) |
 | `bin/wait-for` | Background wait the `watch` skill starts: PR, deploy, Dagster run or Slack poll, one event line then exit (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
+| `bin/pr-precheck` | Lints changed files with autocorrect and runs only their tests, once before the first push; also a read-only `report` and a pre-push `hook` mode (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
+| `config/*.example.*` | Per-skill config examples (board, watch, tidy, writing voice, optional self-review and pr-precheck) | the four `.md` files are copied to `~/.claude/config/` when absent, see below |
 | `plugins/model-discipline/` | `model-discipline` plugin - the agent-model-guard hook, a SessionStart rules block, and the `playbook` skill | `/plugin install`, see section 4 |
 | `plugins/plan-gate/` | `plan-gate` plugin - blocks `ExitPlanMode` until `/self-review` records a pass | `/plugin install`, see section 4 |
 | `plugins/new-day/` | `new-day` plugin - nudges every prompt until `daily-auth` has run today | `/plugin install`, see section 4 |
@@ -51,6 +53,8 @@ git clone git@github.com:zackcpetersen/claude-setup.git
 cd claude-setup
 ./install.sh
 ```
+
+On a fresh install (no `~/.claude/CLAUDE.md` yet), `install.sh` also copies `config/board.example.md`, `watch.example.md`, `tidy.example.md` and `writing-voice.example.md` to `~/.claude/config/<name>.md`. On an existing install it never copies them: it only says which ones are missing, because a missing section can mean you turned that skill off. Copy the ones you want by hand. Skills and scripts read both places; a filled-in value in `~/.claude/config/` wins.
 
 ## Updating an existing machine
 
@@ -100,6 +104,17 @@ The manual equivalent, and what `update.sh` does under the hood:
 Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
 
+- 2026-11-<merge day>: Workflow and self-review changes. Per machine: run
+  ./update.sh; reinstall model-discipline (version 1.2.0, the update.sh
+  output has the command) and restart; optionally move the ### Work
+  board, ### Watches, ### Tidy and ### Writing voice sections from
+  ~/.claude/CLAUDE.md into ~/.claude/config/<board|watch|tidy|writing-voice>.md
+  (scripts and skills read both places); copy the new template lines
+  (Standing default, CI/CD exception, Handoffs size, Issue Tracker,
+  External Communications, Review comments, No-ticket repos) into
+  ~/.claude/CLAUDE.md; optionally add `Slack poll quiet: ack, bot, fyi`
+  so acks, bot posts and FYIs go to a digest instead of waking the
+  session (off by default; DMs and direct mentions always wake).
 - 2026-11-19: New `tidy` skill and `~/bin/tidy` (scheduled cleanup at
   board wrap, rollover and a weekly deep clean). Per machine: re-run
   `./install.sh`, add the `### Tidy` block from the template to
@@ -203,18 +218,18 @@ Work through these once per machine:
 - Needs your issue tracker's MCP tools available (e.g. install the Atlassian plugin for Jira, or your tracker's equivalent). No file edits required.
 
 ### `skills/write-as-zack/SKILL.md`
-- No file edits. The optional voice page URL lives in the `### Writing voice` section of `~/.claude/CLAUDE.md`; delete that bullet to run on the rules written into the skill, which are complete on their own. The rules are Zack's; edit them to describe your own voice.
+- No file edits. Copy `config/writing-voice.example.md` to `~/.claude/config/writing-voice.md` (install.sh does this only on a fresh install) and fill it in. The optional voice page URL lives there; delete that bullet to run on the rules written into the skill, which are complete on their own. The rules are Zack's; edit them to describe your own voice.
 
 ### `skills/board/SKILL.md`
-- No file edits. Everything machine-specific lives in the `### Work board` section of `~/.claude/CLAUDE.md`; copy that block from `claude-md/CLAUDE.md.template` and fill it in. The skill stops with a clear message if the section is missing.
+- No file edits. Copy `config/board.example.md` to `~/.claude/config/board.md` (install.sh does this only on a fresh install) and fill it in. The skill stops with a clear message if it is missing.
 - Create one empty Notion page with an inline database (any name, only the default title property) and put its URL on the `Board page` line. The skill adds the columns it needs on first run.
 - Optional: add the `Projects data source` line. On the first run the skill creates a "Projects" database under the board page with the schema in `page-template.md` and gives you the `collection://` id to paste back; after that it keeps one page per workstream current.
 - Needs the Notion MCP plugin, the Slack MCP plugin, your tracker's MCP plugin, `gh`, and `~/bin/worktree` with its config. The ticket flow also needs `/start-ticket`, `/self-review`, `/pr` and the built-in `/code-review` skill.
 - The watch-slack state file path (`~/.claude/watch-sweep.json`); it holds the declined list for the sync's NUDGE? and PROPOSE questions.
 
 ### `skills/watch/SKILL.md`
-- No file edits. Copy the `### Watches` block from `claude-md/CLAUDE.md.template` into `~/.claude/CLAUDE.md` and fill it in; the skill stops with a clear message if the section is missing.
-- Slack poll lines: `Slack poll` (on or off), `Slack poll every`, `Slack poll model`, `Slack poll triggers`, `Slack poll user groups` (the Slack tools cannot list your groups, so type them), `Slack poll keywords`, `Slack poll ignore`, `Slack poll state file`, and the optional group DM lines `Slack poll group-dms` (aimed-only or all, default aimed-only), `Slack poll group-dms lookback` (default 60m) and `Slack poll user name`. Check with `~/bin/wait-for slack --once`.
+- No file edits. Copy `config/watch.example.md` to `~/.claude/config/watch.md` (install.sh does this only on a fresh install) and fill it in; the skill stops with a clear message if it is missing.
+- Slack poll lines: `Slack poll` (on or off), `Slack poll every`, `Slack poll model`, `Slack poll triggers`, `Slack poll user groups` (the Slack tools cannot list your groups, so type them), `Slack poll keywords`, `Slack poll ignore`, `Slack poll quiet` (optional hints that go to a digest instead of waking the session, for example `ack, bot, fyi`; off by default; DMs and direct mentions always wake), `Slack poll state file`, and the optional group DM lines `Slack poll group-dms` (aimed-only or all, default aimed-only), `Slack poll group-dms lookback` (default 60m) and `Slack poll user name`. Check with `~/bin/wait-for slack --once`.
 - Add the allow rules listed in the skill's Install section to `~/.claude/settings.json` by hand: `Bash(~/bin/wait-for *)` plus the Slack read tools and `slack_send_message_draft`, so triage and drafts never stop on a permission prompt.
 - Needs `gh`, Python 3, and `~/bin/wait-for` (linked by `install.sh`). The Slack poll needs the `claude` command and the Slack MCP plugin; Dagster waits need the `Dagster` config line.
 
@@ -225,13 +240,21 @@ Work through these once per machine:
 - Needs Python 3 and the Artifact tool. Reads the board's `Projects data source` when you use the `board` skill; without it, tell Claude where your project notes live.
 
 ### `skills/tidy/SKILL.md`
-- No file edits. Copy the `### Tidy` block from `claude-md/CLAUDE.md.template` into `~/.claude/CLAUDE.md` and fill it in: the weekly day, any extra repos and report folders, the ages, the Loose ends name, and any `Never touch` paths. Without the section tidy only lists leftovers and changes nothing.
+- No file edits. Copy `config/tidy.example.md` to `~/.claude/config/tidy.md` (install.sh does this only on a fresh install) and fill it in: the weekly day, any extra repos and report folders, the ages, the Loose ends name, and any `Never touch` paths. Without the section tidy only lists leftovers and changes nothing.
 - With a `Projects data source`, create one Projects row with the Loose ends name and Status Parked.
 - Check with `~/bin/tidy scan --mode weekly --no-fetch` (read-only; exit 2 means a config problem it names), then `/tidy weekly --dry-run`.
 - Needs `git`, `gh`, Python 3 and `~/bin/tidy` (linked by `install.sh`).
 
 ### `skills/review-pr/SKILL.md`
-- No file edits. Needs `gh` and the built-in `/code-review` skill. Uses the writing-voice skill named in the `### Writing voice` section of `~/.claude/CLAUDE.md` when present, otherwise only the `reviewing-prs` comment rules it pastes into `dispatch-prompt.md`.
+- No file edits. Needs `gh` and the built-in `/code-review` skill. Uses the writing-voice skill named in `~/.claude/config/writing-voice.md` (copy `config/writing-voice.example.md`) when present, otherwise only the `reviewing-prs` comment rules it pastes into `dispatch-prompt.md`.
+
+### `bin/pr-precheck`
+- No script edits. `~/bin/pr-precheck fix` lints changed files with autocorrect and runs only the tests tied to them, once before the first push; `report` prints size, stale generated files and calls inside a lock for the reviewer; `hook` is a check-only pre-push hook (section 4).
+- Optional: copy `config/pr-precheck.example.json` to `~/.claude/config/pr-precheck.json` for per-repo overrides (a changed-test command, `"tests": "none"`, skipped languages, generated files).
+- Check with `~/bin/pr-precheck report` inside any repo.
+
+### `~/.claude/config/self-review.md`
+- Optional. Copy `config/self-review.example.md` and add one `## <repo folder name>` heading per repo with checks `/self-review` applies on top of its generic ones.
 
 ### `bin/query_db`
 - No script edits needed - it's fully generic: `query_db <env-file> "<sql>"`.
@@ -288,6 +311,16 @@ Notes:
 - **The session model is a user-settings value; no plugin can set it.** If you want the top model by default, put `"model": "claude-fable-5-1[1m]"` in `~/.claude/settings.json` yourself.
 - Both the local-path and GitHub registrations use the marketplace name `claude-setup`, so run `/plugin marketplace remove claude-setup` before switching between them.
 - Installed plugins are cached copies under `~/.claude/plugins/cache/`, not live links. After editing the guard, run `/plugin marketplace update claude-setup`, then uninstall and reinstall (`/plugin uninstall model-discipline@claude-setup`, `/plugin install model-discipline@claude-setup`) - `plugin update` and a bare `install` are no-ops while the version in `plugin.json` is unchanged. Or run `claude --plugin-dir ~/Projects/claude-setup/plugins/model-discipline` while you iterate. `update.sh` reports when the cache has drifted.
+
+The plugin also ships two newer hooks: `context-warn` (PostToolUse) tells the main session once when its context passes `CLAUDE_CONTEXT_WARN_AT` tokens (default 150000; `0` or `off` turns it off), and `review-target-guard` denies `/code-review` with a bare PR number.
+
+### Pre-push lint hook (optional)
+
+Add a PreToolUse Bash entry to `~/.claude/settings.json` so every `git push` from Claude is lint-checked (Ruby only by default; `hook_langs` in `~/.claude/config/pr-precheck.json` opts other languages in). It fails open on any error. If you used a hand-made pre-push hook, replace it with this one.
+
+```json
+{"matcher":"Bash","hooks":[{"type":"command","command":"~/bin/pr-precheck hook","timeout":120}]}
+```
 
 ### Update nudge hook (tells you when this repo is behind)
 

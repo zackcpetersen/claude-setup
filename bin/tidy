@@ -32,7 +32,7 @@ import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-DEFAULT_CONFIG = "~/.claude/CLAUDE.md"
+CONFIG_BOUNDARY = "## (file boundary)"  # put between config files, so a section never runs across files
 DAY = 86400
 DEFAULTS = {"Branch age": 30, "Plan age": 14, "Handoff age": 14, "Memory age": 30,
             "Loose ends max": 12, "Loose ends age": 14}
@@ -84,8 +84,8 @@ def read_section(lines, heading):
     values, found, inside = {}, False, False
     for raw in lines:
         m = re.match(r"^(#+)\s+(.*)$", raw)
-        if m:
-            inside = m.group(2).strip().startswith(heading)
+        if m:  # a level-1 title ("# Tidy config") only ends a section, never starts one
+            inside = len(m.group(1)) > 1 and m.group(2).strip().startswith(heading)
             found = found or inside
             continue
         if not inside:
@@ -103,6 +103,29 @@ def _split(text, sep=r"[,\n]"):
     return [w for w in parts if w and not _unset(w)]
 
 
+def config_lines(path, home):
+    """Lines to read. `--config` or TIDY_CONFIG names one file, read alone. Otherwise <home>/.claude/CLAUDE.md
+    then each <home>/.claude/config/*.md in name order, with a boundary heading before each file; a later
+    value wins. The same resolver lives in wait-for (both scripts are single files by design)."""
+    if path:
+        try:
+            return Path(path).expanduser().read_text().splitlines()
+        except OSError as e:
+            raise TidyError(f"cannot read config {path}: {e.strerror}")
+    claude = home / ".claude"
+    lines, read = [], 0
+    for f in [claude / "CLAUDE.md"] + sorted((claude / "config").glob("*.md")):
+        try:
+            text = f.read_text()
+        except OSError:
+            continue
+        lines += [CONFIG_BOUNDARY] + text.splitlines()
+        read += 1
+    if not read:
+        raise TidyError(f"cannot read config: no {claude / 'CLAUDE.md'} and no {claude / 'config'}/*.md")
+    return lines
+
+
 def load_config(path, home):
     home = Path(home).expanduser()
 
@@ -112,10 +135,7 @@ def load_config(path, home):
             p = str(home) + p[1:]
         return Path(p)
 
-    try:
-        lines = Path(path).expanduser().read_text().splitlines()
-    except OSError as e:
-        raise TidyError(f"cannot read config {path}: {e.strerror}")
+    lines = config_lines(path, home)
     tidy = read_section(lines, "Tidy")
     board = read_section(lines, "Work board") or {}
     watches = read_section(lines, "Watches") or {}
@@ -1202,7 +1222,8 @@ def apply(cfg, items, mode, dry):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="tidy", description=__doc__.split("\n\n")[0])
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--config", default=os.environ.get("TIDY_CONFIG", DEFAULT_CONFIG))
+    common.add_argument("--config", default=os.environ.get("TIDY_CONFIG"),
+                        help="config file to read instead of ~/.claude/CLAUDE.md plus ~/.claude/config/*.md")
     common.add_argument("--home", default=os.environ.get("TIDY_HOME", "~"), help="home folder (tests use a temp dir)")
     common.add_argument("--mode", choices=MODES, required=True)
     common.add_argument("--json", action="store_true")

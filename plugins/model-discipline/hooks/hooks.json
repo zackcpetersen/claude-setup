@@ -22,6 +22,17 @@
             "statusMessage": "Adding sub-agent rules to the dispatch prompt"
           }
         ]
+      },
+      {
+        "matcher": "Agent|Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/review-target-guard\"",
+            "timeout": 5,
+            "statusMessage": "Checking the code-review target"
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -31,6 +42,17 @@
           {
             "type": "command",
             "command": "cat \"${CLAUDE_PLUGIN_ROOT}/hooks/session-rules.md\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/context-warn\"",
+            "timeout": 5
           }
         ]
       }
