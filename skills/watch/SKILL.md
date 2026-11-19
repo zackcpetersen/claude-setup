@@ -94,7 +94,7 @@ The goal: watch Slack the way the user would, and interrupt only when they are a
 
 For **Now**: first run every read-only check that would inform the decision: the PR or ticket state, the thread history, logs, read-only database queries, the calendar. Then ask with `AskUserQuestion`, grouped, up to 4 questions, recommended option first. Put the findings in the question and a proposed reply in the option description, so the user only has to decide. A reply is only ever a draft, created after the user picks an option that needs one. Never send, post or react from the poll. Existing reaction rules stay as they are.
 
-5. Append one line per event to the triage log, `slack-poll-triage.jsonl` next to the state file: `{"key": "<channel>:<ts>", "verdict": "skip|not-now|now", "reason": "<few words>", "at": "<UTC time>"}`. Skipped items stay reviewable there.
+5. Append one line per event to the triage log, `slack-poll-triage.jsonl` next to the state file: `{"key": "<channel>:<ts>", "verdict": "skip|not-now|now|handled", "reason": "<few words>", "at": "<UTC time>"}`. Skipped items stay reviewable there. When a not-now item is answered later, append a `handled` line for its key so the status page inbox drops it.
 
 If every event is skipped, say nothing in chat. Use the cheapest path that works: handle a handful of events inline, no sub-agent. Dispatch one read-only agent only when the checks are tool-heavy (many logs, queries or repos).
 

@@ -43,7 +43,7 @@ done
 
 echo "Installing helper scripts to ~/bin ..."
 mkdir -p "$HOME/bin"
-for f in "$REPO_DIR"/bin/query_db "$REPO_DIR"/bin/worktree "$REPO_DIR"/bin/wait-for "$REPO_DIR"/bin/tidy "$REPO_DIR"/bin/pr-precheck; do
+for f in "$REPO_DIR"/bin/query_db "$REPO_DIR"/bin/worktree "$REPO_DIR"/bin/wait-for "$REPO_DIR"/bin/tidy "$REPO_DIR"/bin/pr-precheck "$REPO_DIR"/bin/status-feeds; do
   chmod +x "$f"
   link "$f" "$HOME/bin/$(basename "$f")"
 done
