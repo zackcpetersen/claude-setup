@@ -12,7 +12,8 @@
    "next_milestone": "Cut over the last region, 2026-01-20",
    "deadline": "2026-01-30",
    "needs_me": [
-    {"ask": "Approve the cutover window for the last region.", "ticket": "ENG-142", "due": "2026-01-15"}
+    {"ask": "Approve the cutover window for the last region.", "ticket": "ENG-142", "due": "2026-01-15",
+     "link": "https://github.com/acme/billing/pull/91", "effort": "5m", "who_waits": "Ana"}
    ],
    "summary": "Moving invoices from the old billing service to the new one. Two of three regions are live. The last region waits on a cutover window.",
    "breakdown": [
@@ -46,7 +47,8 @@
  ],
  "waiting_on": [
   {"person": "Legal", "what": "Signed vendor contract", "project_id": "search-revamp", "since": "2026-01-02", "nudge_due": "2026-01-12", "where": "email thread"},
-  {"person": "Ana", "what": "Region 3 dry-run results", "project_id": "billing-migration", "since": "2026-01-09", "nudge_due": "2026-01-14", "where": "team channel"}
+  {"person": "Ana", "what": "Region 3 dry-run results", "project_id": "billing-migration", "since": "2026-01-09", "nudge_due": "2026-01-14", "where": "team channel",
+   "link": "https://acme.slack.com/archives/C0TEAM01/p1768000000123456"}
  ],
  "one_offs": [
   {"title": "Renew the staging certificate", "state": "not started", "needs_me": true, "due": "2026-01-16"},

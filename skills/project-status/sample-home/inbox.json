@@ -1,0 +1,23 @@
+{
+ "version": 1,
+ "updated_at": "2026-01-12T17:40:00Z",
+ "next_meeting": {"title": "Planning", "at": "2026-01-12T21:00:00Z"},
+ "items": [
+  {"id": "draft-reply-sam", "origin": "board", "kind": "send-draft", "title": "Send draft: reply to Sam about region 3",
+   "why": "Draft approved", "link": "https://acme.slack.com/archives/C0TEAM01/p1768000000123456", "ref": "",
+   "project_id": "billing-migration", "since": "2026-01-12T16:00:00Z", "due": null, "effort_min": 2,
+   "who_waits": "Sam", "snooze_until": null, "done_at": null},
+  {"id": "agent-eng-150", "origin": "board", "kind": "approve-agent", "title": "Approve: agent switching off the old billing service",
+   "why": "Held on a delete step", "link": "", "ref": "", "project_id": "billing-migration", "since": "2026-01-12T15:20:00Z",
+   "due": null, "effort_min": 2, "who_waits": "", "snooze_until": null, "done_at": null},
+  {"id": "confirm-export-lee", "origin": "board", "kind": "confirm", "title": "Confirm Lee got the ranking export",
+   "why": "Delivered, not confirmed", "link": "", "ref": "", "project_id": "search-revamp", "since": "2026-01-08T18:00:00Z",
+   "due": "2026-01-13", "effort_min": 5, "who_waits": "", "snooze_until": null, "done_at": null},
+  {"id": "todo-laptop", "origin": "session", "kind": "todo", "title": "Book the laptop swap",
+   "why": "", "link": "", "ref": "", "project_id": "", "since": "2026-01-02T18:00:00Z",
+   "due": null, "effort_min": 5, "who_waits": "", "snooze_until": "2026-01-19", "done_at": null},
+  {"id": "todo-badge", "origin": "session", "kind": "todo", "title": "Renew the office badge",
+   "why": "", "link": "", "ref": "", "project_id": "", "since": "2026-01-10T18:00:00Z",
+   "due": null, "effort_min": 5, "who_waits": "", "snooze_until": null, "done_at": "2026-01-12T16:30:00Z"}
+ ]
+}

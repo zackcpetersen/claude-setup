@@ -1,0 +1,22 @@
+{
+ "as_of": "2026-01-14T17:30Z",
+ "projects": [
+  {"id": "billing-migration", "name": "Billing migration", "status": "On track", "progress_pct": 60,
+   "deadline": "2026-01-30",
+   "needs_me": [
+    {"ask": "Approve the cutover window for region 3.", "ticket": "ENG-142", "due": "2026-01-13"},
+    {"ask": "Sign off the rollback plan </script> today.", "ticket": "ENG-142", "due": "2026-01-14"},
+    {"ask": "Merge the region 3 cutover.", "link": "https://github.com/acme/billing/pull/91"}
+   ]},
+  {"id": "search-revamp", "name": "Search revamp", "status": "At risk", "progress_pct": 25, "deadline": "2026-01-10"}
+ ],
+ "waiting_on": [
+  {"person": "Legal", "what": "Signed vendor contract", "project_id": "search-revamp", "since": "2026-01-02", "nudge_due": "2026-01-12"},
+  {"person": "Ana", "what": "Dry-run results", "project_id": "billing-migration", "since": "2026-01-09", "nudge_due": "2026-01-20"}
+ ],
+ "one_offs": [
+  {"title": "Renew the staging certificate", "state": "not started", "needs_me": true, "due": "2026-01-16"},
+  {"title": "Expense report", "state": "done", "needs_me": true}
+ ],
+ "unsure": ["drop me"]
+}

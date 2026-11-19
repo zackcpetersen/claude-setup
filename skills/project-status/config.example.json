@@ -4,6 +4,23 @@
   "github_org": "FILL-IN",
   "source_note": "Snapshot from my project notes.",
   "artifact_url": "",
+  "tz": "",
+  "inbox": {
+    "cap": 7,
+    "home_count": 3,
+    "stale_days": 7,
+    "github_orgs": [],
+    "review_teams": [],
+    "slack_triage_log": "~/.claude/slack-poll-triage.jsonl",
+    "slack_lookback_days": 3,
+    "slack_url": "",
+    "effort_defaults": {}
+  },
+  "feeds": {
+    "every_minutes": 15,
+    "hours": "08:00-18:00",
+    "days": "Mon-Fri"
+  },
   "theme": {
     "light": {
       "--canvas": "#1F2A37",
