@@ -28,8 +28,8 @@ Steps for any mode:
 1. `~/bin/tidy scan --mode <mode> --json`. It is read-only except `git fetch --prune` per repo (`--no-fetch` skips that). A non-empty `errors` list (for example an unreadable worktree config; the command exits 2) stops the run: report it and fix the config before cleaning anything.
 2. For `stale` and `weekly`, dispatch the board's `tidy-board-check` (sonnet, read-only) for board lines and Projects rows.
 3. Agents first: `ListAgents`, then `TaskStop` every idle agent whose work is done (read anything still needed from it first). Background shells the session started: stop those whose log says done. A worktree that any live process still works in is never removed (scan and apply both check).
-4. Pipe the Tier 1 findings to `~/bin/tidy apply --mode <mode>`. No question.
-5. Tier 2: one grouped question per category (below). On a yes, pipe exactly the approved findings to `apply`.
+4. Pipe the Tier 1 findings, as a JSON list, to `~/bin/tidy apply --mode <mode>`. No question. Never pipe the scan output itself: `apply` refuses anything but a list.
+5. Tier 2: one grouped question per category (below). On a yes, add `"approved": true` to exactly the approved findings and pipe them as a JSON list to `apply`. `apply` refuses any Tier 2 item without that marker.
 6. Print the report (shape below) and append it to the day's handoff.
 
 ## Merged, defined once
@@ -39,7 +39,8 @@ After `git fetch --prune`, a branch is merged when (a) its tip is an ancestor of
 ## Safety tiers
 
 **Tier 1, do without asking (the scan marks these `tier: 1`):**
-- Worktree on a merged branch, with no running process working inside it, whose status shows nothing but setup copies that are byte-identical to the main checkout, and no other git-ignored files. Removed, branch deleted, main fast-forwarded. A worktree that also holds ignored files (an `.env.local`, a data export, a cache) is Tier 2 with the file list, weekly only.
+- Worktree on a merged branch, with no running process working inside it, whose status shows nothing but setup copies that are byte-identical to the main checkout, and no other git-ignored files. Removed, branch deleted, main fast-forwarded. A worktree that also holds ignored files (an `.env.local`, a data export, a cache) is Tier 2 with the file list, weekly only; on a yes those files are moved to the archive before the worktree is removed.
+- Worktree on a merged branch whose folder was deleted by hand (`prune_worktree`): `git worktree prune`, then the branch is deleted.
 - Merged local branch, not checked out anywhere, not the default branch, no open PR.
 - `wait-for pr` processes whose PR is merged or closed; idle finished agents; finished background shells.
 - Empty files and folders in the plans and handoff folders.
@@ -47,6 +48,7 @@ After `git fetch --prune`, a branch is merged when (a) its tip is an ancestor of
 
 **Tier 2, ask once per category.** File and branch questions offer "archive or remove all (Recommended)", "keep all", "show me the list". Board lines and Loose ends never get a blanket yes: list each line with a proposed home, date or drop, and the user confirms or changes each one. Questions go through the board's Open questions queue (grouped `AskUserQuestion`, up to 4 per call), never one per item.
 - `branch_gone`: unmerged branches whose upstream is gone or whose PR closed, older than `Branch age`.
+- `worktree_gone`: a worktree on such a branch, with its `edits` and `ignored` file lists. On a yes, both lists are moved to the archive, then the worktree is removed and the branch deleted (commits kept under `refs/tidy-archive/`).
 - `branch_no_pr`: old branches with no PR and no upstream, in batches of 30 (the `batch` field), oldest first. One batch per week.
 - Plans older than `Plan age`: drop any the Work registry still points at, then offer the rest.
 - Handoffs older than `Handoff age`: archived to `<handoff folder>/archive/YYYY-MM/`. The newest handoff and today's `-files` folder are never offered.
@@ -55,7 +57,7 @@ After `git fetch --prune`, a branch is merged when (a) its tip is an ancestor of
 - Board lines (from `tidy-board-check`): Deferred lines and dateless Blocked watch rows older than `carry_flag_days` x 3, In-flight rows that are not in flight, Projects rows with a past Next milestone and no update in 14 days, Loose ends items older than `Loose ends age`. Each gets a home, a date, or is dropped. Edits to today's row are single-line `update_content` edits after the yes.
 - Permission rules: the scan's `permission_rules` finding, grouped by tool, shown as a list once a week. The user names which to drop; edit the settings file only for those.
 
-**Report only (listed, never changed):** dirty default checkouts and repos with uncommitted work, worktrees with real edits, stashes (count), published artifacts older than 30 days that a newer one replaces (the user deletes them, or says yes per artifact and it is logged `restore: none`), `~/.claude/tasks`, `teams`, `jobs` (count and size), transcripts (size), `Report folders`. Drafts belong to wrap's drafts check and tracker snapshots to the tracker gatherer: do not recheck them.
+**Report only (listed, never changed):** dirty default checkouts and repos with uncommitted work, worktrees with real edits (merged or not), detached worktrees, worktrees whose folder is gone on an unmerged branch, stashes (count), published artifacts older than 30 days that a newer one replaces (the user deletes them, or says yes per artifact and it is logged `restore: none`), `~/.claude/tasks`, `teams`, `jobs` (count and size), transcripts (size), `Report folders`. Drafts belong to wrap's drafts check and tracker snapshots to the tracker gatherer: do not recheck them.
 
 **Tier 3, never touch:** real edits anywhere, any stash, an open PR's branch, a checked-out branch, the default branch, closed daily rows, the scratchpad, Goals, the Standup section, settings file content (except the rules the user names), credentials, env files, `CLAUDE.md`, other people's PRs, tickets and threads, anything in `Never touch`, and any path outside the folders tidy knows. `apply` refuses these even when asked.
 
@@ -71,10 +73,10 @@ The one home for things worth keeping that have no project, ticket or memory: a 
 
 ## Log, archive and state
 
-- `apply` re-checks every item live (branch tip, PR state and base, worktree edits and ignored files, file mtime, process command, poll running) and skips anything that changed since the scan. It computes archive paths itself. Never hand it a list you edited by hand to "fix" a skip; re-scan.
-- Every action writes two lines to `~/.claude/tidy/log.jsonl`: an `intent` line with the undo command before acting, then a `result` line (`ok` or `failed`). Fields: `ts`, `mode`, `tier`, `kind`, `target`, `phase`, `action`, `restore`. `restore` is the exact undo command (branch: `git -C <repo> branch <name> <sha>`; worktree: that plus `git worktree add <same path>`, without ignored files or setup copies; file: `mv <archive> <original>`).
-- Files are moved to `~/.claude/tidy/archive/YYYY-MM-DD/<path under home>`, never deleted, except empty ones.
-- `state.json` holds `last_daily`, `last_stale`, `last_weekly`, written only by a real `apply` (pipe `[]` when there is nothing to apply). The scan's `weekly_due` is true when `last_weekly` is missing or older than 7 days; rollover then asks "Run the weekly tidy now or at today's wrap?".
+- `apply` takes a JSON list only, and acts on a Tier 2 item only when it carries `"approved": true`. It re-checks every item live (branch tip, PR state and base, worktree edits and ignored files, file mtime, process command, poll running) and skips anything that changed since the scan. It computes archive paths itself. One bad item is logged as failed and the rest still run. Never hand it a list you edited by hand to "fix" a skip; re-scan.
+- Every action writes two lines to `~/.claude/tidy/log.jsonl`: an `intent` line with the undo command before acting, then a `result` line (`ok` or `failed`). Fields: `ts`, `mode`, `tier`, `kind`, `target`, `phase`, `action`, `restore`. `restore` is the exact undo command (branch: `git -C <repo> branch <name> <sha>`; worktree: that plus `git worktree add <same path>` and a copy back of any archived edits and ignored files, without setup copies; file: `mv <archive> <original>`).
+- Files are moved to `~/.claude/tidy/archive/YYYY-MM-DD/<path under home>` (worktree files to `archive/YYYY-MM-DD/worktrees/<repo>/<worktree>/`), never deleted, except empty files and folders with nothing inside.
+- `state.json` holds `last_daily`, `last_stale`, `last_weekly`, written only by a real `apply` (pipe `[]` when there is nothing to apply). The scan's `weekly_due` is true when `last_weekly` is missing or older than 7 days, and `weekly_today` is false once `last_weekly` is today. When `weekly_due`, rollover asks "Run the weekly tidy now or at today's wrap?".
 
 ## Report
 

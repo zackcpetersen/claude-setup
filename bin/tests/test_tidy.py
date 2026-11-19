@@ -8,6 +8,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -39,7 +40,7 @@ class Base(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         self.addCleanup(self.tmp.cleanup)
-        self.prs, self.procs, self.pr_states, self.cwds = {}, [], {}, []
+        self.prs, self.procs, self.pr_states, self.cwds, self.hidden = {}, [], {}, [], set()
         for name, fake in (("gh_pr_list", self.fake_prs), ("ps_lines", lambda: list(self.procs)),
                            ("process_cwds", lambda: None if self.cwds is None else list(self.cwds)),
                            ("gh_pr_state", lambda repo, n: self.pr_states.get(str(n), "MERGED"))):
@@ -105,7 +106,9 @@ class Base(unittest.TestCase):
 
     def fake_prs(self, repo_path, branch=None):
         index = {}
-        for pr in self.prs.values():
+        for n, pr in self.prs.items():
+            if branch is None and n in self.hidden:
+                continue  # past the repo-wide list's limit: only a per-branch lookup finds it
             if branch is None or pr["headRefName"] == branch:
                 index.setdefault(pr["headRefName"], []).append(pr)
         return index
@@ -142,8 +145,20 @@ class Base(unittest.TestCase):
     def find(self, findings, **kw):
         return [f for f in findings if all(f.get(k) == v for k, v in kw.items())]
 
-    def apply(self, items, mode="weekly", dry=False):
+    def apply(self, items, mode="weekly", dry=False, approve=True):
+        """Tier 2 items get "approved": true, as the skill adds after the user's yes (approve=False skips it)."""
+        if approve:
+            items = [{**i, "approved": True} if isinstance(i, dict) and i.get("tier") == 2 else i for i in items]
         return T.apply(self.cfg, items, mode, dry=dry)
+
+    def setup_repo(self):
+        """A fake setup repo: skills/ plus the install.sh and bin/tidy that mark it as this repo."""
+        root = self.home / "setup"
+        (root / "skills").mkdir(parents=True)
+        (root / "bin").mkdir()
+        (root / "install.sh").write_text("#!/bin/sh\n")
+        (root / "bin" / "tidy").write_text("")
+        return root
 
     def has_branch(self, name):
         return sh(self.repo, "git", "branch", "--list", name) != ""
@@ -296,6 +311,19 @@ class TestBranchTiers(Base):
         subprocess.run(res[0]["restore"], shell=True, check=True)
         self.assertEqual(sh(self.repo, "git", "rev-parse", "feat-keep"), sha)
 
+    def test_pr_missing_from_repo_list_is_looked_up_per_branch(self):
+        sha = self.branch("feat-ancient", push=True)
+        self.pr(1, "feat-ancient", sha)
+        self.hidden = {1}
+        hits = self.find(self.scan("daily"), branch="feat-ancient")
+        self.assertEqual([(h["tier"], h["kind"], h["merged_by"]) for h in hits], [(1, "delete_branch", "pr")])
+
+    def test_failed_per_branch_lookup_does_not_offer_the_branch(self):
+        self.branch("feat-unknown")
+        real = T.gh_pr_list
+        with mock.patch.object(T, "gh_pr_list", side_effect=lambda rp, branch=None: None if branch else real(rp)):
+            self.assertEqual(self.find(self.scan(), branch="feat-unknown"), [])
+
     def test_squash_merged_delete_keeps_commits(self):
         sha = self.branch("feat-sq2", push=True)
         self.pr(9, "feat-sq2", sha)
@@ -433,6 +461,80 @@ class TestWorktrees(Base):
     def test_never_touch_protects_worktree_path(self):
         self.make_wt(name="guarded")
         self.assertEqual(self.find(self.scan("daily"), branch="guarded"), [])
+
+    def test_tier2_worktree_removal_archives_ignored_files_and_restores_them(self):
+        wt = self.make_wt()
+        (wt / ".env.local").write_text("SECRET=1\n")
+        item = self.find(self.scan(), branch="feat-w")[0]
+        res = self.apply([item])
+        self.assertEqual(res[0]["status"], "done", res)
+        self.assertFalse(wt.exists())
+        kept = self.claude / "tidy" / "archive" / time.strftime("%Y-%m-%d") / "worktrees" / "app" / "feat-w"
+        self.assertEqual((kept / ".env.local").read_text(), "SECRET=1\n")
+        self.assertIn(str(kept), res[0]["restore"])
+        subprocess.run(res[0]["restore"], shell=True, check=True)
+        self.assertEqual((wt / ".env.local").read_text(), "SECRET=1\n")
+
+    def test_closed_pr_worktree_is_tier2_gone_and_archives_edits(self):
+        sha = self.branch("feat-c", push=True)
+        self.pr(7, "feat-c", sha, state="CLOSED")
+        wt = self.home / "wt-c"
+        sh(self.repo, "git", "worktree", "add", "-q", str(wt), "feat-c")
+        (wt / "new.py").write_text("work\n")
+        (wt / ".env.local").write_text("S=1\n")
+        self.assertEqual([h["kind"] for h in self.find(self.scan("daily"), branch="feat-c")], ["worktree_edits"])
+        hits = self.find(self.scan(), branch="feat-c")
+        self.assertEqual([(h["tier"], h["kind"], h["edits"], h["ignored"]) for h in hits],
+                         [(2, "worktree_gone", ["new.py"], [".env.local"])])
+        self.assertEqual(self.apply(hits, approve=False)[0]["status"], "refused")
+        res = self.apply(hits)
+        self.assertEqual(res[0]["status"], "done", res)
+        self.assertFalse(wt.exists())
+        self.assertFalse(self.has_branch("feat-c"))
+        self.assertEqual(sh(self.repo, "git", "rev-parse", f"refs/tidy-archive/{sha}"), sha)
+        subprocess.run(res[0]["restore"], shell=True, check=True)
+        self.assertEqual(((wt / "new.py").read_text(), (wt / ".env.local").read_text()), ("work\n", "S=1\n"))
+
+    def test_gone_worktree_with_new_edit_after_scan_skips_apply(self):
+        sha = self.branch("feat-c2", push=True)
+        self.pr(8, "feat-c2", sha, state="CLOSED")
+        wt = self.home / "wt-c2"
+        sh(self.repo, "git", "worktree", "add", "-q", str(wt), "feat-c2")
+        item = self.find(self.scan(), branch="feat-c2")[0]
+        (wt / "late.py").write_text("x")
+        self.assertTrue(self.apply([item])[0]["detail"].startswith("worktree edits changed"))
+        self.assertTrue(wt.exists())
+
+    def test_dirty_unmerged_and_detached_worktrees_are_reported(self):
+        self.branch("feat-wip")
+        wip = self.home / "wt-wip"
+        sh(self.repo, "git", "worktree", "add", "-q", str(wip), "feat-wip")
+        (wip / "draft.py").write_text("x")
+        det = self.home / "wt-det"
+        sh(self.repo, "git", "worktree", "add", "-q", "--detach", str(det), "main")
+        found = self.scan("daily")
+        self.assertEqual([(h["tier"], h["kind"], h["merged_by"], h["files"]) for h in self.find(found, branch="feat-wip")],
+                         [("report", "worktree_edits", None, ["draft.py"])])
+        self.assertEqual([(h["tier"], h["kind"]) for h in self.find(found, path=str(det))],
+                         [("report", "worktree_detached")])
+
+    def test_missing_worktree_folder_offers_prune_and_branch_delete(self):
+        wt = self.make_wt()
+        shutil.rmtree(wt)
+        hits = self.find(self.scan("daily"), branch="feat-w")
+        self.assertEqual([(h["tier"], h["kind"]) for h in hits], [(1, "prune_worktree")])
+        res = self.apply(hits, "daily")
+        self.assertEqual(res[0]["status"], "done", res)
+        self.assertFalse(self.has_branch("feat-w"))
+        self.assertEqual(len(T.worktrees(self.repo)), 1)
+
+    def test_missing_unmerged_worktree_folder_is_reported(self):
+        self.branch("feat-lost")
+        wt = self.home / "wt-lost"
+        sh(self.repo, "git", "worktree", "add", "-q", str(wt), "feat-lost")
+        shutil.rmtree(wt)
+        hits = self.find(self.scan("daily"), branch="feat-lost")
+        self.assertEqual([(h["tier"], h["kind"]) for h in hits], [("report", "worktree_missing")])
 
 
 class TestApplyGuards(Base):
@@ -605,6 +707,46 @@ class TestApplyGuards(Base):
         self.assertIn("last_weekly", json.loads((self.claude / "tidy" / "state.json").read_text()))
         self.assertFalse(T.scan(self.cfg, "stale")["weekly_due"])
 
+    def test_tier2_without_approved_marker_is_refused(self):
+        plan = self.claude / "plans" / "old.md"
+        plan.write_text("p")
+        os.utime(plan, (OLD, OLD))
+        item = self.find(self.scan(), path=str(plan))[0]
+        res = self.apply([item], approve=False)
+        self.assertEqual(res[0]["status"], "refused")
+        self.assertIn("approved", res[0]["detail"])
+        self.assertTrue(plan.exists())
+
+    def test_cli_apply_refuses_raw_scan_output(self):
+        plan = self.claude / "plans" / "old.md"
+        plan.write_text("p")
+        os.utime(plan, (OLD, OLD))
+        scan = T.scan(self.cfg, "weekly", fetch=False)
+        out = subprocess.run([str(BIN / "tidy"), "apply", "--mode", "weekly", "--config", str(self.config),
+                              "--home", str(self.home)], input=json.dumps(scan, default=str),
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 2, out.stdout)
+        self.assertIn("JSON list", out.stderr)
+        self.assertTrue(plan.exists())
+
+    def test_weekly_today_is_false_once_weekly_ran_today(self):
+        self.cfg["weekly"] = time.strftime("%a")
+        self.assertTrue(T.scan(self.cfg, "stale")["weekly_today"])
+        self.apply([])
+        self.assertFalse(T.scan(self.cfg, "stale")["weekly_today"])
+
+    def test_one_bad_item_is_recorded_and_the_rest_still_run(self):
+        item = self.merged_item()
+        plan = self.claude / "plans" / "old.md"
+        plan.write_text("p")
+        os.utime(plan, (OLD, OLD))
+        later = self.find(self.scan(), path=str(plan))[0]
+        res = self.apply([item, {"tier": 1, "kind": "delete_branch", "repo_path": str(self.repo)}, "junk", later],
+                         "weekly")
+        self.assertEqual([r["status"] for r in res], ["done", "failed", "failed", "done"], res)
+        self.assertIn("KeyError", res[1]["detail"])
+        self.assertIn("last_weekly", json.loads((self.claude / "tidy" / "state.json").read_text()))
+
     def test_refuses_without_tidy_section(self):
         self.config.write_text(self.config.read_text().replace("### Tidy", "### Other"))
         with self.assertRaises(T.TidyError):
@@ -712,8 +854,8 @@ class TestFiles(Base):
         self.assertEqual(self.apply([item])[0]["detail"], "newest handoff or today's files")
 
     def test_unlinked_skill_that_stopped_shadowing_is_skipped(self):
-        repo_skills = self.home / "setup" / "skills"
-        (repo_skills / "board").mkdir(parents=True)
+        repo_skills = self.setup_repo() / "skills"
+        (repo_skills / "board").mkdir()
         (self.claude / "skills").mkdir()
         os.symlink(repo_skills / "board", self.claude / "skills" / "linked")
         (self.claude / "skills" / "board").mkdir()
@@ -741,9 +883,42 @@ class TestFiles(Base):
         subprocess.run(res[0]["restore"], shell=True, check=True)
         self.assertEqual(len(log.read_text().splitlines()), 700)
 
+    def test_setup_repo_root_skips_other_links_and_resolves_relative_ones(self):
+        root = self.setup_repo()
+        (root / "skills" / "board").mkdir()
+        plugin = self.home / "plugin" / "skills" / "aaa"
+        plugin.mkdir(parents=True)
+        (self.claude / "skills").mkdir()
+        os.symlink(plugin, self.claude / "skills" / "aaa")
+        os.symlink(os.path.relpath(root / "skills" / "board", self.claude / "skills"), self.claude / "skills" / "board")
+        self.assertEqual(T.setup_repo_root(self.cfg), root)
+
+    def test_folder_of_empty_files_is_not_removed_as_empty(self):
+        plans = self.claude / "plans"
+        (plans / "keep-dir").mkdir()
+        (plans / "keep-dir" / ".keep").write_text("")
+        (plans / "bare").mkdir()
+        (plans / "empty.md").write_text("")
+        tier1 = {Path(f["path"]).name for f in self.scan("daily") if f["kind"] == "remove_empty"}
+        self.assertEqual(tier1, {"bare", "empty.md"})
+
+    def test_poll_files_follow_the_state_file_name(self):
+        self.cfg["poll_state"] = self.claude / "watch" / "poll.json"
+        events = self.claude / "watch" / "poll-events"
+        events.mkdir(parents=True)
+        old = events / "old.json"
+        old.write_text("{}")
+        os.utime(old, (OLD, OLD))
+        (self.claude / "watch" / "poll-triage.jsonl").write_text("".join(f"{i}\n" for i in range(700)))
+        found = self.scan("daily")
+        item = self.find(found, bucket="poll_event")[0]
+        self.assertEqual((item["tier"], item["path"]), (1, str(old)))
+        self.assertTrue(self.find(found, kind="trim_log"))
+        self.assertEqual(self.apply([item], "daily")[0]["status"], "done")
+
     def test_unlinked_skill_shadowing_is_tier2_others_report_only(self):
-        repo_skills = self.home / "setup" / "skills"
-        (repo_skills / "board").mkdir(parents=True)
+        repo_skills = self.setup_repo() / "skills"
+        (repo_skills / "board").mkdir()
         (self.claude / "skills").mkdir()
         os.symlink(repo_skills / "board", self.claude / "skills" / "linked")
         for name in ("board", "mine"):

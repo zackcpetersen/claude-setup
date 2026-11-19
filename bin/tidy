@@ -8,8 +8,10 @@
 findings with a tier: 1 (provably dead, safe without asking), 2 (ask first, one
 question per kind) or "report" (listed, never changed). `apply` reads the approved
 findings as JSON on stdin, re-checks each one live, logs its intent and undo
-command, acts, then logs the result to ~/.claude/tidy/log.jsonl. Files are moved
-to an archive, never deleted (except empty ones). Unmerged commits are kept under
+command, acts, then logs the result to ~/.claude/tidy/log.jsonl. stdin must be a
+JSON list (never the scan's own output), and a Tier 2 item is acted on only when it
+carries "approved": true. Files are moved to an archive, never deleted (except
+empty ones). Unmerged commits are kept under
 refs/tidy-archive/ before a branch is deleted. Standard library only.
 Exit status: 0 ok; 1 an apply item failed; 2 a config or usage problem (a missing
 CLAUDE.md, an unreadable worktree config, a bad value). See skills/tidy/SKILL.md.
@@ -41,8 +43,9 @@ CLAUDE_OWNED = ("tasks", "teams", "jobs")
 # A memory counts as finished work only when its description or first body line LEADS with one of these.
 FINISHED_LEAD = re.compile(r"^\W*(done|ended|closed|shipped|finished|retired)\b", re.I)
 WAIT_FOR_PR = re.compile(r"wait-for\s+pr\s+(\S+)\s+(\d+)\b")
-APPLY_KINDS = {"remove_worktree", "delete_branch", "branch_gone", "branch_no_pr", "remove_empty",
-               "archive_file", "trim_log", "stop_process"}
+APPLY_KINDS = {"remove_worktree", "worktree_gone", "prune_worktree", "delete_branch", "branch_gone",
+               "branch_no_pr", "remove_empty", "archive_file", "trim_log", "stop_process"}
+WORKTREE_KINDS = ("remove_worktree", "worktree_gone", "prune_worktree")
 MODES = ("daily", "stale", "weekly")
 PR_FIELDS = "number,state,headRefName,headRefOid,baseRefName"
 
@@ -131,8 +134,17 @@ def load_config(path, home):
         "worktree_config": expand(wt_parts[0]) if wt_parts else None,
         "memory_dir": expand(board["Memory dir"]) if board.get("Memory dir") else None,
         "handoffs": expand(handoffs["Handoff folder"]) if handoffs.get("Handoff folder") else None,
-        "poll_dir": expand(poll).parent if poll else None,
+        "poll_state": expand(poll) if poll else None,
     }
+
+
+def poll_files(cfg):
+    """(events folder, triage log) next to the Slack poll state file, named from its stem the way
+    wait-for names the events folder, or (None, None) without a poll."""
+    state = cfg["poll_state"]
+    if not state:
+        return None, None
+    return state.with_name(state.stem + "-events"), state.with_name(state.stem + "-triage.jsonl")
 
 
 def load_repos(cfg):
@@ -197,6 +209,18 @@ def gh_pr_list(repo_path, branch=None):
     for pr in json.loads(out or "[]"):
         index.setdefault(pr["headRefName"], []).append(pr)
     return index
+
+
+def prs_for_branch(repo_path, prs, branch):
+    """`prs` with `branch` looked up on its own when the repo-wide list did not include it (that list
+    stops at 1000 PRs, so an old branch's PR can be missing). False when gh cannot answer."""
+    if prs is None or branch in prs:
+        return prs
+    more = gh_pr_list(repo_path, branch=branch)
+    if more is None:
+        return False
+    prs[branch] = more.get(branch, [])
+    return prs
 
 
 def gh_pr_state(repo, number):
@@ -415,7 +439,9 @@ def is_empty(path):
     if path.is_file():
         return path.stat().st_size == 0
     if path.is_dir():
-        return all(is_empty(c) for c in path.iterdir())
+        # Only a folder with nothing at all inside: one holding empty files is not "empty", since
+        # removing it would lose the file names and the restore command only recreates the folder.
+        return not any(path.iterdir())
     return False
 
 
@@ -455,25 +481,51 @@ def scan_repo(repo, cfg, now, fetch, mode):
     if stashes and mode == "weekly":
         found.append({"tier": "report", "kind": "stash", "repo": repo["key"], "target": str(path),
                       "count": len(stashes.splitlines())})
+    for wt, b, head in wts[1:]:
+        if b is not None:
+            continue
+        # Detached worktrees have no branch, so the branch loop below never sees them: report them.
+        item = {"tier": "report", "repo": repo["key"], "repo_path": str(path), "target": str(wt), "path": str(wt),
+                "sha": head}
+        if not wt.exists():
+            found.append({**item, "kind": "worktree_missing", "note": "folder gone; `git worktree prune` clears it"})
+        else:
+            edits, _ = worktree_check(wt, main_path, repo)
+            found.append({**item, "kind": "worktree_detached", "files": edits[:20]})
     old_branches = []
     for b in branches(path):
         name, sha = b["branch"], b["sha"]
         if name == default or name == main_branch:
             continue
-        pr = pick_pr(prs, name, sha)
+        looked_up = prs_for_branch(path, prs, name)
+        pr = pick_pr(looked_up or None, name, sha)
         if pr and pr["state"] == "OPEN":
             continue
         created = branch_created(path, name)
         base = {"repo": repo["key"], "repo_path": str(path), "branch": name, "sha": sha, "default": default,
                 "pr": pr["number"] if pr else None, "age_days": age_days(max(b["committed"], created or 0), now)}
         how = merged_by(path, sha, default, pr, line)
+        closed = b["gone"] or (pr and pr["state"] == "CLOSED")
+        reason = "PR closed" if pr and pr["state"] == "CLOSED" else "upstream gone"
+        # Tier 2 offers for unmerged work need a full PR answer and an old enough branch, weekly only.
+        offer_old = mode == "weekly" and isinstance(looked_up, dict) and base["age_days"] >= cfg["ages"]["Branch age"]
         if name in checked_out:
             wt = checked_out[name]
+            item = {**base, "target": str(wt), "path": str(wt), "merged_by": how}
+            if not wt.exists():
+                # The folder was deleted by hand: git still lists it as prunable.
+                if how:
+                    found.append({**item, "tier": 1, "kind": "prune_worktree",
+                                  "note": "folder gone; git worktree prune, then delete the merged branch"})
+                else:
+                    found.append({**item, "tier": "report", "kind": "worktree_missing",
+                                  "note": "folder gone; `git worktree prune` clears it, then the branch is offered "
+                                          "like any other old branch"})
+                continue
+            edits, ignored = worktree_check(wt, main_path, repo)
+            nested = nested_worktrees(wt, wts)
+            busy = in_use(wt, cwds)
             if how:
-                edits, ignored = worktree_check(wt, main_path, repo)
-                nested = nested_worktrees(wt, wts)
-                item = {**base, "target": str(wt), "path": str(wt), "merged_by": how}
-                busy = in_use(wt, cwds)
                 if busy:
                     found.append({**item, "tier": "report", "kind": "worktree_in_use", "note": busy})
                 elif edits or nested:
@@ -485,16 +537,24 @@ def scan_repo(repo, cfg, now, fetch, mode):
                                       "note": "holds git-ignored files that are not setup copies"})
                 else:
                     found.append({**item, "tier": 1, "kind": "remove_worktree"})
+            elif closed and offer_old and not busy and not nested:
+                found.append({**item, "tier": 2, "kind": "worktree_gone", "reason": reason, "edits": edits,
+                              "edits_count": len(edits), "ignored": ignored, "ignored_count": len(ignored),
+                              "note": "unmerged; edits and ignored files are archived before removal"})
+            elif busy and (closed or edits or nested):
+                found.append({**item, "tier": "report", "kind": "worktree_in_use", "note": busy})
+            elif edits or nested:
+                found.append({**item, "tier": "report", "kind": "worktree_edits", "files": (edits + nested)[:20]})
             continue
         if how:
             found.append({**base, "tier": 1, "kind": "delete_branch", "target": f"{repo['key']}:{name}",
                           "merged_by": how})
             continue
-        if mode != "weekly" or prs is None or base["age_days"] < cfg["ages"]["Branch age"]:
+        if not offer_old:
             continue
-        if b["gone"] or (pr and pr["state"] == "CLOSED"):
+        if closed:
             found.append({**base, "tier": 2, "kind": "branch_gone", "target": f"{repo['key']}:{name}",
-                          "reason": "PR closed" if pr and pr["state"] == "CLOSED" else "upstream gone"})
+                          "reason": reason})
         elif pr is None and not b["upstream"]:
             old_branches.append({**base, "tier": 2, "kind": "branch_no_pr", "target": f"{repo['key']}:{name}"})
     old_branches.sort(key=lambda f: -f["age_days"])
@@ -556,13 +616,12 @@ def scan_plans(cfg, now, age):
 
 
 def scan_poll(cfg, now):
-    d = cfg["poll_dir"]
-    if not d:
+    events, triage = poll_files(cfg)
+    if not events:
         return []
-    found = scan_folder(d / "slack-poll-events", "poll_event", POLL_EVENT_AGE, now)
+    found = scan_folder(events, "poll_event", POLL_EVENT_AGE, now)
     for f in found:
         f["tier"] = 1  # old poll events are provably dead: the session already read them
-    triage = d / "slack-poll-triage.jsonl"
     if triage.is_file():
         n = len(triage.read_text().splitlines())
         if n > TRIAGE_KEEP:
@@ -572,12 +631,16 @@ def scan_poll(cfg, now):
 
 
 def setup_repo_root(cfg):
-    """The repo the installed commands and skills link into, from the first symlink found."""
+    """The setup repo the installed commands and skills link into: the first symlink whose fully
+    resolved target sits in a folder holding this repo's install.sh and bin/tidy. Links into other
+    repos or plugins are skipped."""
     for sub in ("commands", "skills"):
         d = cfg["claude"] / sub
         for p in sorted(d.iterdir()) if d.is_dir() else []:
             if p.is_symlink():
-                return Path(os.readlink(p)).parent.parent
+                root = p.resolve().parent.parent
+                if (root / "install.sh").is_file() and (root / "bin" / "tidy").exists():
+                    return root
     return None
 
 
@@ -748,9 +811,12 @@ def scan(cfg, mode, fetch=True, now=None):
     kept = [f for f in found if f["kind"] == "config_error" or not protected(cfg, f)]
     state = read_state(cfg)
     last = state.get("last_weekly")
-    weekly_due = last is None or (date.fromtimestamp(now) - date.fromisoformat(last)).days > 7
+    today = date.fromtimestamp(now)
+    weekly_due = last is None or (today - date.fromisoformat(last)).days > 7
+    # Not "today" once the weekly already ran today (for example at rollover), so wrap does not run it twice.
+    weekly_today = today.strftime("%a").lower().startswith(cfg["weekly"][:3].lower()) and last != today.isoformat()
     return {"mode": mode, "enabled": cfg["enabled"], "errors": errors, "state": state, "weekly_due": weekly_due,
-            "weekly_today": date.fromtimestamp(now).strftime("%a").lower().startswith(cfg["weekly"][:3].lower()),
+            "weekly_today": weekly_today,
             "never_touch_skipped": len(found) - len(kept), "findings": kept}
 
 
@@ -785,9 +851,10 @@ def known_roots(cfg):
     folders = [cfg["plans"], cfg["claude"] / "commands", cfg["claude"] / "skills"]
     folders += [r for r in (cfg["handoffs"], cfg["memory_dir"]) if r]
     files = []
-    if cfg["poll_dir"]:
-        folders.append(cfg["poll_dir"] / "slack-poll-events")
-        files.append(cfg["poll_dir"] / "slack-poll-triage.jsonl")
+    events, triage = poll_files(cfg)
+    if events:
+        folders.append(events)
+        files.append(triage)
     return [_norm(r) for r in folders], [_norm(f) for f in files]
 
 
@@ -828,13 +895,19 @@ def recheck_branch(item, repo):
     if name == wts[0][1]:
         return "checked out in the main checkout", None
     in_wt = [p for p, b, _ in wts[1:] if b == name]
-    if item["kind"] == "remove_worktree":
+    if item["kind"] == "prune_worktree":
+        if [str(p) for p in in_wt] != [item["path"]] or Path(item["path"]).exists():
+            return "worktree folder is back or the worktree moved", None
+    elif item["kind"] in ("remove_worktree", "worktree_gone"):
         if [str(p) for p in in_wt] != [item["path"]]:
             return "worktree moved or gone", None
         wt = Path(item["path"])
         edits, ignored = worktree_check(wt, wts[0][0], repo)
-        if edits:
+        if item["kind"] == "remove_worktree" and edits:
             return f"worktree has real edits: {', '.join(edits[:3])}", None
+        if item["kind"] == "worktree_gone" and (sorted(edits) != sorted(item.get("edits") or [])
+                                                 or len(edits) != item.get("edits_count")):
+            return f"worktree edits changed since the approval: {', '.join(edits[:3])}", None
         if nested_worktrees(wt, wts):
             return "another worktree lives inside it", None
         busy = in_use(wt, process_cwds())
@@ -852,7 +925,7 @@ def recheck_branch(item, repo):
     if pr and pr["state"] == "OPEN":
         return "PR is open", None
     how = merged_by(path, sha, repo["default"], pr, first_parent_line(path, repo["default"]))
-    if item["kind"] in ("remove_worktree", "delete_branch") and not how:
+    if item["kind"] in ("remove_worktree", "prune_worktree", "delete_branch") and not how:
         return "no longer proven merged", None
     return None, how
 
@@ -862,10 +935,12 @@ def plan_item(cfg, item, repos):
     kind = item.get("kind")
     if item.get("tier") not in (1, 2) or kind not in APPLY_KINDS:
         return "refused", f"tidy never acts on tier {item.get('tier')} {kind}", None, None
+    if item.get("tier") == 2 and item.get("approved") is not True:
+        return "refused", 'tier 2 needs "approved": true, added only after the user says yes', None, None
     if protected(cfg, item):
         return "refused", "matches Never touch", None, None
 
-    if kind in ("remove_worktree", "delete_branch", "branch_gone", "branch_no_pr"):
+    if kind in WORKTREE_KINDS + ("delete_branch", "branch_gone", "branch_no_pr"):
         repo = repos.get(item.get("repo_path"))
         if not repo:
             return "refused", "repo is not in the worktree config or Extra repos", None, None
@@ -876,20 +951,38 @@ def plan_item(cfg, item, repos):
         keep = how != "ancestor"  # commits not reachable from the default branch: keep them under a ref
         keep_ref = f"refs/tidy-archive/{sha}"
         restore = f"git -C {q(rp)} branch {q(name)} {sha}"
-        if kind == "remove_worktree":
-            restore += (f" && git -C {q(rp)} worktree add {q(item['path'])} {q(name)}"
-                        " # ignored files and setup copies are not restored")
-        what = f"{'remove worktree ' + item['path'] + ' and ' if kind == 'remove_worktree' else ''}" \
-               f"delete {name} at {sha[:9]}{', commits kept at ' + keep_ref if keep else ''}"
+        # Edits and git-ignored files the user approved are moved here before the forced remove, never deleted.
+        saved = [f.rstrip("/") for f in (item.get("edits") or []) + (item.get("ignored") or [])] \
+            if kind in ("remove_worktree", "worktree_gone") else []
+        wt = Path(item.get("path") or "")
+        stash = free(cfg["tidy_dir"] / "archive" / date.today().isoformat() / "worktrees" / repo["key"] / wt.name) \
+            if saved else None
+        if kind in ("remove_worktree", "worktree_gone"):
+            restore += f" && git -C {q(rp)} worktree add {q(wt)} {q(name)}"
+            if saved:
+                restore += f" && cp -Rp {q(stash)}/. {q(wt)}/"
+            restore += " # setup copies are not restored"
+        verb = {"remove_worktree": "remove worktree", "worktree_gone": "remove worktree",
+                "prune_worktree": "prune missing worktree"}.get(kind)
+        what = f"{verb + ' ' + item['path'] + ' and ' if verb else ''}" \
+               f"delete {name} at {sha[:9]}{', commits kept at ' + keep_ref if keep else ''}" \
+               f"{', files kept at ' + str(stash) if saved else ''}"
 
         def act():
             if keep:
                 git(rp, "update-ref", keep_ref, sha)
-            if kind == "remove_worktree":
-                git(rp, "worktree", "remove", "--force", item["path"])
+            for rel in saved:
+                src = wt / rel
+                if src.exists() or src.is_symlink():
+                    (stash / rel).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(src), str(stash / rel))
+            if kind == "prune_worktree":
+                git(rp, "worktree", "prune")
+            elif verb:
+                git(rp, "worktree", "remove", "--force", str(wt))
             git(rp, "branch", "-D", name)
             detail = what
-            if kind == "remove_worktree" and worktrees(rp)[0][1] == repo["default"]:
+            if kind in ("remove_worktree", "worktree_gone") and worktrees(rp)[0][1] == repo["default"]:
                 ok = subprocess.run(["git", "-C", str(rp), "merge", "--ff-only", "--quiet",
                                      f"origin/{repo['default']}"], capture_output=True).returncode == 0
                 detail += ", main fast-forwarded" if ok else ", main not fast-forwarded (diverged or dirty)"
@@ -925,7 +1018,7 @@ def plan_item(cfg, item, repos):
         restore = f"mkdir -p {q(path)}" if is_dir else f"touch {q(path)}"
 
         def act():
-            shutil.rmtree(path) if is_dir else path.unlink()
+            path.rmdir() if is_dir else path.unlink()
             return f"removed empty {path}"
         return "ready", f"remove empty {path}", restore, act
 
@@ -999,10 +1092,15 @@ def apply(cfg, items, mode, dry):
     repos = {str(r["path"]): r for r in repos_list}
     results = []
     for item in items:
+        if not isinstance(item, dict):
+            results.append({"status": "failed", "kind": None, "target": None,
+                            "detail": f"not a finding object: {item!r}"[:200], "restore": None})
+            continue
+        # One bad item (a missing field, a gh hiccup) is recorded as failed and the rest still run.
         try:
             status, detail, restore, act = plan_item(cfg, item, repos)
-        except (TidyError, OSError) as e:
-            status, detail, restore, act = "failed", str(e), None, None
+        except Exception as e:
+            status, detail, restore, act = "failed", f"{type(e).__name__}: {e}", None, None
         if status == "ready" and dry:
             status = "would"
         elif status == "ready":
@@ -1012,8 +1110,8 @@ def apply(cfg, items, mode, dry):
                 detail = act()
                 status = "done"
                 _log(cfg, {**base, "phase": "result", "result": "ok", "action": detail, "restore": restore})
-            except (TidyError, OSError, subprocess.SubprocessError) as e:
-                status, detail = "failed", str(e)
+            except Exception as e:
+                status, detail = "failed", f"{type(e).__name__}: {e}"
                 _log(cfg, {**base, "phase": "result", "result": "failed", "action": detail, "restore": restore})
         results.append({"status": status, "kind": item.get("kind"), "target": item.get("target"),
                         "detail": detail, "restore": restore})
@@ -1050,7 +1148,10 @@ def main(argv=None):
             return 2 if result["errors"] else 0
         raw = sys.stdin.read().strip() or "[]"
         data = json.loads(raw)
-        items = data.get("findings", data.get("items", [])) if isinstance(data, dict) else data
+        if not isinstance(data, list):
+            raise TidyError("apply takes a JSON list of findings, not the scan output: pipe only the Tier 1 "
+                            'items and the Tier 2 items the user approved, each marked "approved": true')
+        items = data
         results = apply(cfg, items, args.mode, args.dry_run)
         if args.json:
             print(json.dumps(results, indent=2))
