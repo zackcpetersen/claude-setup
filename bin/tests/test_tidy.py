@@ -646,7 +646,7 @@ class TestWorktrees(Base):
         self.assertEqual(((wt / "a.py").read_text(), (wt / "b.py").read_text()), ("a\n", "b\n"))
         self.assertTrue(self.has_branch("feat-half"))
 
-    def test_partial_copy_is_dropped_and_partial_restore_never_overwrites(self):
+    def test_partial_copy_is_kept_and_partial_restore_never_overwrites(self):
         wt = self.closed_wt("feat-disk")
         (wt / "a.py").write_text("a\n")
         (wt / "b.py").write_text("b whole\n")
@@ -663,11 +663,32 @@ class TestWorktrees(Base):
             res = self.apply([item])
         self.assertEqual(res[0]["status"], "failed")
         stash = Path(res[0]["restore"].split()[3])
-        self.assertFalse((stash / "b.py").exists())
+        self.assertEqual((stash / "b.py").read_text(), "b ha")  # never deleted from the archive
         self.assertEqual((wt / "b.py").read_text(), "b whole\n")
-        (stash / "b.py").write_text("b ha")  # even if a partial copy were left behind...
         subprocess.run(res[0]["restore"], shell=True, check=True)
         self.assertEqual(((wt / "a.py").read_text(), (wt / "b.py").read_text()), ("a\n", "b whole\n"))
+
+    def test_failed_folder_move_keeps_every_file_and_undo_brings_them_back(self):
+        (self.repo / ".git" / "info" / "exclude").write_text("CLAUDE.md\n.claude/\ndata/\n")
+        wt = self.make_wt()
+        (wt / "data").mkdir()
+        (wt / "data" / "one.csv").write_text("1\n")
+        (wt / "data" / "two.csv").write_text("2\n")
+        item = self.find(self.scan(), branch="feat-w")[0]
+        self.assertEqual(item["ignored"], ["data/"])
+        os.chmod(wt, 0o555)  # rename fails, so move copies then deletes; the delete empties data/ then fails
+        self.addCleanup(os.chmod, wt, 0o755)
+        res = self.apply([item])
+        os.chmod(wt, 0o755)
+        self.assertEqual(res[0]["status"], "failed", res)
+        stash = Path(res[0]["restore"].split()[3])
+        self.assertEqual(sorted(p.name for p in (stash / "data").iterdir()), ["one.csv", "two.csv"])
+        for name in ("one.csv", "two.csv"):
+            self.assertTrue((stash / "data" / name).exists() or (wt / "data" / name).exists(), name)
+        subprocess.run(res[0]["restore"], shell=True, check=True)
+        self.assertEqual(((wt / "data" / "one.csv").read_text(), (wt / "data" / "two.csv").read_text()),
+                         ("1\n", "2\n"))
+        self.assertTrue(self.has_branch("feat-w"))
 
     def test_restore_works_when_listed_files_vanished_before_apply(self):
         wt = self.make_wt()

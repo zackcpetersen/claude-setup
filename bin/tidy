@@ -1027,7 +1027,6 @@ def plan_item(cfg, item, repos):
                 # exits 1 on macOS when it does).
                 put_back = (f"rsync -a --ignore-existing {q(stash)}/ {q(wt)}/"
                             " # only the files that already moved; nothing else changed")
-                rel = None
                 try:
                     for rel in saved:
                         src = wt / rel
@@ -1035,14 +1034,9 @@ def plan_item(cfg, item, repos):
                             (stash / rel).parent.mkdir(parents=True, exist_ok=True)
                             shutil.move(str(src), str(stash / rel))
                 except Exception as e:
-                    # A move across disks copies then deletes: if it failed while the original is still
-                    # whole, drop the partial copy from the archive.
-                    src, dest = wt / rel, stash / rel
-                    if (src.exists() or src.is_symlink()) and (dest.exists() or dest.is_symlink()):
-                        try:
-                            shutil.rmtree(dest) if dest.is_dir() and not dest.is_symlink() else dest.unlink()
-                        except OSError:
-                            pass
+                    # Nothing is ever deleted from the archive here: a failed move can leave a half copy
+                    # there, or the only complete copy of a folder whose source was half emptied. The undo
+                    # (rsync --ignore-existing) brings back what is missing without overwriting originals.
                     raise PartialArchive(f"archive step stopped partway, worktree not removed: {e}", put_back)
                 left = [rel for rel in saved if (wt / rel).exists() or (wt / rel).is_symlink()]
                 if left:
