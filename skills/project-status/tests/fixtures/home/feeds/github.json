@@ -1,0 +1,19 @@
+{
+ "source": "github", "version": 1, "generated_at": "2026-01-14T17:55:00Z", "ok": true, "error": null,
+ "last_ok_at": "2026-01-14T17:55:00Z", "login": "sam", "orgs": ["acme"], "truncated": false,
+ "my_prs": [
+  {"repo": "acme/billing", "number": 91, "title": "Cut over region 3", "url": "https://github.com/acme/billing/pull/91",
+   "draft": false, "updated_at": "2026-01-14T15:00:00Z", "review_decision": "APPROVED", "mergeable": "MERGEABLE",
+   "merge_state": "CLEAN", "ci": "SUCCESS", "unresolved_threads": 0},
+  {"repo": "acme/search", "number": 17, "title": "Ranking harness", "url": "https://github.com/acme/search/pull/17",
+   "draft": false, "updated_at": "2026-01-14T12:00:00Z", "review_decision": null, "mergeable": "MERGEABLE",
+   "merge_state": "UNSTABLE", "ci": "FAILURE", "unresolved_threads": 0}
+ ],
+ "review_requests": [
+  {"repo": "acme/web", "number": 12, "title": "Invoice paging", "url": "https://github.com/acme/web/pull/12", "author": "ana",
+   "requested_at": "2026-01-14T13:00:00Z", "additions": 120, "deletions": 30, "via": "user"}
+ ],
+ "merged_recent": [
+  {"repo": "acme/billing", "number": 88, "title": "Region 2 script", "url": "https://github.com/acme/billing/pull/88", "merged_at": "2026-01-14T16:10:00Z"}
+ ]
+}

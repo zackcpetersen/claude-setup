@@ -5,14 +5,17 @@ description: Use when the user asks for a visual status of their projects, a pro
 
 # Project status
 
-A visual status page, published as a private Artifact. It is built for looking, not reading: a progress ring per project, a status bar split by state, a count badge when something needs the user, and due-date chips. Detail lives on each project's own page.
+A visual status page, published as a private Artifact. It is built for looking, not reading: a today strip, an inbox ranked by what to do first, a progress ring per project, a status bar split by state, and due-date chips. Detail lives on each page.
 
 Pages, all behind the menu button:
 
-- **Overview**: quick glance only. A few numbers and one card per project.
-- **One page per project**: what is needed from the user first, then where it stands, then the full breakdown in collapsible groups, people it waits on, recent decisions and progress, links.
-- **People you are waiting on**: everything owed by someone else, grouped by person.
-- **One-offs**: small standalone items that belong to no project.
+- **Home** (`#home`): the today strip (need you, due today, late, done today, next meeting), the top inbox items, one compact card per project, and one waiting line. No paragraphs. A Focus button (or the `f` key) hides everything but the strip and the inbox.
+- **Inbox** (`#inbox`, `#inbox/<hid>` highlights one row): every open item in bands (late or today, waiting on you, quick wins, your PR fixes, everything else), the first `inbox.cap` shown and the rest folded, then snoozed and done today.
+- **One page per project** (`#p-<id>`): what is needed from the user first, then where it stands, then the full breakdown in collapsible groups, people it waits on, recent decisions and progress, links.
+- **Waiting on others** (`#waiting`): everything owed by someone else, grouped by person.
+- **Other items** (`#other`): small standalone items that belong to no project.
+
+Old links keep working: `#overview` opens Home, `#people` opens Waiting on others, `#oneoffs` opens Other items. Color rule: the accent is for progress and done; coral only for something late; counts are neutral.
 
 Nothing in this skill names a company, person or project. Those come from the data and config files.
 
@@ -20,24 +23,33 @@ Nothing in this skill names a company, person or project. Those come from the da
 
 | File | What it is |
 |---|---|
-| `template.html` | The page. Neutral colors, no names or links baked in |
-| `build.py` | Turns a data file (and an optional config) into the page. The data format is in its docstring |
+| `template.html` | The page shell. `build.py` inlines `page.css`, `page.js`, the theme and the data into it, so the published page is one file |
+| `page.css`, `page.js` | All styles and all page code. Neutral colors, no names or links baked in |
+| `build.py` | Turns a data file (and optional config and home folder) into the page. The data format is in its docstring |
+| `derive.py` | Every inbox rule: items from each source, dedupe by link, effort, bands, order, snooze, stale, done today, feed freshness |
+| `inbox.py` | The only way the session writes `inbox.json` |
 | `add_oneoff.py` | Adds or finishes a one-off in the data file |
-| `config.example.json` | Starter config: title, tracker and GitHub link bases, footer note, color overrides |
-| `sample-data.json` | Made-up data to try the page with |
+| `config.example.json` | Starter config: title, tracker and GitHub link bases, footer note, time zone, inbox and feed settings, color overrides |
+| `sample-data.json`, `sample-home/` | Made-up data, inbox and feeds to try the page with |
+| `tests/` | `unittest` tests: `python3 -m unittest discover -s skills/project-status/tests` |
+| `~/bin/status-feeds` | From `bin/` in this repo. Writes the GitHub and Slack feed files on a schedule, no model in the loop |
 
 Per-machine files live outside the repo, in `~/.claude/project-status/`:
 
 - `config.json`: copied from `config.example.json` and filled in. Also holds `artifact_url` once the page is published.
 - `projects.json`: the current data.
+- `inbox.json`: session-owned inbox items, written only by `inbox.py`.
+- `feeds/github.json`, `feeds/slack.json`: written only by `status-feeds`.
+- `state/build.json`: written only by `build.py` (first-seen times and what cleared today).
 
 ## Setup (once per machine)
 
 1. `mkdir -p ~/.claude/project-status`
 2. `cp ~/.claude/skills/project-status/config.example.json ~/.claude/project-status/config.json` and fill in `title`, `tracker_url` (the prefix a ticket key is added to), `github_org` and `source_note`. Delete a line you do not need.
-3. Colors: the `theme.light` block overrides the page's color tokens (the full list is the `:root` block at the top of `template.html`). The usual change is `--canvas` (page background), `--accent` and `--accent-soft` (progress), `--strong` (headings) and `--font`. Keep it calm: one background color, white cards, one accent. If the user has a design system, take the values from it and keep them in this local config, never in the repo.
-4. Try it with the sample: `python3 ~/.claude/skills/project-status/build.py ~/.claude/skills/project-status/sample-data.json /tmp/project-status.html --config ~/.claude/project-status/config.json`, then publish that file with the Artifact tool to see the look.
-5. First real build: follow "Refresh" below. After the first publish, save the Artifact link as `artifact_url` in `config.json` so later sessions update the same page.
+3. Colors: the `theme.light` block overrides the page's color tokens (the full list is the `:root` block at the top of `page.css`). The usual change is `--canvas` (page background), `--accent` and `--accent-soft` (progress), `--strong` (headings) and `--font`. Keep it calm: one background color, white cards, one accent. If the user has a design system, take the values from it and keep them in this local config, never in the repo.
+4. Try it with the sample: `python3 ~/.claude/skills/project-status/build.py ~/.claude/skills/project-status/sample-data.json <scratchpad>/project-status.html --config ~/.claude/project-status/config.json --home ~/.claude/skills/project-status/sample-home --no-state --now 2026-01-12T18:00:00Z`, then publish that file with the Artifact tool to see the look.
+5. Feeds (optional): set `tz` in `config.json` (an IANA name), then `~/bin/status-feeds doctor`, then `~/bin/status-feeds run --force`, then install the schedule with the commands `~/bin/status-feeds schedule --print launchd` prints (Linux: `--print cron`, add it with `crontab -e`). Install it only with the user's yes. Set `inbox.github_orgs` when your PRs live in more than one org, and `inbox.slack_url` (for example `https://<workspace>.slack.com/archives/`) so Slack items link to their thread. A PR only shows as "Merge" once its checks have passed; list repos that have no checks at all in `inbox.no_ci_repos` (`owner/repo`) so their approved PRs can show as ready too.
+6. First real build: follow "Refresh" below. After the first publish, save the Artifact link as `artifact_url` in `config.json` so later sessions update the same page.
 
 If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the user before anything else.
 
@@ -47,11 +59,12 @@ If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the 
    - `needs_me` holds only what the user must do or decide by hand. What waits on someone else goes in `waiting_on`. What an agent can do alone goes in neither.
    - `progress_pct` comes from real milestones or tickets, and `progress_basis` says how in one sentence. Never invent precision.
    - Keep `one_offs` already in the file. They are the user's own list.
+   - Keep `link`, `effort` and `who_waits` fields when present, and set `needs_me[].link` and `waiting_on[].link` whenever the source line has a URL (a Slack thread, a PR), so items merge with the feeds instead of showing twice.
    - Plain English, short sentences. Leave out finished projects.
    - Skip the Projects row named by the `Loose ends` line in `~/.claude/config/tidy.md` (older installs: `### Tidy` in `~/.claude/CLAUDE.md`) (the `tidy` skill's catch-all list).
    - Return a short list of anything unsure or stale. Relay it.
 2. **Check** the data before building: drop asks the user already answered in this session, and links that are not `https://`.
-3. **Build**: `python3 ~/.claude/skills/project-status/build.py ~/.claude/project-status/projects.json <scratchpad>/project-status.html --config ~/.claude/project-status/config.json`
+3. **Build**: `python3 ~/.claude/skills/project-status/build.py ~/.claude/project-status/projects.json <scratchpad>/project-status.html --config ~/.claude/project-status/config.json --home ~/.claude/project-status`
 4. **Publish** in a one-shot sonnet agent (general-purpose): it builds (step 3), publishes the file with the Artifact tool to `artifact_url` from config (it reads the artifact first when its session needs that), and returns only the link and the version. The main session never reads the artifact, the built HTML or `projects.json`. Without an `artifact_url`, the agent publishes new and saves the link to config. The page is private to the user.
 5. Tell the user the link, what changed since the last build, and the unsure list. Percentages are estimates; say so once.
 
@@ -65,6 +78,29 @@ The page should never lag the work. When one fact changes (a PR merged, a run fi
 
 Do this without being asked, every time such a fact lands in the session. The `board` skill does it on every sync and every landed event, and writes the page link as the first line of each daily row's `## Your TODOs`.
 
+## Inbox
+
+The inbox is worked out at build time from these sources. Feed items clear themselves; nobody ticks them.
+
+| Source | Writer | Items |
+|---|---|---|
+| `projects[].needs_me[]` | gather agent, session | ask |
+| `one_offs[]` with `needs_me` and not done | `add_oneoff.py` | one-off |
+| `waiting_on[]` whose `nudge_due` is today or past | gather agent, session | nudge |
+| `feeds/github.json` | `status-feeds` | review requests aimed at the user; for the user's own PRs one of fix conflict, fix CI, reply to review, merge |
+| `feeds/slack.json` | `status-feeds` (from the Slack poll's triage log) | Slack asks held as not-now |
+| `inbox.json` | the session, through `inbox.py` | approve an agent, send a draft, confirm a delivery, a TODO, an ask |
+
+The session writes `inbox.json` only through `inbox.py` (`python3 ~/.claude/skills/project-status/inbox.py --help`):
+
+- `add --kind K --title T [--link URL] [--id ID] ...`: an agent is held on an approval, a draft is waiting to be sent, a delivery passes its confirm-by date, or the user asks for a TODO.
+- `done <id or title text>`: when the fact lands, the same moment as "Small updates".
+- `snooze <id> --until YYYY-MM-DD`: the user says "later" with a date. Only `inbox.json` items can be snoozed.
+- `meeting --title T --at ISO`: at rollover, only when the session knows the next meeting.
+- `sync --origin board --file F`: the `board` skill's mirror on every sync.
+
+Items with the same link merge into one (the session's words, the feed's live state). Ticket keys are never used to merge.
+
 ## One-offs
 
 When the user says "add a one-off", "put X on the status page" or "X is done":
@@ -77,17 +113,21 @@ A one-off that grows (several steps, other people, a deadline) becomes a project
 
 ## Changing the page
 
-- Edit `template.html` for layout, `build.py` for the data contract. Keep both generic: no names, links or brand colors.
-- The design brief, from the user: visual first (shapes before text), clean and minimal, overview is glance-only, navigation in a menu.
-- After a template change, build with `sample-data.json` and check the page script still parses before publishing (`node --check` on the inline script is enough).
+- Edit `page.css` and `page.js` for layout, `derive.py` for inbox rules, `build.py` for the data contract. Keep all of them generic: no names, links or brand colors.
+- The design brief, from the user: visual first (shapes before text), clean and minimal, home is glance-only, navigation in a menu. Coral only for something late.
+- After a change, run `node --check skills/project-status/page.js` and the tests, then build with `sample-data.json` and `sample-home/` before publishing.
 
 ## Common mistakes
 
 | Mistake | Fix |
 |---|---|
-| Putting company colors, names or links in `template.html` | They go in `~/.claude/project-status/config.json` |
+| Putting company colors, names or links in `page.css`, `page.js` or `template.html` | They go in `~/.claude/project-status/config.json` |
 | Publishing a new Artifact on every refresh | Pass `artifact_url` as `url` so the link stays the same |
-| Details creeping onto the overview | Overview is numbers and cards only. Detail goes on the project page |
+| Details creeping onto home | Home is numbers, the top inbox rows and cards only. Detail goes on the inbox and project pages |
+| Hand-editing `inbox.json` | Use `inbox.py`, the file's only writer |
+| Adding a GitHub review or PR state by hand | The `status-feeds` GitHub feed does it |
+| Building without `--home` | The page then shows no inbox.json, GitHub or Slack items |
+| Coral for counts or needs-you badges | Coral only for something late; counts stay neutral |
 | Listing things the user is waiting on under `needs_me` | Those are `waiting_on` rows |
 | Overwriting `one_offs` during a gather | The gather agent keeps them as they are |
 | Gathering, editing the data file or publishing in the main session | Agents do all three; the main session passes one line and relays the link |

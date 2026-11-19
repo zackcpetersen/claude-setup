@@ -1,0 +1,9 @@
+{
+ "title": "Sam's <Status> & Plans",
+ "tracker_url": "https://tracker.example.com/browse/",
+ "github_org": "acme",
+ "source_note": "Fixture data.",
+ "tz": "America/Chicago",
+ "inbox": {"cap": 3, "home_count": 2, "slack_url": "https://acme.slack.com/archives/"},
+ "theme": {"light": {"--canvas": "#203040"}}
+}

@@ -1,0 +1,7 @@
+{
+ "source": "slack", "version": 1, "generated_at": "2026-01-14T17:55:00Z", "ok": true, "error": null,
+ "last_ok_at": "2026-01-14T17:55:00Z",
+ "asks": [{"key": "C0TEAM02:1768400000.000100", "channel": "C0TEAM02", "ts": "1768400000.000100",
+           "reason": "Lee asks whether the ranking tests can run on staging this week", "at": "2026-01-14T14:30:00Z"}],
+ "cleared": [], "skipped_lines": 0
+}

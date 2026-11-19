@@ -1,0 +1,17 @@
+{
+ "version": 1,
+ "updated_at": "2026-01-14T17:00:00Z",
+ "next_meeting": {"title": "Planning", "at": "2026-01-14T21:00:00Z"},
+ "items": [
+  {"id": "draft-1", "origin": "board", "kind": "send-draft", "title": "Send draft: reply to Ana", "link": "", "ref": "",
+   "project_id": "billing-migration", "since": "2026-01-14T15:00:00Z", "due": null, "effort_min": 2, "who_waits": "Ana",
+   "snooze_until": null, "done_at": null},
+  {"id": "agent-1", "origin": "board", "kind": "approve-agent", "title": "Approve: cleanup agent", "since": "2026-01-14T14:00:00Z",
+   "effort_min": 2, "done_at": null},
+  {"id": "todo-old", "origin": "session", "kind": "todo", "title": "Tidy the runbook", "since": "2026-01-01T14:00:00Z", "done_at": null},
+  {"id": "todo-later", "origin": "session", "kind": "todo", "title": "Book travel", "since": "2026-01-10T14:00:00Z",
+   "snooze_until": "2026-01-20", "done_at": null},
+  {"id": "todo-done", "origin": "session", "kind": "todo", "title": "Renew badge", "since": "2026-01-10T14:00:00Z",
+   "done_at": "2026-01-14T16:00:00Z"}
+ ]
+}

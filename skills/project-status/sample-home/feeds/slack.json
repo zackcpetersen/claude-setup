@@ -1,0 +1,12 @@
+{
+ "source": "slack", "version": 1, "generated_at": "2026-01-12T17:55:00Z", "ok": true, "error": null,
+ "last_ok_at": "2026-01-12T17:55:00Z",
+ "asks": [
+  {"key": "C0TEAM02:1768228000.000100", "channel": "C0TEAM02", "ts": "1768228000.000100",
+   "reason": "Lee asks whether the ranking tests can run on staging this week", "at": "2026-01-12T14:30:00Z"}
+ ],
+ "cleared": [
+  {"key": "C0TEAM02:1768220000.000200", "reason": "Ana asked for the cutover checklist", "at": "2026-01-12T15:00:00Z"}
+ ],
+ "skipped_lines": 0
+}
