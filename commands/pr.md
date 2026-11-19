@@ -20,13 +20,13 @@ You handle the final steps of the development workflow:
 
 You do NOT:
 - Implement features or write code
-- Run tests (assume these have already passed)
-- Make code modifications (except via `/babysit-pr` applying approved fixes from the 4d join)
+- Run the full test suite (CI does; `pr-precheck` runs only the tests tied to changed files)
+- Make code modifications (except `pr-precheck fix` autocorrect on the first push, and `/babysit-pr` applying approved fixes from the 4d join)
 
 ## Commit Process
 
 ### 1. Commit Message Format
-Use the commit message format defined in the `## Git and Version Control` section of CLAUDE.md (the `Commit message format:` line). If CLAUDE.md defines none, use `type: description`.
+Use the commit message format defined in the `## Git and Version Control` section of CLAUDE.md (the `Commit message format:` line). If CLAUDE.md defines none, use `type: description`. If the repo is on the `No-ticket repos` line, skip the ticket key entirely and match the repo's own commit style from `git log --oneline -20` (for example `type(scope): description`). The PR title follows the same style.
 
 Whatever the format, `type` is one of:
 - `feat`: New features
@@ -36,11 +36,11 @@ Whatever the format, `type` is one of:
 - `test`: Test additions or modifications
 - `chore`: Maintenance tasks, dependency updates
 
-If the format includes a ticket key, take it from the branch name or the user's request.
+If the format includes a ticket key, take it from the branch name or the user's request, unless the repo is a no-ticket repo.
 
 ### 2. Commit Steps
 1. Review all staged and unstaged changes using `git status` and `git diff`
-2. Run the linter (see the repo's Lint Command in CLAUDE.md), unless CLAUDE.md's CI/CD policy says to leave verification to CI
+2. First push only (no PR for this branch yet, see 4a): run `~/bin/pr-precheck fix --repo <repo root>` once. It lints changed files with autocorrect and runs only the tests tied to them, and returns at once when it already ran clean on this tree. Fix what it reports, or list what is left in the PR notes. CI stays the full check. If `~/bin/pr-precheck` is missing, fall back to the repo's Lint Command from CLAUDE.md unless the CI/CD policy says to leave lint to CI.
 3. Stage relevant files with `git add`
 4. Create commit with proper message format
 5. Verify commit was created successfully
@@ -60,23 +60,23 @@ Use GitHub CLI to create pull requests:
    - Fill in the "Why" section with the reasoning for the changes
    - Fill in "How to test" with specific test commands or manual testing steps
    - Add any relevant notes and caveats
-   - Include the ticket link using the `Ticket URL format` from the Issue Tracker section of CLAUDE.md. If CLAUDE.md defines none, omit the link.
+   - Include the ticket link using the `Ticket URL format` from the Issue Tracker section of CLAUDE.md. If CLAUDE.md defines none, omit the link. Omit the link in a no-ticket repo.
    - Check off applicable items in the checklist based on what was completed
 3. Create the PR using:
    ```bash
    gh pr create --title "<same format as the commit message>" --body "[filled template content]"
    ```
-4. Skip this step when `/pr` runs as a dispatched agent: the main session proposes the wait instead (board `start` step 8). Otherwise, if `~/bin/wait-for` exists, ask the user one line right after the PR opens: "Watch #<n>? (a) merge when green and approved (b) just tell me (c) no". On (a) or (b), start `~/bin/wait-for pr <owner/repo> <n>` in the background (Bash `run_in_background`), adding `--sha <full head sha>` on (a), and follow the `watch` skill for its events. When the user asked for a prod verification, note it so the main session starts `~/bin/wait-for deploy <owner/repo> <merge sha>` after the merge (the session's own merge on `READY`, or a `MERGED` event). `/pr` itself never merges; merges happen only through the `watch` skill with the user's per-PR approval.
+4. Skip this step when `/pr` runs as a dispatched agent: the main session sets the wait in the ship-it ask (board `start` step 7). Otherwise, if `~/bin/wait-for` exists, ask the user one line right after the PR opens: "Watch #<n>? (a) merge when green and approved (b) just tell me (c) no". On (a) or (b), start `~/bin/wait-for pr <owner/repo> <n>` in the background (Bash `run_in_background`), adding `--sha <full head sha>` on (a), and follow the `watch` skill for its events. When the user asked for a prod verification, note it so the main session starts `~/bin/wait-for deploy <owner/repo> <merge sha>` after the merge (the session's own merge on `READY`, or a `MERGED` event). `/pr` itself never merges; merges happen only through the `watch` skill with the user's per-PR approval.
 
 **Note:** Always use the current template structure from `.github/pull_request_template.md` as the source of truth.
 
 ### 3. PR Description Requirements
-Write the description in the user's voice (the skill named in the `### Writing voice` section of CLAUDE.md, if any): lead with what changed and why it matters, in plain words, without over-explaining. Fill out the template with:
+Write the description in the user's voice (the skill named in the `### Writing voice` section of `~/.claude/config/writing-voice.md` or CLAUDE.md, if any): lead with what changed and why it matters, in plain words, without over-explaining. Fill out the template with:
 - **Brief description**: 1-2 sentence summary of changes
 - **Why**: Business justification/problem being solved
 - **How to test**: Specific commands or manual testing steps
 - **Notes & Caveats**: Important context, breaking changes, or considerations
-- **Issue Tracking**: Link to the ticket (if provided)
+- **Issue Tracking**: Link to the ticket (if provided). Omit the link in a no-ticket repo.
 - **Checklist**: Verify all items are addressed
 
 ### 4. Self Review + Babysit Until CI Is Green
@@ -98,7 +98,7 @@ If a PR already exists, this is a fix push - the normal case when `/babysit-pr` 
 Do this immediately after PR creation, before the first `gh pr checks`:
 
 1. Use the `Agent` tool with `subagent_type: general-purpose` and `model: opus`. Do not wait on it inline; it runs in the background and its result arrives as a task notification while you poll CI.
-2. Prompt it to invoke the `code-review` skill as `/code-review <effort> <PR number>`, where `<effort>` is the level from the Arguments section. The level must come first: the skill reads its first token as the effort level and anything else as the target, so `/code-review 501 high` silently ignores `high`. Never pass `--fix` and never pass `--comment`.
+2. Prompt it to invoke the `code-review` skill as `/code-review <effort> <PR URL>` (the URL `gh pr create` printed), where `<effort>` is the level from the Arguments section. Never pass a bare PR number: /code-review resolves it against the current directory's repo, which is often the wrong one. The level must come first: the skill reads its first token as the effort level and anything else as the target, so `/code-review <PR URL> high` silently ignores `high`. Never pass `--fix` and never pass `--comment`.
 3. Tell it to return its findings as a list: file, line, a one-sentence description of the defect, the failure scenario, and a confidence level. If it finds nothing, it should say so explicitly.
 4. The skill forks its own background reviewer, and that reviewer's findings may arrive as a task notification to you directly rather than inside the wrapper agent's reply. Treat either as the review result. The reviewer runs on the wrapper's model, so `model: opus` on the wrapper is what puts the review on opus.
 
@@ -120,10 +120,10 @@ The self review applies only to the pass that dispatched it. Every later cycle t
 
 **4d. Join CI failures and review findings**
 
-Build one combined list: CI failures grouped by root cause, plus the self review findings. Mark each item either "CI: must fix" or "review: recommend fix / dismiss".
+Build one combined list: CI failures grouped by root cause, plus the self review findings. Mark each item either "CI: must fix" or "review: recommend fix / dismiss". Fold in every review-bot comment on the PR (code review bots, risk checks, lint bots) as a finding. Each gets a fix or a drafted one-line reply before review is requested.
 
 - **Empty list** → report "CI green, self review clean" and stop the loop.
-- **Non-empty list** → invoke `/babysit-pr` using the input contract in its "Inputs (optional)" section: pass the target PR number, the findings list, and the current CI state. `/babysit-pr` is the single fix actor. It presents the combined list once, gets one approval covering edits, commit, and push, applies everything, and pushes once via `/pr` (which takes the fix-push path in 4a). Then resume 4c, CI-only.
+- **Non-empty list** → invoke `/babysit-pr` using the input contract in its "Inputs (optional)" section: pass the target PR number, the findings list, and the current CI state. `/babysit-pr` is the single fix actor. It presents the combined list once, gets one approval covering edits, commit, and push, applies everything, and pushes once via `/pr` (which takes the fix-push path in 4a). Then resume 4c, CI-only. When the run of /pr itself is on record as the user's go (a direct /pr request or a board ship-it), CI fixes and findings marked "recommend fix" are pre-approved: pass them to /babysit-pr as pre-approved items and list them in the report under "Decided by default". Dismissing a high finding, a reply posted to GitHub, and anything outside the PR's scope still go to the user in one list.
 - **Review agent errored or returned nothing usable** → log "self review unavailable: <reason>" and proceed CI-only. Never block the PR on the reviewer.
 
 **Rules for the loop:**
@@ -134,13 +134,14 @@ Build one combined list: CI failures grouped by root cause, plus the self review
 - Run the self review in a background subagent on `opus`, never in the main loop.
 - Never pass `--comment` to `/code-review` (GitHub posts need per-item approval) and never pass `--fix` (fixes are batched into one push).
 - Always pass the effort level to `/code-review` explicitly.
-- The single combined approval in 4d is the only approval prompt for that cycle. Do not re-ask at commit or push time.
+- At most one approval prompt per cycle, and none when every item is pre-approved. Do not re-ask at commit or push time.
+- Always pass the full PR URL to /code-review.
 
 ## Quality Checks
 
 Before committing, verify:
 - Approval on files you wish to commit
-- Linting has been run and all auto-fixes applied
+- `pr-precheck fix` ran clean on this tree (first push)
 - All files intended for commit are staged
 - Commit message follows the required format
 - No sensitive information (secrets, API keys) is being committed
@@ -152,6 +153,10 @@ Before creating PR:
 - PR title matches commit message format
 - PR description follows the template
 - All template sections are meaningfully filled out
+- `~/bin/pr-precheck report` has run; when it says OVER, the PR notes give the size and why it is not split.
+- Every factual claim in the description and in changed docs (required fields, error cases, rollback steps, environments) is checked against the code.
+- Risk is the highest risk of any part of the change.
+- If the change rewrites a rule from a header comment or a repo skill, the notes name the rule's author as a question for them.
 
 ## Output Format
 
@@ -160,7 +165,7 @@ After completing the workflow, provide:
 2. **Branch Status**: Current branch and remote tracking status
 3. **PR Details**: PR number, title, and URL
 4. **CI Status**: Final state of required checks after the babysit loop (green / blocked + reason)
-5. **Self Review**: effort used, findings count, applied / dismissed / deferred, or "skipped (fix push)" / "unavailable: <reason>"
+5. **Self Review**: effort used, findings count, applied / dismissed / deferred, or "skipped (fix push)" / "unavailable: <reason>", decided by default: <list>
 6. **Next Steps**: Any follow-up actions needed (e.g., requesting reviews, manual conflict resolution). Review asks and replies on the PR follow the `reviewing-prs` skill
 
 ## Key Reminders

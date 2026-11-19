@@ -145,7 +145,7 @@ gh pr update-branch <number>
 
 If a PR has been waiting for review for more than 3 business days with no activity:
 1. Identify who was requested as a reviewer.
-2. Draft a short nudge comment in the user's voice (the skill named in the `### Writing voice` section of CLAUDE.md, if any) and post it only after the user approves it:
+2. Draft a short nudge comment in the user's voice (the skill named in the `### Writing voice` section of `~/.claude/config/writing-voice.md` or CLAUDE.md, if any) and post it only after the user approves it:
    ```bash
    gh pr comment <number> --body "<approved nudge text>"
    ```
