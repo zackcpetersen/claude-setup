@@ -639,12 +639,35 @@ class TestWorktrees(Base):
         self.assertIn("stopped partway", res[0]["detail"])
         restore = self.log()[-1]["restore"]
         self.assertEqual(restore, res[0]["restore"])
-        self.assertTrue(restore.startswith("cp -Rp "))
+        self.assertTrue(restore.startswith("rsync -a --ignore-existing "))
         self.assertNotIn("git", restore.split("#")[0])
         self.assertEqual(sorted(p.name for p in wt.glob("*.py")), ["b.py"])
         subprocess.run(restore, shell=True, check=True)
         self.assertEqual(((wt / "a.py").read_text(), (wt / "b.py").read_text()), ("a\n", "b\n"))
         self.assertTrue(self.has_branch("feat-half"))
+
+    def test_partial_copy_is_dropped_and_partial_restore_never_overwrites(self):
+        wt = self.closed_wt("feat-disk")
+        (wt / "a.py").write_text("a\n")
+        (wt / "b.py").write_text("b whole\n")
+        item = self.find(self.scan(), branch="feat-disk")[0]
+        real_move, calls = shutil.move, []
+
+        def move_then_disk_full(src, dst):
+            calls.append(src)
+            if len(calls) > 1:
+                Path(dst).write_text("b ha")  # a cross-disk move that died mid-copy
+                raise OSError("disk full")
+            return real_move(src, dst)
+        with mock.patch.object(T.shutil, "move", side_effect=move_then_disk_full):
+            res = self.apply([item])
+        self.assertEqual(res[0]["status"], "failed")
+        stash = Path(res[0]["restore"].split()[3])
+        self.assertFalse((stash / "b.py").exists())
+        self.assertEqual((wt / "b.py").read_text(), "b whole\n")
+        (stash / "b.py").write_text("b ha")  # even if a partial copy were left behind...
+        subprocess.run(res[0]["restore"], shell=True, check=True)
+        self.assertEqual(((wt / "a.py").read_text(), (wt / "b.py").read_text()), ("a\n", "b whole\n"))
 
     def test_restore_works_when_listed_files_vanished_before_apply(self):
         wt = self.make_wt()
