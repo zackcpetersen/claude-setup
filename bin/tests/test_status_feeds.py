@@ -349,6 +349,14 @@ class DoctorScheduleTests(Base):
         self.assertIn("GitHub login sam", out)
         self.assertIn("warn  github feed missing", out)
 
+    def test_doctor_empty_log_setting_uses_the_default_like_run(self):
+        self.log.write_text("")
+        self.cfg["inbox"]["slack_triage_log"] = ""
+        with mock.patch.dict(F.DEFAULTS["inbox"], {"slack_triage_log": str(self.log)}), \
+                mock.patch.object(F, "WHICH", return_value="/usr/bin/gh"):
+            code, out, _ = self.main("doctor", "--home", str(self.home))
+        self.assertIn(f"ok    Slack triage log {self.log}", out)
+
     def test_schedule_launchd_is_valid_plist(self):
         cfg = Path(self.tmp.name) / "my-config.json"
         cfg.write_text(json.dumps(self.cfg))

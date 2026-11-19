@@ -164,7 +164,7 @@ function heroCard(p){
     items.length ? h('div', {style: 'margin-top:18px'}, sbar(t), legend(t)) : null);
 }
 function needsCard(p){
-  const needs = p.needs_me || [], extra = inboxOf(p.id).filter(i => !(i.source === 'projects' && i.kind === 'ask'));
+  const needs = p.needs_me || [], extra = inboxOf(p.id).filter(i => !i.from_needs_me);
   const body = [];
   if (needs.length) body.push(h('ul', {class: 'needs'}, needs.map(n => h('li', {},
     h('span', {class: 'dot ' + (isLate(n.due) ? 'late' : 'none'), role: 'img', 'aria-label': isLate(n.due) ? 'late' : 'open'}),

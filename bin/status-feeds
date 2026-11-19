@@ -50,6 +50,7 @@ DEFAULTS = {
         "slack_lookback_days": 3,
         "slack_url": "",
         "effort_defaults": {},
+        "no_ci_repos": [],
     },
     "feeds": {"every_minutes": 15, "hours": "08:00-18:00", "days": "Mon-Fri"},
 }
@@ -468,7 +469,7 @@ def cmd_doctor(args):
             say("fail", "gh api user failed", "run gh auth status to see why")
     else:
         say("fail", "gh is not on PATH", "install the GitHub CLI and run gh auth login")
-    log = Path(conf["inbox"].get("slack_triage_log") or "").expanduser()
+    log = Path(conf["inbox"].get("slack_triage_log") or DEFAULTS["inbox"]["slack_triage_log"]).expanduser()
     if log.is_file() and os.access(log, os.R_OK):
         say("ok", f"Slack triage log {log}")
     else:

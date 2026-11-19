@@ -58,6 +58,15 @@ def parse_time(text):
     return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
+def has_zone(text):
+    """True for an ISO time that names its zone (Z or an offset). The page shows meetings in local time."""
+    t = (text or "").strip()
+    try:
+        return datetime.fromisoformat(t[:-1] + "+00:00" if t.endswith("Z") else t).tzinfo is not None
+    except ValueError:
+        return False
+
+
 def parse_effort(value):
     if value is None or value == "":
         return None
@@ -234,7 +243,7 @@ def run(args, path):
             if args.clear:
                 d["next_meeting"] = None
             else:
-                if not args.title or not parse_time(args.at or ""):
+                if not args.title or not has_zone(args.at or ""):
                     raise Fail("meeting needs --title and an ISO --at with a zone, or --clear")
                 d["next_meeting"] = {"title": args.title, "at": args.at}
             save(path, d, now)

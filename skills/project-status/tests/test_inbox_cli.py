@@ -141,6 +141,10 @@ class InboxCli(unittest.TestCase):
         self.run_cli("meeting", "--clear")
         self.assertIsNone(self.data()["next_meeting"])
         self.assertEqual(self.run_cli("meeting", "--title", "x")[0], 1)
+        code, _, err = self.run_cli("meeting", "--title", "Planning", "--at", "2026-01-14T15:00:00")
+        self.assertEqual(code, 1)
+        self.assertIn("with a zone", err)
+        self.assertEqual(self.run_cli("meeting", "--title", "Planning", "--at", "2026-01-14T21:00:00Z")[0], 0)
 
     def test_bad_kind_rejected(self):
         code, _, _ = self.run_cli("add", "--kind", "review", "--title", "x")

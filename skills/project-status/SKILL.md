@@ -46,9 +46,9 @@ Per-machine files live outside the repo, in `~/.claude/project-status/`:
 
 1. `mkdir -p ~/.claude/project-status`
 2. `cp ~/.claude/skills/project-status/config.example.json ~/.claude/project-status/config.json` and fill in `title`, `tracker_url` (the prefix a ticket key is added to), `github_org` and `source_note`. Delete a line you do not need.
-3. Colors: the `theme.light` block overrides the page's color tokens (the full list is the `:root` block at the top of `template.html`). The usual change is `--canvas` (page background), `--accent` and `--accent-soft` (progress), `--strong` (headings) and `--font`. Keep it calm: one background color, white cards, one accent. If the user has a design system, take the values from it and keep them in this local config, never in the repo.
+3. Colors: the `theme.light` block overrides the page's color tokens (the full list is the `:root` block at the top of `page.css`). The usual change is `--canvas` (page background), `--accent` and `--accent-soft` (progress), `--strong` (headings) and `--font`. Keep it calm: one background color, white cards, one accent. If the user has a design system, take the values from it and keep them in this local config, never in the repo.
 4. Try it with the sample: `python3 ~/.claude/skills/project-status/build.py ~/.claude/skills/project-status/sample-data.json <scratchpad>/project-status.html --config ~/.claude/project-status/config.json --home ~/.claude/skills/project-status/sample-home --no-state --now 2026-01-12T18:00:00Z`, then publish that file with the Artifact tool to see the look.
-5. Feeds (optional): set `tz` in `config.json` (an IANA name), then `~/bin/status-feeds doctor`, then `~/bin/status-feeds run --force`, then install the schedule with the commands `~/bin/status-feeds schedule --print launchd` prints (Linux: `--print cron`, add it with `crontab -e`). Install it only with the user's yes. Set `inbox.github_orgs` when your PRs live in more than one org, and `inbox.slack_url` (for example `https://<workspace>.slack.com/archives/`) so Slack items link to their thread.
+5. Feeds (optional): set `tz` in `config.json` (an IANA name), then `~/bin/status-feeds doctor`, then `~/bin/status-feeds run --force`, then install the schedule with the commands `~/bin/status-feeds schedule --print launchd` prints (Linux: `--print cron`, add it with `crontab -e`). Install it only with the user's yes. Set `inbox.github_orgs` when your PRs live in more than one org, and `inbox.slack_url` (for example `https://<workspace>.slack.com/archives/`) so Slack items link to their thread. A PR only shows as "Merge" once its checks have passed; list repos that have no checks at all in `inbox.no_ci_repos` (`owner/repo`) so their approved PRs can show as ready too.
 6. First real build: follow "Refresh" below. After the first publish, save the Artifact link as `artifact_url` in `config.json` so later sessions update the same page.
 
 If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the user before anything else.
@@ -121,7 +121,7 @@ A one-off that grows (several steps, other people, a deadline) becomes a project
 
 | Mistake | Fix |
 |---|---|
-| Putting company colors, names or links in `template.html` | They go in `~/.claude/project-status/config.json` |
+| Putting company colors, names or links in `page.css`, `page.js` or `template.html` | They go in `~/.claude/project-status/config.json` |
 | Publishing a new Artifact on every refresh | Pass `artifact_url` as `url` so the link stays the same |
 | Details creeping onto home | Home is numbers, the top inbox rows and cards only. Detail goes on the inbox and project pages |
 | Hand-editing `inbox.json` | Use `inbox.py`, the file's only writer |

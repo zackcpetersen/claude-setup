@@ -14,7 +14,8 @@
     "slack_triage_log": "~/.claude/slack-poll-triage.jsonl",
     "slack_lookback_days": 3,
     "slack_url": "",
-    "effort_defaults": {}
+    "effort_defaults": {},
+    "no_ci_repos": []
   },
   "feeds": {
     "every_minutes": 15,

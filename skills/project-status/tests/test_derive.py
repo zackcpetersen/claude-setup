@@ -140,6 +140,14 @@ class MyPrs(unittest.TestCase):
         self.assertEqual(D.pr_kind(pr(1, unresolved_threads=2, review_decision="APPROVED")), ("reply-review", "2 open threads"))
         self.assertEqual(D.pr_kind(pr(1, review_decision="APPROVED")), ("merge", "Approved and green"))
 
+    def test_pending_checks_never_green(self):
+        self.assertIsNone(D.pr_kind(pr(1, review_decision="APPROVED", ci=None)))
+        self.assertIsNone(D.pr_kind(pr(1, review_decision="APPROVED", ci="PENDING")))
+        self.assertEqual(D.pr_kind(pr(1, review_decision="APPROVED", ci=None), ["acme/billing"])[0], "merge")
+        v = view(feeds={"github": gh([pr(1, review_decision="APPROVED", ci=None)])},
+                 cfg={"tz": "America/Chicago", "inbox": {"no_ci_repos": ["acme/billing"]}})
+        self.assertEqual(items(v)[0]["kind"], "merge")
+
     def test_unknown_never_conflict_null_never_merge(self):
         self.assertIsNone(D.pr_kind(pr(1, mergeable="UNKNOWN", merge_state="UNKNOWN")))
         self.assertIsNone(D.pr_kind(pr(1, review_decision=None)))
@@ -165,6 +173,15 @@ class Dedupe(unittest.TestCase):
         v = view(inbox=session(sitem("x", kind="ask", title="Mine", ref="https://github.com/acme/billing/pull/5")),
                  feeds={"github": gh([pr(5, review_decision="APPROVED")])})
         self.assertEqual([(i["id"], i["title"]) for i in items(v)], [("gh:acme/billing#5", "Mine")])
+
+    def test_merged_needs_me_ask_keeps_its_marker_and_sources(self):
+        link = "https://github.com/acme/billing/pull/5"
+        v = view(data={"projects": [{"id": "p", "name": "P", "needs_me": [{"ask": "Merge it", "link": link}]}]},
+                 feeds={"github": gh([pr(5, ci="FAILURE")])})
+        it = items(v)[0]
+        self.assertEqual((it["source"], it["sources"], it.get("from_needs_me")), ("github", ["projects", "github"], True))
+        plain = items(view(feeds={"github": gh([pr(6, ci="FAILURE")])}))[0]
+        self.assertEqual((plain["sources"], plain.get("from_needs_me")), (["github"], None))
 
     def test_same_ticket_without_links_stays_two(self):
         v = view(data={"projects": [{"id": "p", "name": "P", "needs_me": [{"ask": "One", "ticket": "ENG-1"},
@@ -198,6 +215,8 @@ class SlackItems(unittest.TestCase):
         self.assertLessEqual(len(it["title"]), len("Reply: ") + 93)
         v = view(feeds={"slack": feed})
         self.assertEqual(items(v)[0]["link"], "")
+        v = view(feeds={"slack": feed}, cfg={"tz": "America/Chicago", "inbox": {"slack_url": "https://acme.slack.com/archives"}})
+        self.assertEqual(items(v)[0]["link"], "https://acme.slack.com/archives/C1/p1768400000000100")
 
 
 class DoneToday(unittest.TestCase):
@@ -210,10 +229,31 @@ class DoneToday(unittest.TestCase):
         v = view(inbox=session(sitem("a", done_at="2026-01-14T16:00:00Z"), sitem("b", done_at="2026-01-13T16:00:00Z")))
         self.assertEqual([d["title"] for d in v["inbox"]["done_today"]], ["a"])
 
+    def review_prev(self, **kw):
+        p = {"title": "Review: x", "ref": "gh:acme/billing#9", "source": "github", "kind": "review", "snoozed": False}
+        p.update(kw)
+        return self.prev(**{"gh:acme/billing#9": p})
+
     def test_gone_github_item_counts_when_ok_both_times(self):
-        v, st = view_state(feeds={"github": gh()}, prev=self.prev())
+        v, st = view_state(feeds={"github": gh()}, prev=self.review_prev())
         self.assertEqual(v["strip"]["done_today"], 1)
         self.assertEqual(st["cleared"][0]["id"], "gh:acme/billing#9")
+
+    def test_my_pr_gone_without_merge_not_counted(self):
+        # CI went back to pending after a push, or the PR became a draft: the item leaves, nothing was done.
+        p = self.review_prev(kind="fix-ci", title="Fix CI: x")
+        self.assertEqual(view(feeds={"github": gh([pr(9, ci="PENDING")])}, prev=p)["strip"]["done_today"], 0)
+        merged = [{"title": "x", "url": "https://github.com/acme/billing/pull/9", "merged_at": "2026-01-14T17:00:00Z"}]
+        v, st = view_state(feeds={"github": gh(merged=merged)}, prev=p)
+        self.assertEqual((v["strip"]["done_today"], st["cleared"][0]["id"]), (1, "gh:acme/billing#9"))
+
+    def test_truncated_feed_counts_nothing_by_absence(self):
+        feed = dict(gh(), truncated=True)
+        self.assertEqual(view(feeds={"github": feed}, prev=self.review_prev())["strip"]["done_today"], 0)
+
+    def test_state_records_kind(self):
+        _, st = view_state(feeds={"github": gh([pr(3, ci="FAILURE")])})
+        self.assertEqual(st["open"]["gh:acme/billing#3"]["kind"], "fix-ci")
 
     def test_not_counted_when_github_failing_now_or_before(self):
         self.assertEqual(view(feeds={"github": gh(ok=False)}, prev=self.prev())["strip"]["done_today"], 0)
@@ -311,7 +351,15 @@ class ProjectItems(unittest.TestCase):
                 "one_offs": [{"title": "Cert", "needs_me": True, "state": "not started"}, {"title": "Done one", "needs_me": True, "state": "done"},
                              {"title": "Not mine", "state": "not started"}]}
         got = sorted(i["id"] for i in items(view(data=data)))
-        self.assertEqual(got, ["nudge:p:Ana", "oneoff:" + D.sha("Cert")])
+        self.assertEqual(got, ["nudge:p:Ana:" + D.sha("Results", 8), "oneoff:" + D.sha("Cert")])
+
+    def test_same_person_nudges_and_same_title_oneoffs_get_distinct_ids(self):
+        data = {"projects": [], "waiting_on": [{"person": "Ana", "what": "Results", "project_id": "p", "nudge_due": "2026-01-14"},
+                                               {"person": "Ana", "what": "Contract", "project_id": "p", "nudge_due": "2026-01-14"}],
+                "one_offs": [{"title": "Cert", "needs_me": True}, {"title": "Cert", "needs_me": True}]}
+        ids = [i["id"] for i in items(view(data=data))]
+        self.assertEqual(len(ids), 4)
+        self.assertEqual(len(set(ids)), 4)
 
     def test_hid_is_8_hex(self):
         it = items(view(inbox=session(sitem("x"))))[0]

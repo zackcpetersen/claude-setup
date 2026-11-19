@@ -29,6 +29,7 @@ DEFAULTS = {
         "slack_lookback_days": 3,
         "slack_url": "",
         "effort_defaults": {},
+        "no_ci_repos": [],
     },
     "feeds": {"every_minutes": 15, "hours": "08:00-18:00", "days": "Mon-Fri"},
 }
@@ -210,16 +211,22 @@ def project_items(data, today):
             used.add(key)
             it = _item(kind="ask", title=ask, why=n.get("why") or "", link=n.get("link") or "", project_id=pid,
                        due=n.get("due") or None, effort_min=parse_effort(n.get("effort")),
-                       who_waits=n.get("who_waits") or "", source="projects", ticket=n.get("ticket") or "")
+                       who_waits=n.get("who_waits") or "", source="projects", ticket=n.get("ticket") or "",
+                       from_needs_me=True)
             it["id"] = it["ref"] or f"proj:{pid}:{key}"
             out.append(it)
+    used_oneoff = {}
     for o in data.get("one_offs") or []:
         if not o.get("needs_me") or str(o.get("state", "")).lower() == "done":
             continue
         link = o.get("ref") if str(o.get("ref") or "").startswith("https://") else ""
         it = _item(kind="oneoff", title=o.get("title") or "", why=o.get("note") or "", link=link,
                    due=o.get("due") or None, source="projects")
-        it["id"] = it["ref"] or "oneoff:" + sha(o.get("title") or "")
+        base_id = "oneoff:" + sha(o.get("title") or "")
+        n = used_oneoff.get(base_id, 0)
+        used_oneoff[base_id] = n + 1
+        # Same title twice: the second gets its place among same-titled items, so ids never collide.
+        it["id"] = it["ref"] or (base_id if n == 0 else f"{base_id}:{n + 1}")
         out.append(it)
     for w in data.get("waiting_on") or []:
         nd = parse_day(w.get("nudge_due"))
@@ -229,7 +236,7 @@ def project_items(data, today):
         it = _item(kind="nudge", title=f"Nudge {person}: {w.get('what') or ''}".strip().rstrip(":"),
                    why=w.get("where") or "", link=w.get("link") or "", project_id=w.get("project_id") or "",
                    since=w.get("since") or None, due=w.get("nudge_due"), source="projects")
-        it["id"] = it["ref"] or f"nudge:{w.get('project_id') or ''}:{person}"
+        it["id"] = it["ref"] or f"nudge:{w.get('project_id') or ''}:{person}:{sha(w.get('what') or '', 8)}"
         out.append(it)
     return out
 
@@ -255,8 +262,12 @@ def session_items(inbox, today):
     return shown, snoozed
 
 
-def pr_kind(pr):
-    """The one inbox item for one of my open PRs, as (kind, why), or None. Never infers from UNKNOWN or null."""
+def pr_kind(pr, no_ci_repos=()):
+    """The one inbox item for one of my open PRs, as (kind, why), or None. Never infers from UNKNOWN or null.
+
+    "Merge" needs checks that passed (ci SUCCESS). A null rollup usually means checks have not reported yet
+    (right after a push), so it only counts as green for repos listed in inbox.no_ci_repos (repos with no checks).
+    """
     if pr.get("draft"):
         return None
     ci = pr.get("ci")
@@ -269,7 +280,8 @@ def pr_kind(pr):
         return "reply-review", "Changes requested"
     if threads > 0:
         return "reply-review", f"{threads} open thread" + ("s" if threads != 1 else "")
-    if (pr.get("review_decision") == "APPROVED" and ci in ("SUCCESS", None)
+    green = ci == "SUCCESS" or (ci is None and pr.get("repo") in set(no_ci_repos or ()))
+    if (pr.get("review_decision") == "APPROVED" and green
             and pr.get("merge_state") not in ("BLOCKED", "DIRTY", "BEHIND")):
         return "merge", "Approved, merge check pending" if pr.get("mergeable") == "UNKNOWN" else "Approved and green"
     return None
@@ -278,12 +290,12 @@ def pr_kind(pr):
 PR_VERB = {"conflict": "Fix conflict", "fix-ci": "Fix CI", "reply-review": "Reply to review", "merge": "Merge"}
 
 
-def github_items(feed, overrides):
+def github_items(feed, overrides, no_ci_repos=()):
     out = []
     if not feed:
         return out
     for pr in feed.get("my_prs") or []:
-        got = pr_kind(pr)
+        got = pr_kind(pr, no_ci_repos)
         if not got:
             continue
         kind, why = got
@@ -306,7 +318,8 @@ def slack_items(feed, slack_url, overrides):
     out = []
     for a in (feed or {}).get("asks") or []:
         ch, ts = a.get("channel") or "", a.get("ts") or ""
-        link = f"{slack_url}{ch}/p{ts.replace('.', '')}" if slack_url and ch and ts else ""
+        base = slack_url.rstrip("/") + "/" if slack_url else ""
+        link = f"{base}{ch}/p{ts.replace('.', '')}" if base and ch and ts else ""
         it = _item(kind="slack", title="Reply: " + truncate(a.get("reason") or "Slack message"), link=link,
                    ref=f"slack:{ch}:{ts}" if ch and ts else make_ref(a.get("key") or ""), since=a.get("at"),
                    effort_min=default_effort("slack", None, overrides), source="slack")
@@ -330,9 +343,13 @@ def dedupe(items):
     for k in order:
         g = sorted(groups[k], key=lambda i: SOURCE_RANK.get(i["source"], 9))
         if len(g) == 1:
+            g[0]["sources"] = [g[0]["source"]]
             out.append(g[0])
             continue
         top = dict(g[0])
+        top["sources"] = sorted({i["source"] for i in g}, key=lambda s: SOURCE_RANK.get(s, 9))
+        if any(i.get("from_needs_me") for i in g):
+            top["from_needs_me"] = True
         live = next((i for i in g if i["source"] in SCRIPT_SOURCES), None)
         if live:
             for f in ("kind", "link", "effort_min", "source"):
@@ -480,11 +497,19 @@ def done_today(prev, open_now, snoozed_now, inbox, feeds, gh_ok_now, today, now,
     open_ids = set(open_now) | set(snoozed_now)
     cleared = [c for c in cleared if c.get("id") not in open_ids]
     seen = {c.get("id") for c in cleared}
-    if prev.get("date") == today.isoformat() and (prev.get("sources_ok") or {}).get("github") and gh_ok_now:
+    gh = feeds.get("github") or {}
+    # Absence alone proves little (CI back to pending, a draft, the result cap), so a GitHub item counts as
+    # cleared only when the feed shows why: my PR merged, or a review request no longer aimed at the user.
+    merged_refs = {make_ref(m.get("url") or "") for m in gh.get("merged_recent") or []}
+    asked_refs = {make_ref(r.get("url") or "") for r in gh.get("review_requests") or []}
+    if (prev.get("date") == today.isoformat() and (prev.get("sources_ok") or {}).get("github") and gh_ok_now
+            and not gh.get("truncated")):
         for pid, p in (prev.get("open") or {}).items():
             if pid in open_ids or pid in seen or not pid.startswith("gh:") or p.get("snoozed"):
                 continue
             if p.get("source") != "github":  # projects and session items are never counted by absence
+                continue
+            if not (pid in merged_refs if p.get("kind") != "review" else pid not in asked_refs):
                 continue
             cleared.append({"id": pid, "title": p.get("title", ""), "ref": p.get("ref") or pid, "at": iso(now)})
             seen.add(pid)
@@ -539,7 +564,7 @@ def build_view(data, cfg, inbox, feeds, prev_state, now, errors=None):
 
     shown, snoozed = session_items(inbox, today)
     raw = shown + snoozed + project_items(data, today)
-    raw += github_items(feeds.get("github"), overrides)
+    raw += github_items(feeds.get("github"), overrides, ib.get("no_ci_repos") or [])
     raw += slack_items(feeds.get("slack"), ib.get("slack_url") or "", overrides)
     merged = dedupe(raw)
 
@@ -569,7 +594,7 @@ def build_view(data, cfg, inbox, feeds, prev_state, now, errors=None):
     state = {"date": today.isoformat(), "open": {}, "cleared": cleared, "sources_ok": {"github": gh_ok}}
     for i in items + later:
         first = (prev_open.get(i["id"]) or {}).get("first_seen") or i["since"] or iso(now)
-        state["open"][i["id"]] = {"title": i["title"], "ref": i["ref"], "source": i["source"],
+        state["open"][i["id"]] = {"title": i["title"], "ref": i["ref"], "source": i["source"], "kind": i["kind"],
                                   "snoozed": is_snoozed(i), "first_seen": first}
 
     effort = sum(i["effort_min"] for i in items)
