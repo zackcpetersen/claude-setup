@@ -74,6 +74,19 @@ else
 fi
 echo
 
+moved=""
+for pair in "Work board:board" "Watches:watch" "Tidy:tidy" "Writing voice:writing-voice"; do
+  heading="${pair%%:*}"; file="${pair#*:}"
+  if grep -q "^### $heading" "$HOME/.claude/CLAUDE.md" 2>/dev/null && [[ ! -e "$HOME/.claude/config/$file.md" ]]; then
+    moved+="  ### $heading -> ~/.claude/config/$file.md"$'\n'
+  fi
+done
+if [[ -n "$moved" ]]; then
+  echo "== Skill config still in ~/.claude/CLAUDE.md (optional move, both places work) =="
+  printf '%s' "$moved"
+  echo
+fi
+
 baks="$(find "$HOME/.claude/commands" "$HOME/.claude/skills" "$HOME/.claude/output-styles" "$HOME/bin" -maxdepth 1 -name '*.bak' 2>/dev/null || true)"
 if [[ -n "$baks" ]]; then
   echo "== Leftover .bak files (diff each against the repo file, port anything missing, then delete) =="

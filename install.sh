@@ -43,9 +43,33 @@ done
 
 echo "Installing helper scripts to ~/bin ..."
 mkdir -p "$HOME/bin"
-for f in "$REPO_DIR"/bin/query_db "$REPO_DIR"/bin/worktree "$REPO_DIR"/bin/wait-for "$REPO_DIR"/bin/tidy; do
+for f in "$REPO_DIR"/bin/query_db "$REPO_DIR"/bin/worktree "$REPO_DIR"/bin/wait-for "$REPO_DIR"/bin/tidy "$REPO_DIR"/bin/pr-precheck; do
   chmod +x "$f"
   link "$f" "$HOME/bin/$(basename "$f")"
+done
+
+# Config examples are copied only on a fresh install (no ~/.claude/CLAUDE.md yet). On an
+# existing install a missing section can mean the user turned that skill off (deleting
+# `### Tidy` turns tidy off), so a copy here would turn it back on at the next update.
+fresh=no
+[[ -f "$HOME/.claude/CLAUDE.md" ]] || fresh=yes
+
+echo "Per-skill config in ~/.claude/config ..."
+mkdir -p "$HOME/.claude/config"
+for pair in "board:Work board" "watch:Watches" "tidy:Tidy" "writing-voice:Writing voice"; do
+  name="${pair%%:*}"; words="${pair#*:}"
+  src="$REPO_DIR/config/$name.example.md"
+  dest="$HOME/.claude/config/$name.md"
+  if [[ -e "$dest" ]]; then
+    continue
+  elif [[ "$fresh" == yes ]]; then
+    cp "$src" "$dest"
+    echo "  Copied $dest - fill in the FILL IN lines"
+  elif grep -q "^### $words" "$HOME/.claude/CLAUDE.md" 2>/dev/null; then
+    echo "  ### $words is still in ~/.claude/CLAUDE.md - optional: move it to $dest (both places work)"
+  else
+    echo "  No $dest - copy config/$name.example.md there if you want it"
+  fi
 done
 
 if [[ ! -f "$HOME/.claude/CLAUDE.md" ]]; then
