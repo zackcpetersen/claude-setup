@@ -607,6 +607,45 @@ class TestWorktrees(Base):
         self.assertEqual(sh(wt, "git", "show", ":feat-mm.txt"), "staged")
         self.assertEqual((wt / "feat-mm.txt").read_text(), "working\n")
 
+    def test_staged_patch_ignores_user_diff_settings(self):
+        wt = self.closed_wt("feat-cfg")
+        for key, val in (("diff.noprefix", "true"), ("color.diff", "always"), ("color.ui", "always")):
+            sh(self.repo, "git", "config", key, val)
+        (wt / "feat-cfg.txt").write_text("staged\n")
+        sh(wt, "git", "add", "feat-cfg.txt")
+        (wt / "feat-cfg.txt").write_text("working\n")
+        item = self.find(self.scan(), branch="feat-cfg")[0]
+        res = self.apply([item])
+        self.assertEqual(res[0]["status"], "done", res)
+        subprocess.run(res[0]["restore"], shell=True, check=True)
+        self.assertEqual(sh(wt, "git", "show", ":feat-cfg.txt"), "staged")
+        self.assertEqual((wt / "feat-cfg.txt").read_text(), "working\n")
+
+    def test_partial_archive_logs_a_restore_that_only_puts_moved_files_back(self):
+        wt = self.closed_wt("feat-half")
+        (wt / "a.py").write_text("a\n")
+        (wt / "b.py").write_text("b\n")
+        item = self.find(self.scan(), branch="feat-half")[0]
+        real_move, calls = shutil.move, []
+
+        def move_once(src, dst):
+            calls.append(src)
+            if len(calls) > 1:
+                raise OSError("disk full")
+            return real_move(src, dst)
+        with mock.patch.object(T.shutil, "move", side_effect=move_once):
+            res = self.apply([item])
+        self.assertEqual(res[0]["status"], "failed")
+        self.assertIn("stopped partway", res[0]["detail"])
+        restore = self.log()[-1]["restore"]
+        self.assertEqual(restore, res[0]["restore"])
+        self.assertTrue(restore.startswith("cp -Rp "))
+        self.assertNotIn("git", restore.split("#")[0])
+        self.assertEqual(sorted(p.name for p in wt.glob("*.py")), ["b.py"])
+        subprocess.run(restore, shell=True, check=True)
+        self.assertEqual(((wt / "a.py").read_text(), (wt / "b.py").read_text()), ("a\n", "b\n"))
+        self.assertTrue(self.has_branch("feat-half"))
+
     def test_restore_works_when_listed_files_vanished_before_apply(self):
         wt = self.make_wt()
         (wt / ".env.local").write_text("S=1\n")

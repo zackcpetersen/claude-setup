@@ -55,6 +55,15 @@ class TidyError(Exception):
     pass
 
 
+class PartialArchive(TidyError):
+    """The archive step stopped partway: the worktree and branch are untouched, and `restore` only
+    copies the files that already moved back into the worktree."""
+
+    def __init__(self, message, restore):
+        super().__init__(message)
+        self.restore = restore
+
+
 # ---------------------------------------------------------------- config
 
 def _unquote(value):
@@ -401,7 +410,10 @@ def worktree_check(wt, main, repo):
 
 def staged_patch(wt):
     """The worktree's staged changes as a binary patch (empty bytes when nothing is staged)."""
-    p = subprocess.run(["git", "-C", str(wt), "diff", "--cached", "--binary"], capture_output=True)
+    # diff-index ignores the user's diff settings (noprefix, color, external diff tools), so
+    # `git apply --cached` can always read the patch back.
+    p = subprocess.run(["git", "-C", str(wt), "diff-index", "--cached", "-p", "--binary", "HEAD"],
+                       capture_output=True)
     if p.returncode != 0:
         raise TidyError(f"cannot read staged changes in {wt}")
     return p.stdout
@@ -1010,14 +1022,19 @@ def plan_item(cfg, item, repos):
                 stash.mkdir(parents=True, exist_ok=True)  # exists even when nothing is left to move
                 if patch:
                     patch_file.write_bytes(patch)
-                for rel in saved:
-                    src = wt / rel
-                    if src.exists() or src.is_symlink():
-                        (stash / rel).parent.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(src), str(stash / rel))
+                put_back = f"cp -Rp {q(stash)}/. {q(wt)}/ # only the files that already moved; nothing else changed"
+                try:
+                    for rel in saved:
+                        src = wt / rel
+                        if src.exists() or src.is_symlink():
+                            (stash / rel).parent.mkdir(parents=True, exist_ok=True)
+                            shutil.move(str(src), str(stash / rel))
+                except Exception as e:
+                    raise PartialArchive(f"archive step stopped partway, worktree not removed: {e}", put_back)
                 left = [rel for rel in saved if (wt / rel).exists() or (wt / rel).is_symlink()]
                 if left:
-                    raise TidyError(f"archive step left files behind, worktree not removed: {', '.join(left[:3])}")
+                    raise PartialArchive(f"archive step left files behind, worktree not removed: "
+                                         f"{', '.join(left[:3])}", put_back)
             if kind == "prune_worktree":
                 git(rp, "worktree", "remove", str(wt))  # this one entry only; works on a missing folder
             elif verb:
@@ -1161,6 +1178,7 @@ def apply(cfg, items, mode, dry):
                 _log(cfg, {**base, "phase": "result", "result": "ok", "action": detail, "restore": restore})
             except Exception as e:
                 status, detail = "failed", f"{type(e).__name__}: {e}"
+                restore = getattr(e, "restore", restore)  # a partial archive has its own, smaller undo
                 _log(cfg, {**base, "phase": "result", "result": "failed", "action": detail, "restore": restore})
         results.append({"status": status, "kind": item.get("kind"), "target": item.get("target"),
                         "detail": detail, "restore": restore})
