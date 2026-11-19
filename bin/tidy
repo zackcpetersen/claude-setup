@@ -1,0 +1,1069 @@
+#!/usr/bin/env python3
+"""tidy: find leftovers and clean up only what is approved.
+
+  tidy scan --mode daily|stale|weekly [--json] [--no-fetch]
+  tidy apply --mode daily|stale|weekly [--dry-run] < items.json
+
+`scan` is read-only except `git fetch --prune` (skip it with --no-fetch). It lists
+findings with a tier: 1 (provably dead, safe without asking), 2 (ask first, one
+question per kind) or "report" (listed, never changed). `apply` reads the approved
+findings as JSON on stdin, re-checks each one live, logs its intent and undo
+command, acts, then logs the result to ~/.claude/tidy/log.jsonl. Files are moved
+to an archive, never deleted (except empty ones). Unmerged commits are kept under
+refs/tidy-archive/ before a branch is deleted. Standard library only.
+Exit status: 0 ok; 1 an apply item failed; 2 a config or usage problem (a missing
+CLAUDE.md, an unreadable worktree config, a bad value). See skills/tidy/SKILL.md.
+"""
+
+import argparse
+import filecmp
+import fnmatch
+import json
+import os
+import re
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+DEFAULT_CONFIG = "~/.claude/CLAUDE.md"
+DAY = 86400
+DEFAULTS = {"Branch age": 30, "Plan age": 14, "Handoff age": 14, "Memory age": 30,
+            "Loose ends max": 12, "Loose ends age": 14}
+POLL_EVENT_AGE = 7
+TRIAGE_KEEP = 500
+BRANCH_BATCH = 30
+CLAUDE_OWNED = ("tasks", "teams", "jobs")
+# A memory counts as finished work only when its description or first body line LEADS with one of these.
+FINISHED_LEAD = re.compile(r"^\W*(done|ended|closed|shipped|finished|retired)\b", re.I)
+WAIT_FOR_PR = re.compile(r"wait-for\s+pr\s+(\S+)\s+(\d+)\b")
+APPLY_KINDS = {"remove_worktree", "delete_branch", "branch_gone", "branch_no_pr", "remove_empty",
+               "archive_file", "trim_log", "stop_process"}
+MODES = ("daily", "stale", "weekly")
+PR_FIELDS = "number,state,headRefName,headRefOid,baseRefName"
+
+
+class TidyError(Exception):
+    pass
+
+
+# ---------------------------------------------------------------- config
+
+def _unquote(value):
+    value = re.sub(r"<!--.*?-->", "", value).strip()
+    # Strip a backtick pair only when it wraps the whole value (`a`; `b` is two quoted parts, not one).
+    if len(value) >= 2 and value[0] == value[-1] == "`" and value.count("`") == 2:
+        value = value[1:-1].strip()
+    return value
+
+
+def _unset(value):
+    return value == "" or (value.startswith("<") and value.endswith(">"))
+
+
+def read_section(lines, heading):
+    """{key: value} for the `- Key: value` lines under the markdown heading that starts with `heading`.
+    Returns None when the heading is missing."""
+    values, found, inside = {}, False, False
+    for raw in lines:
+        m = re.match(r"^(#+)\s+(.*)$", raw)
+        if m:
+            inside = m.group(2).strip().startswith(heading)
+            found = found or inside
+            continue
+        if not inside:
+            continue
+        top = re.match(r"^- ([^:]+?):\s*(.*)$", re.sub(r"<!--.*?-->", "", raw).rstrip())
+        if top:
+            value = _unquote(top.group(2))
+            if not _unset(value):
+                values[top.group(1).strip()] = value
+    return values if found else None
+
+
+def _split(text, sep=r"[,\n]"):
+    parts = (_unquote(w) for w in re.split(sep, text or ""))
+    return [w for w in parts if w and not _unset(w)]
+
+
+def load_config(path, home):
+    home = Path(home).expanduser()
+
+    def expand(p):
+        p = _unquote(p)
+        if p == "~" or p.startswith("~/"):
+            p = str(home) + p[1:]
+        return Path(p)
+
+    try:
+        lines = Path(path).expanduser().read_text().splitlines()
+    except OSError as e:
+        raise TidyError(f"cannot read config {path}: {e.strerror}")
+    tidy = read_section(lines, "Tidy")
+    board = read_section(lines, "Work board") or {}
+    watches = read_section(lines, "Watches") or {}
+    handoffs = read_section(lines, "Handoffs") or {}
+    t = tidy or {}
+    ages = {}
+    for key, default in DEFAULTS.items():
+        try:
+            ages[key] = int(t.get(key, default))
+        except ValueError:
+            raise TidyError(f"`{key}` in the ### Tidy section must be a whole number of days, got {t[key]!r}")
+    wt_parts = _split(board.get("Worktree config", ""), sep=";")
+    poll = watches.get("Slack poll state file")
+    claude = home / ".claude"
+    return {
+        "enabled": tidy is not None,
+        "home": home,
+        "claude": claude,
+        "tidy_dir": claude / "tidy",
+        "plans": claude / "plans",
+        "weekly": t.get("Weekly", "Fri"),
+        "extra_repos": [expand(p) for p in _split(t.get("Extra repos"))],
+        "report_folders": [expand(p) for p in _split(t.get("Report folders"))],
+        "never_touch": [str(expand(p)) for p in _split(t.get("Never touch"))],
+        "ages": ages,
+        "worktree_config": expand(wt_parts[0]) if wt_parts else None,
+        "memory_dir": expand(board["Memory dir"]) if board.get("Memory dir") else None,
+        "handoffs": expand(handoffs["Handoff folder"]) if handoffs.get("Handoff folder") else None,
+        "poll_dir": expand(poll).parent if poll else None,
+    }
+
+
+def load_repos(cfg):
+    """(repos, errors). A missing or unreadable worktree config is an error, never a silent empty list."""
+    repos, errors = [], []
+    wc = cfg["worktree_config"]
+    if wc is None:
+        errors.append("no `Worktree config` line in the ### Work board section")
+    else:
+        try:
+            data = json.loads(wc.read_text())
+            for key, r in (data.get("repos") or {}).items():
+                setup = r.get("setup") or {}
+                repos.append({"key": key, "path": Path(r["repo_path"]).expanduser(),
+                              "default": r.get("default_branch", "main"),
+                              "copy_files": setup.get("copy_files") or [],
+                              "copy_dirs": setup.get("copy_directories") or [], "extra": False})
+        except OSError as e:
+            errors.append(f"cannot read worktree config {wc}: {e.strerror}")
+        except (ValueError, KeyError, AttributeError) as e:
+            errors.append(f"bad worktree config {wc}: {e}")
+    known = {str(r["path"]) for r in repos}
+    for p in cfg["extra_repos"]:
+        if str(p) in known:
+            continue
+        if not (p / ".git").exists():
+            errors.append(f"extra repo {p} is not a git checkout")
+            continue
+        head = git(p, "symbolic-ref", "--short", "refs/remotes/origin/HEAD", check=False)
+        repos.append({"key": p.name, "path": p, "default": head.split("/", 1)[1] if "/" in head else "main",
+                      "copy_files": [], "copy_dirs": [], "extra": True})
+    return repos, errors
+
+
+# ---------------------------------------------------------------- commands (mocked in tests)
+
+def run_cmd(args, cwd=None):
+    """Run a command; return (returncode, stdout)."""
+    try:
+        p = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, str(e)
+    return p.returncode, p.stdout
+
+
+def git(repo, *args, check=True):
+    p = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    if check and p.returncode != 0:
+        raise TidyError(f"git {' '.join(args)} in {repo}: {p.stderr.strip()}")
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def gh_pr_list(repo_path, branch=None):
+    """{branch: [pr, ...]} for the repo, or None when gh cannot answer."""
+    args = ["gh", "pr", "list", "--state", "all", "--limit", "1000", "--json", PR_FIELDS]
+    if branch:
+        args += ["--head", branch]
+    code, out = run_cmd(args, cwd=str(repo_path))
+    if code != 0:
+        return None
+    index = {}
+    for pr in json.loads(out or "[]"):
+        index.setdefault(pr["headRefName"], []).append(pr)
+    return index
+
+
+def gh_pr_state(repo, number):
+    code, out = run_cmd(["gh", "pr", "view", str(number), "--repo", repo, "--json", "state"])
+    return json.loads(out).get("state") if code == 0 else None
+
+
+def ps_lines():
+    code, out = run_cmd(["ps", "-axo", "pid=,command="])
+    rows = []
+    for line in out.splitlines() if code == 0 else []:
+        pid, _, cmd = line.strip().partition(" ")
+        if pid.isdigit():
+            rows.append((int(pid), cmd.strip()))
+    return rows
+
+
+def poll_running():
+    return any(re.search(r"wait-for\s+slack\b", cmd) for _, cmd in ps_lines())
+
+
+# ---------------------------------------------------------------- git facts
+
+def worktrees(repo):
+    """[(path, branch or None, head sha)] with the main checkout first."""
+    out, rows, cur = git(repo, "worktree", "list", "--porcelain"), [], {}
+    for line in out.splitlines() + [""]:
+        if not line:
+            if cur:
+                rows.append((Path(cur["worktree"]), cur.get("branch"), cur.get("HEAD")))
+            cur = {}
+            continue
+        key, _, val = line.partition(" ")
+        cur[key] = val[len("refs/heads/"):] if key == "branch" else val
+    return rows
+
+
+def branches(repo):
+    fmt = "%(refname:short)%00%(objectname)%00%(upstream:short)%00%(upstream:track)%00%(committerdate:unix)"
+    rows = []
+    for line in git(repo, "for-each-ref", "refs/heads", f"--format={fmt}").splitlines():
+        name, sha, upstream, track, ts = line.split("\0")
+        rows.append({"branch": name, "sha": sha, "upstream": upstream, "gone": "gone" in track,
+                     "committed": int(ts or 0)})
+    return rows
+
+
+def branch_created(repo, branch):
+    out = git(repo, "reflog", "show", "--date=unix", "--format=%gd", f"refs/heads/{branch}", check=False)
+    stamps = [int(m) for m in re.findall(r"@\{(\d+)\}", out)]
+    return min(stamps) if stamps else None
+
+
+def first_parent_line(repo, default):
+    """Commits on origin/<default>'s first-parent line: a branch tip here has no commits of its own."""
+    return set(git(repo, "rev-list", "--first-parent", f"refs/remotes/origin/{default}", check=False).split())
+
+
+def pick_pr(prs, branch, sha):
+    cands = (prs or {}).get(branch, [])
+    for pr in cands:
+        if pr["state"] == "OPEN":
+            return pr
+    for pr in cands:
+        if pr["headRefOid"] == sha:
+            return pr
+    return max(cands, key=lambda p: p["number"]) if cands else None
+
+
+def merged_by(repo, sha, default, pr, line):
+    """"ancestor" or "pr" when the work is proven to be in origin/<default>, else None.
+
+    ancestor: the tip is in origin/<default> and is NOT on its first-parent line (so the branch had
+    commits of its own that a merge brought in; a branch just cut from the default tip never counts).
+    pr: the PR merged into <default> and its head is exactly the tip (squash merges)."""
+    has_origin = git(repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{default}", check=False) != ""
+    if has_origin and sha not in line:
+        p = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", sha, f"origin/{default}"])
+        if p.returncode == 0:
+            return "ancestor"
+    if pr and pr["state"] == "MERGED" and pr["headRefOid"] == sha and pr.get("baseRefName") == default:
+        return "pr"
+    return None
+
+
+def copy_map(repo):
+    files = {}
+    for spec in repo["copy_files"]:
+        src, _, dest = spec.partition(":") if ":" in spec else (spec, "", spec)
+        files[dest or src] = src
+    dirs = []
+    for entry in repo["copy_dirs"]:
+        if isinstance(entry, dict):
+            dirs.append((entry["path"].rstrip("/"), entry.get("exclude") or []))
+        else:
+            dirs.append((entry.rstrip("/"), []))
+    return files, dirs
+
+
+def classify_copy(path, files, dirs):
+    """("copy", source) for a setup copy, ("excluded", None) for a path the config keeps out of a
+    copied folder, (None, None) otherwise."""
+    if path in files:
+        return "copy", files[path]
+    for d, excludes in dirs:
+        if path.startswith(d + "/"):
+            parts = path[len(d) + 1:].split("/")
+            if any(fnmatch.fnmatch(part, ex.strip("/")) for part in parts for ex in excludes):
+                return "excluded", None
+            return "copy", path
+    return None, None
+
+
+def _same(a, b):
+    return a.is_file() and b.is_file() and filecmp.cmp(a, b, shallow=False)
+
+
+def _status(wt, *extra):
+    out = subprocess.run(["git", "-C", str(wt), "status", "--porcelain", "-z", *extra],
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        return None
+    entries, rows, i = out.stdout.split("\0"), [], 0
+    while i < len(entries):
+        entry = entries[i]
+        i += 1
+        if not entry:
+            continue
+        code, path = entry[:2], entry[3:]
+        if code[0] in "RC":
+            i += 1  # the rename source follows
+        rows.append((code, path))
+    return rows
+
+
+def worktree_check(wt, main, repo):
+    """(real_edits, ignored_other). real_edits: changed, untracked or edited-copy paths.
+    ignored_other: git-ignored paths that are not setup copies (an .env.local, a data export, a cache)."""
+    files, dirs = copy_map(repo)
+    rows = _status(wt, "--untracked-files=all")
+    if rows is None:
+        return ["<git status failed>"], []
+    edits = []
+    for code, path in rows:
+        kind, src = classify_copy(path, files, dirs)
+        if kind == "excluded" or (kind == "copy" and "D" not in code and _same(wt / path, main / src)):
+            continue
+        edits.append(path)
+    ignored = _status(wt, "--ignored=traditional", "--untracked-files=normal") or []
+    other = []
+    copy_roots = list(files) + [d for d, _ in dirs]
+    for code, path in ignored:
+        if code != "!!":
+            continue
+        path = path.rstrip("/")
+        p = wt / path
+        holds_copies = any(c == path or c.startswith(path + "/") or path.startswith(c + "/") for c in copy_roots)
+        if p.is_dir() and not holds_copies:
+            other.append(path + "/")
+            continue
+        targets = [p] if not p.is_dir() else [Path(r, n) for r, _, ns in os.walk(p) for n in ns]
+        for f in targets:
+            rel = str(f.relative_to(wt))
+            kind, src = classify_copy(rel, files, dirs)
+            if kind == "excluded":
+                continue
+            if kind == "copy":
+                if not _same(f, main / src):
+                    edits.append(rel)
+                continue
+            other.append(rel)
+    return edits, other
+
+
+def process_cwds():
+    """Working folders of every running process, or None when they cannot be read."""
+    code, out = run_cmd(["lsof", "-a", "-d", "cwd", "-Fn"])
+    paths = [line[1:] for line in out.splitlines() if line.startswith("n")] if out else []
+    return paths if paths else None
+
+
+def in_use(wt, cwds):
+    """Why the worktree is in use by a live process, or None. Unknown process state counts as in use."""
+    if cwds is None:
+        return "cannot list process working folders"
+    wt = _norm(wt)
+    for c in cwds:
+        c = _norm(c)
+        if c == wt or wt in c.parents:
+            return f"a running process works in {c}"
+    return None
+
+
+def nested_worktrees(wt, all_wts):
+    return [str(p) for p, _, _ in all_wts if p != wt and wt in p.parents]
+
+
+# ---------------------------------------------------------------- scan
+
+def age_days(ts, now):
+    return int((now - ts) // DAY)
+
+
+def newest_mtime(path):
+    if path.is_symlink() or path.is_file():
+        return int(path.lstat().st_mtime)
+    stamps = [int(path.stat().st_mtime)]
+    for root, _, names in os.walk(path):
+        stamps += [int(Path(root, n).lstat().st_mtime) for n in names]
+    return max(stamps)
+
+
+def is_empty(path):
+    if path.is_symlink():
+        return False
+    if path.is_file():
+        return path.stat().st_size == 0
+    if path.is_dir():
+        return all(is_empty(c) for c in path.iterdir())
+    return False
+
+
+def size_of(path):
+    if path.is_symlink() or path.is_file():
+        return path.lstat().st_size
+    total = 0
+    for root, _, names in os.walk(path):
+        for n in names:
+            try:
+                total += Path(root, n).lstat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def scan_repo(repo, cfg, now, fetch, mode):
+    path, default, found = repo["path"], repo["default"], []
+    if not (path / ".git").exists():
+        return [{"tier": "report", "kind": "missing_repo", "repo": repo["key"], "target": str(path)}]
+    if fetch:
+        git(path, "fetch", "--prune", "--quiet", check=False)
+    prs = gh_pr_list(path)
+    if prs is None:
+        found.append({"tier": "report", "kind": "no_pr_lookup", "repo": repo["key"], "target": str(path),
+                      "note": "gh could not list PRs; only ancestry merges count and unmerged branches are not offered"})
+    wts = worktrees(path)
+    main_path, main_branch = wts[0][0], wts[0][1]
+    checked_out = {b: p for p, b, _ in wts if b}
+    line = first_parent_line(path, default)
+    cwds = process_cwds() if len(wts) > 1 else []
+    status = git(path, "status", "--porcelain", check=False)
+    if status:
+        found.append({"tier": "report", "kind": "dirty_checkout", "repo": repo["key"], "target": str(path),
+                      "branch": main_branch, "files": status.splitlines()[:20]})
+    stashes = git(path, "stash", "list", check=False)
+    if stashes and mode == "weekly":
+        found.append({"tier": "report", "kind": "stash", "repo": repo["key"], "target": str(path),
+                      "count": len(stashes.splitlines())})
+    old_branches = []
+    for b in branches(path):
+        name, sha = b["branch"], b["sha"]
+        if name == default or name == main_branch:
+            continue
+        pr = pick_pr(prs, name, sha)
+        if pr and pr["state"] == "OPEN":
+            continue
+        created = branch_created(path, name)
+        base = {"repo": repo["key"], "repo_path": str(path), "branch": name, "sha": sha, "default": default,
+                "pr": pr["number"] if pr else None, "age_days": age_days(max(b["committed"], created or 0), now)}
+        how = merged_by(path, sha, default, pr, line)
+        if name in checked_out:
+            wt = checked_out[name]
+            if how:
+                edits, ignored = worktree_check(wt, main_path, repo)
+                nested = nested_worktrees(wt, wts)
+                item = {**base, "target": str(wt), "path": str(wt), "merged_by": how}
+                busy = in_use(wt, cwds)
+                if busy:
+                    found.append({**item, "tier": "report", "kind": "worktree_in_use", "note": busy})
+                elif edits or nested:
+                    found.append({**item, "tier": "report", "kind": "worktree_edits", "files": (edits + nested)[:20]})
+                elif ignored:
+                    if mode == "weekly":
+                        found.append({**item, "tier": 2, "kind": "remove_worktree", "ignored": ignored,
+                                      "ignored_count": len(ignored),
+                                      "note": "holds git-ignored files that are not setup copies"})
+                else:
+                    found.append({**item, "tier": 1, "kind": "remove_worktree"})
+            continue
+        if how:
+            found.append({**base, "tier": 1, "kind": "delete_branch", "target": f"{repo['key']}:{name}",
+                          "merged_by": how})
+            continue
+        if mode != "weekly" or prs is None or base["age_days"] < cfg["ages"]["Branch age"]:
+            continue
+        if b["gone"] or (pr and pr["state"] == "CLOSED"):
+            found.append({**base, "tier": 2, "kind": "branch_gone", "target": f"{repo['key']}:{name}",
+                          "reason": "PR closed" if pr and pr["state"] == "CLOSED" else "upstream gone"})
+        elif pr is None and not b["upstream"]:
+            old_branches.append({**base, "tier": 2, "kind": "branch_no_pr", "target": f"{repo['key']}:{name}"})
+    old_branches.sort(key=lambda f: -f["age_days"])
+    for i, f in enumerate(old_branches):
+        f["batch"] = i // BRANCH_BATCH + 1
+    return found + old_branches
+
+
+def scan_folder(folder, kind, age_limit, now, skip=()):
+    found = []
+    if not folder or not folder.is_dir():
+        return found
+    for p in sorted(folder.iterdir()):
+        if p.name in skip:
+            continue
+        if is_empty(p):
+            found.append({"tier": 1, "kind": "remove_empty", "bucket": kind, "target": str(p), "path": str(p),
+                          "is_dir": p.is_dir()})
+            continue
+        mtime = newest_mtime(p)
+        if age_limit is not None and age_days(mtime, now) >= age_limit:
+            found.append({"tier": 2, "kind": "archive_file", "bucket": kind, "target": str(p), "path": str(p),
+                          "mtime": mtime, "age_days": age_days(mtime, now), "size": size_of(p)})
+    return found
+
+
+def handoff_dest(folder, path, mtime):
+    return Path(folder) / "archive" / datetime.fromtimestamp(mtime).strftime("%Y-%m") / Path(path).name
+
+
+def handoff_keep(folder, now):
+    """Names in the handoff folder that are never offered: the archive, the newest handoff, today's -files."""
+    files = [p for p in folder.iterdir() if p.is_file() and p.suffix == ".md"]
+    keep = {"archive"}
+    if files:
+        keep.add(max(files, key=lambda p: p.stat().st_mtime).name)
+    today = date.fromtimestamp(now).isoformat()
+    return keep | {p.name for p in folder.iterdir() if p.name.startswith(today) and p.name.endswith("-files")}
+
+
+def scan_handoffs(cfg, now):
+    folder = cfg["handoffs"]
+    if not folder or not folder.is_dir():
+        return []
+    skip = handoff_keep(folder, now)
+    found = scan_folder(folder, "handoff", cfg["ages"]["Handoff age"], now, skip)
+    for f in found:
+        if f["kind"] == "archive_file":
+            f["dest"] = str(handoff_dest(folder, f["path"], f["mtime"]))
+    return found
+
+
+def scan_plans(cfg, now, age):
+    found = scan_folder(cfg["plans"], "plan", age, now)
+    for f in found:
+        if f["kind"] == "archive_file":
+            f["note"] = "skill must drop plans the Work registry still points at before asking"
+    return found
+
+
+def scan_poll(cfg, now):
+    d = cfg["poll_dir"]
+    if not d:
+        return []
+    found = scan_folder(d / "slack-poll-events", "poll_event", POLL_EVENT_AGE, now)
+    for f in found:
+        f["tier"] = 1  # old poll events are provably dead: the session already read them
+    triage = d / "slack-poll-triage.jsonl"
+    if triage.is_file():
+        n = len(triage.read_text().splitlines())
+        if n > TRIAGE_KEEP:
+            found.append({"tier": 1, "kind": "trim_log", "bucket": "triage_log", "target": str(triage),
+                          "path": str(triage), "lines": n, "note": "run after the Slack poll is stopped"})
+    return found
+
+
+def setup_repo_root(cfg):
+    """The repo the installed commands and skills link into, from the first symlink found."""
+    for sub in ("commands", "skills"):
+        d = cfg["claude"] / sub
+        for p in sorted(d.iterdir()) if d.is_dir() else []:
+            if p.is_symlink():
+                return Path(os.readlink(p)).parent.parent
+    return None
+
+
+def scan_links(cfg):
+    """Non-linked entries in ~/.claude/commands and ~/.claude/skills. Those that shadow a repo item are
+    tier 2; the rest are report-only. update.sh already lists .bak files."""
+    found, repo_root = [], setup_repo_root(cfg)
+    for sub in ("commands", "skills"):
+        d = cfg["claude"] / sub
+        for p in sorted(d.iterdir()) if d.is_dir() else []:
+            if p.is_symlink() or p.name.endswith(".bak") or p.name.startswith("."):
+                continue
+            shadows = bool(repo_root and (repo_root / sub / p.name).exists())
+            if shadows:
+                found.append({"tier": 2, "kind": "archive_file", "bucket": f"unlinked_{sub}", "target": str(p),
+                              "path": str(p), "mtime": newest_mtime(p), "shadows_repo": True})
+            else:
+                found.append({"tier": "report", "kind": "unlinked_entry", "bucket": f"unlinked_{sub}",
+                              "target": str(p), "shadows_repo": False})
+    return found
+
+
+def _frontmatter(text):
+    m = re.match(r"^---\n(.*?)\n---\n?(.*)$", text, re.S)
+    return (m.group(1), m.group(2)) if m else ("", text)
+
+
+def memory_finished(text):
+    """True only for a `project` memory whose description or first body line leads with a finished word."""
+    head, body = _frontmatter(text)
+    mtype = re.search(r"^\s*type:\s*(\S+)", head, re.M)
+    if not mtype or mtype.group(1).strip("'\"") != "project":
+        return False
+    desc = re.search(r"^description:\s*(.*)$", head, re.M)
+    first = next((l for l in body.splitlines() if l.strip()), "")
+    return bool((desc and FINISHED_LEAD.match(desc.group(1).strip("'\""))) or FINISHED_LEAD.match(first))
+
+
+def memory_index_lines(memory_dir, name):
+    index = Path(memory_dir) / "MEMORY.md"
+    lines = index.read_text().splitlines() if index.exists() else []
+    return [l for l in lines if f"]({name})" in l]
+
+
+def scan_memory(cfg, now):
+    d = cfg["memory_dir"]
+    if not d or not d.is_dir():
+        return []
+    index_file = d / "MEMORY.md"
+    index = index_file.read_text().splitlines() if index_file.exists() else []
+    linked = {m for line in index for m in re.findall(r"\]\(([^)]+\.md)\)", line)}
+    found = []
+    for p in sorted(d.glob("*.md")):
+        if p.name == "MEMORY.md":
+            continue
+        lines = [l for l in index if f"]({p.name})" in l]
+        if not lines:
+            found.append({"tier": "report", "kind": "memory_index", "target": str(p), "note": "no index line"})
+        mtime = int(p.stat().st_mtime)
+        if memory_finished(p.read_text(errors="replace")) and age_days(mtime, now) >= cfg["ages"]["Memory age"]:
+            found.append({"tier": 2, "kind": "archive_file", "bucket": "memory", "target": str(p), "path": str(p),
+                          "mtime": mtime, "age_days": age_days(mtime, now), "index_lines": lines,
+                          "dest": str(d / "archive" / p.name)})
+    for name in sorted(linked):
+        if not (d / name).exists():
+            found.append({"tier": "report", "kind": "memory_index", "target": name, "note": "index line, no file"})
+    return found
+
+
+def scan_processes():
+    found = []
+    for pid, cmd in ps_lines():
+        if not re.search(r"wait-for\s+(pr|deploy|dagster|slack)\b", cmd):
+            continue
+        item = {"tier": "report", "kind": "process", "target": f"pid {pid}", "pid": pid, "command": cmd}
+        m = WAIT_FOR_PR.search(cmd)
+        if m:
+            state = gh_pr_state(m.group(1), m.group(2))
+            if state in ("MERGED", "CLOSED"):
+                item.update(tier=1, kind="stop_process", note=f"PR {state.lower()}")
+        found.append(item)
+    return found
+
+
+def scan_reports(cfg):
+    found = []
+    for name in CLAUDE_OWNED:
+        d = cfg["claude"] / name
+        if d.is_dir():
+            found.append({"tier": "report", "kind": "claude_owned", "target": str(d),
+                          "count": len(list(d.iterdir())), "size": size_of(d)})
+    proj = cfg["claude"] / "projects"
+    if proj.is_dir():
+        found.append({"tier": "report", "kind": "transcripts", "target": str(proj), "size": size_of(proj)})
+    for folder in cfg["report_folders"]:
+        if folder.is_dir():
+            found.append({"tier": "report", "kind": "report_folder", "target": str(folder),
+                          "entries": [{"name": p.name, "size": size_of(p)} for p in sorted(folder.iterdir())
+                                      if not p.name.startswith(".")]})
+    rules = {}
+    for name in ("settings.json", "settings.local.json"):
+        f = cfg["claude"] / name
+        try:
+            allow = json.loads(f.read_text()).get("permissions", {}).get("allow", [])
+        except (OSError, ValueError, AttributeError):
+            continue
+        for rule in allow:
+            rules.setdefault(rule.split("(")[0], []).append(f"{rule}  [{name}]")
+    if rules:
+        found.append({"tier": "report", "kind": "permission_rules", "target": "allow rules",
+                      "count": sum(map(len, rules.values())), "groups": rules})
+    return found
+
+
+def _norm(p):
+    """Absolute path with `..` and symlinked folders resolved; the last part itself is kept as named."""
+    p = Path(os.path.abspath(p))
+    return p.parent.resolve() / p.name
+
+
+def protected(cfg, item):
+    """True when any of the item's target, path, repo path or `repo:branch` matches Never touch."""
+    names = {item.get("target") or ""}
+    if item.get("repo") and item.get("branch"):
+        names.add(f"{item['repo']}:{item['branch']}")
+    for key in ("path", "repo_path", "target"):
+        v = item.get(key)
+        if v and (v.startswith("/") or v.startswith("~")):
+            names.add(str(_norm(Path(v).expanduser())))
+    names.discard("")
+    for pat in cfg["never_touch"]:
+        pats = {pat}
+        if pat.startswith("/"):
+            pats.add(str(_norm(pat)))
+        for n in names:
+            for pt in pats:
+                if fnmatch.fnmatch(n, pt) or n.startswith(pt.rstrip("/") + "/"):
+                    return True
+    return False
+
+
+def read_state(cfg):
+    try:
+        return json.loads((cfg["tidy_dir"] / "state.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def scan(cfg, mode, fetch=True, now=None):
+    now = now or time.time()
+    found, errors = [], []
+    if mode in ("daily", "weekly"):
+        repos, errors = load_repos(cfg)
+        for e in errors:
+            found.append({"tier": "report", "kind": "config_error", "target": e})
+        for repo in repos:
+            found += scan_repo(repo, cfg, now, fetch, mode)
+        found += scan_processes()
+        found += scan_poll(cfg, now)
+    handoffs = scan_handoffs(cfg, now)
+    found += scan_plans(cfg, now, cfg["ages"]["Plan age"] if mode != "daily" else None)
+    found += handoffs if mode != "daily" else [f for f in handoffs if f["tier"] == 1]
+    if mode != "daily":
+        found += scan_memory(cfg, now)
+    if mode == "weekly":
+        found += scan_links(cfg)
+        found += scan_reports(cfg)
+    kept = [f for f in found if f["kind"] == "config_error" or not protected(cfg, f)]
+    state = read_state(cfg)
+    last = state.get("last_weekly")
+    weekly_due = last is None or (date.fromtimestamp(now) - date.fromisoformat(last)).days > 7
+    return {"mode": mode, "enabled": cfg["enabled"], "errors": errors, "state": state, "weekly_due": weekly_due,
+            "weekly_today": date.fromtimestamp(now).strftime("%a").lower().startswith(cfg["weekly"][:3].lower()),
+            "never_touch_skipped": len(found) - len(kept), "findings": kept}
+
+
+def print_scan(result):
+    f = result["findings"]
+    for e in result["errors"]:
+        print(f"ERROR: {e}")
+    by = {}
+    for item in f:
+        by.setdefault((str(item["tier"]), item["kind"], item.get("bucket", "")), []).append(item)
+    print(f"tidy scan {result['mode']}: tier 1 {sum(1 for i in f if i['tier'] == 1)}, "
+          f"tier 2 {sum(1 for i in f if i['tier'] == 2)}, report {sum(1 for i in f if i['tier'] == 'report')}"
+          f"{'' if result['enabled'] else ' (no ### Tidy section: list only)'}"
+          f"{', weekly due' if result['weekly_due'] else ''}")
+    for (tier, kind, bucket), items in sorted(by.items()):
+        print(f"[{tier}] {kind}{' ' + bucket if bucket else ''} ({len(items)})")
+        for i in items[:40]:
+            extra = i.get("reason") or i.get("note") or (f"{i['age_days']}d" if "age_days" in i else "")
+            print(f"    {i['target']}{'  ' + str(extra) if extra else ''}")
+        if len(items) > 40:
+            print(f"    ... {len(items) - 40} more (use --json)")
+
+
+# ---------------------------------------------------------------- apply
+
+def q(x):
+    return shlex.quote(str(x))
+
+
+def known_roots(cfg):
+    """(folders tidy may act inside, files tidy may act on directly)."""
+    folders = [cfg["plans"], cfg["claude"] / "commands", cfg["claude"] / "skills"]
+    folders += [r for r in (cfg["handoffs"], cfg["memory_dir"]) if r]
+    files = []
+    if cfg["poll_dir"]:
+        folders.append(cfg["poll_dir"] / "slack-poll-events")
+        files.append(cfg["poll_dir"] / "slack-poll-triage.jsonl")
+    return [_norm(r) for r in folders], [_norm(f) for f in files]
+
+
+def under(path, roots):
+    folders, files = roots
+    p = _norm(path)
+    if p.name in ("MEMORY.md", "CLAUDE.md") or p.name.startswith("settings") or p.name == "archive":
+        return False
+    return p in files or any(r in p.parents for r in folders)
+
+
+def archive_dest(cfg, path):
+    p = _norm(path)
+    try:
+        rel = p.relative_to(_norm(cfg["home"]))
+    except ValueError:
+        raise TidyError(f"{path} is outside the home folder")
+    return cfg["tidy_dir"] / "archive" / date.today().isoformat() / rel
+
+
+def free(dest):
+    """`dest`, or `dest.1`, `dest.2`, ... : never a path that already exists."""
+    dest, n, base = Path(dest), 1, Path(dest)
+    while dest.exists() or dest.is_symlink():
+        dest = base.with_name(f"{base.name}.{n}")
+        n += 1
+    return dest
+
+
+def recheck_branch(item, repo):
+    """(why it must be skipped or None, merged_by now)."""
+    path, name, sha = Path(item["repo_path"]), item["branch"], item["sha"]
+    if name == repo["default"]:
+        return "default branch", None
+    if git(path, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}", check=False) != sha:
+        return "branch tip changed since the scan", None
+    wts = worktrees(path)
+    if name == wts[0][1]:
+        return "checked out in the main checkout", None
+    in_wt = [p for p, b, _ in wts[1:] if b == name]
+    if item["kind"] == "remove_worktree":
+        if [str(p) for p in in_wt] != [item["path"]]:
+            return "worktree moved or gone", None
+        wt = Path(item["path"])
+        edits, ignored = worktree_check(wt, wts[0][0], repo)
+        if edits:
+            return f"worktree has real edits: {', '.join(edits[:3])}", None
+        if nested_worktrees(wt, wts):
+            return "another worktree lives inside it", None
+        busy = in_use(wt, process_cwds())
+        if busy:
+            return f"worktree in use: {busy}", None
+        if ignored and (item.get("tier") == 1 or sorted(ignored) != sorted(item.get("ignored") or [])
+                        or len(ignored) != item.get("ignored_count")):
+            return f"worktree holds ignored files not seen in the approval: {', '.join(ignored[:3])}", None
+    elif in_wt:
+        return "checked out in a worktree", None
+    prs = gh_pr_list(path, branch=name)
+    if prs is None:
+        return "cannot check the PR right now", None
+    pr = pick_pr(prs, name, sha)
+    if pr and pr["state"] == "OPEN":
+        return "PR is open", None
+    how = merged_by(path, sha, repo["default"], pr, first_parent_line(path, repo["default"]))
+    if item["kind"] in ("remove_worktree", "delete_branch") and not how:
+        return "no longer proven merged", None
+    return None, how
+
+
+def plan_item(cfg, item, repos):
+    """(status, detail, restore, act). status "ready" means `act()` performs it and returns a detail."""
+    kind = item.get("kind")
+    if item.get("tier") not in (1, 2) or kind not in APPLY_KINDS:
+        return "refused", f"tidy never acts on tier {item.get('tier')} {kind}", None, None
+    if protected(cfg, item):
+        return "refused", "matches Never touch", None, None
+
+    if kind in ("remove_worktree", "delete_branch", "branch_gone", "branch_no_pr"):
+        repo = repos.get(item.get("repo_path"))
+        if not repo:
+            return "refused", "repo is not in the worktree config or Extra repos", None, None
+        why, how = recheck_branch(item, repo)
+        if why:
+            return "skipped", why, None, None
+        rp, name, sha = Path(item["repo_path"]), item["branch"], item["sha"]
+        keep = how != "ancestor"  # commits not reachable from the default branch: keep them under a ref
+        keep_ref = f"refs/tidy-archive/{sha}"
+        restore = f"git -C {q(rp)} branch {q(name)} {sha}"
+        if kind == "remove_worktree":
+            restore += (f" && git -C {q(rp)} worktree add {q(item['path'])} {q(name)}"
+                        " # ignored files and setup copies are not restored")
+        what = f"{'remove worktree ' + item['path'] + ' and ' if kind == 'remove_worktree' else ''}" \
+               f"delete {name} at {sha[:9]}{', commits kept at ' + keep_ref if keep else ''}"
+
+        def act():
+            if keep:
+                git(rp, "update-ref", keep_ref, sha)
+            if kind == "remove_worktree":
+                git(rp, "worktree", "remove", "--force", item["path"])
+            git(rp, "branch", "-D", name)
+            detail = what
+            if kind == "remove_worktree" and worktrees(rp)[0][1] == repo["default"]:
+                ok = subprocess.run(["git", "-C", str(rp), "merge", "--ff-only", "--quiet",
+                                     f"origin/{repo['default']}"], capture_output=True).returncode == 0
+                detail += ", main fast-forwarded" if ok else ", main not fast-forwarded (diverged or dirty)"
+            return detail
+        return "ready", what, restore, act
+
+    if kind == "stop_process":
+        pid, cmd = item.get("pid"), item.get("command", "")
+        live = dict(ps_lines()).get(pid)
+        m = WAIT_FOR_PR.search(live or "")
+        if live != cmd or not m:
+            return "skipped", "process gone, changed, or not a wait-for pr", None, None
+        if gh_pr_state(m.group(1), m.group(2)) not in ("MERGED", "CLOSED"):
+            return "skipped", "its PR is no longer merged or closed", None, None
+        restore = "none (its PR had merged or closed)"
+
+        def act():
+            os.kill(pid, signal.SIGTERM)
+            return f"stopped pid {pid}"
+        return "ready", f"stop pid {pid}", restore, act
+
+    path = Path(item.get("path") or "")
+    if not item.get("path") or not under(path, known_roots(cfg)):
+        return "refused", "path is outside the folders tidy knows", None, None
+    path = _norm(path)
+    if not path.exists() and not path.is_symlink():
+        return "skipped", "already gone", None, None
+
+    if kind == "remove_empty":
+        if not is_empty(path):
+            return "skipped", "no longer empty", None, None
+        is_dir = path.is_dir()
+        restore = f"mkdir -p {q(path)}" if is_dir else f"touch {q(path)}"
+
+        def act():
+            shutil.rmtree(path) if is_dir else path.unlink()
+            return f"removed empty {path}"
+        return "ready", f"remove empty {path}", restore, act
+
+    if kind == "trim_log":
+        if poll_running():
+            return "skipped", "the Slack poll is still running", None, None
+        lines = path.read_text().splitlines(keepends=True)
+        if len(lines) <= TRIAGE_KEEP:
+            return "skipped", "already short", None, None
+        dest = free(archive_dest(cfg, path).with_name(path.name + ".older"))
+        restore = f"cat {q(dest)} {q(path)} > {q(path)}.restored && mv {q(path)}.restored {q(path)}"
+
+        def act():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text("".join(lines[:-TRIAGE_KEEP]))
+            path.write_text("".join(lines[-TRIAGE_KEEP:]))
+            return f"kept last {TRIAGE_KEEP} of {len(lines)} lines"
+        return "ready", f"trim to last {TRIAGE_KEEP} of {len(lines)} lines", restore, act
+
+    # archive_file: dest and index lines are always computed here, never taken from the input.
+    if "mtime" not in item:
+        return "refused", "no mtime from the scan", None, None
+    mtime = newest_mtime(path)
+    if mtime != item["mtime"]:
+        return "skipped", "changed since the scan", None, None
+    # Re-check the rule that made the item eligible, per folder.
+    index_lines, index_file = [], None
+    links = {_norm(cfg["claude"] / sub): sub for sub in ("commands", "skills")}
+    if path.parent in links:
+        root = setup_repo_root(cfg)
+        if not (root and (root / links[path.parent] / path.name).exists()):
+            return "skipped", "no longer shadows a repo item", None, None
+    if cfg["handoffs"] and path.parent == _norm(cfg["handoffs"]):
+        if path.name in handoff_keep(path.parent, time.time()):
+            return "skipped", "newest handoff or today's files", None, None
+        dest = handoff_dest(path.parent, path, mtime)
+    elif cfg["memory_dir"] and path.parent == _norm(cfg["memory_dir"]):
+        if not memory_finished(path.read_text(errors="replace")):
+            return "skipped", "memory no longer reads as finished project work", None, None
+        dest = path.parent / "archive" / path.name
+        index_file = path.parent / "MEMORY.md"
+        index_lines = memory_index_lines(path.parent, path.name)
+    else:
+        dest = archive_dest(cfg, path)
+    dest = free(dest)
+    restore = f"mv {q(dest)} {q(path)}"
+    for line in index_lines:
+        restore += f" && printf '%s\\n' {q(line)} >> {q(index_file)}"
+
+    def act():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(path), str(dest))
+        if index_lines and index_file.exists():
+            kept = [l for l in index_file.read_text().splitlines(keepends=True) if l.rstrip("\n") not in index_lines]
+            index_file.write_text("".join(kept))
+        return f"archived to {dest}"
+    return "ready", f"archive to {dest}", restore, act
+
+
+def _log(cfg, entry):
+    log = cfg["tidy_dir"] / "log.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a") as fh:
+        fh.write(json.dumps({"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **entry}) + "\n")
+
+
+def apply(cfg, items, mode, dry):
+    if not cfg["enabled"]:
+        raise TidyError("no ### Tidy section in the config: tidy is list-only on this machine")
+    repos_list, _ = load_repos(cfg)
+    repos = {str(r["path"]): r for r in repos_list}
+    results = []
+    for item in items:
+        try:
+            status, detail, restore, act = plan_item(cfg, item, repos)
+        except (TidyError, OSError) as e:
+            status, detail, restore, act = "failed", str(e), None, None
+        if status == "ready" and dry:
+            status = "would"
+        elif status == "ready":
+            base = {"mode": mode, "tier": item.get("tier"), "kind": item.get("kind"), "target": item.get("target")}
+            _log(cfg, {**base, "phase": "intent", "action": detail, "restore": restore})
+            try:
+                detail = act()
+                status = "done"
+                _log(cfg, {**base, "phase": "result", "result": "ok", "action": detail, "restore": restore})
+            except (TidyError, OSError, subprocess.SubprocessError) as e:
+                status, detail = "failed", str(e)
+                _log(cfg, {**base, "phase": "result", "result": "failed", "action": detail, "restore": restore})
+        results.append({"status": status, "kind": item.get("kind"), "target": item.get("target"),
+                        "detail": detail, "restore": restore})
+    if not dry:
+        state = read_state(cfg)
+        state[f"last_{mode}"] = date.today().isoformat()
+        cfg["tidy_dir"].mkdir(parents=True, exist_ok=True)
+        (cfg["tidy_dir"] / "state.json").write_text(json.dumps(state, indent=2) + "\n")
+    return results
+
+
+# ---------------------------------------------------------------- cli
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="tidy", description=__doc__.split("\n\n")[0])
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--config", default=os.environ.get("TIDY_CONFIG", DEFAULT_CONFIG))
+    common.add_argument("--home", default=os.environ.get("TIDY_HOME", "~"), help="home folder (tests use a temp dir)")
+    common.add_argument("--mode", choices=MODES, required=True)
+    common.add_argument("--json", action="store_true")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sc = sub.add_parser("scan", parents=[common], help="list findings by tier; read-only except git fetch --prune")
+    sc.add_argument("--no-fetch", action="store_true", help="skip git fetch --prune (fully read-only)")
+    ap_ = sub.add_parser("apply", parents=[common], help="act on approved findings read as JSON on stdin")
+    ap_.add_argument("--dry-run", action="store_true", help="re-check and print, change nothing")
+    args = ap.parse_args(argv)
+    try:
+        cfg = load_config(args.config, args.home)
+        if args.cmd == "scan":
+            result = scan(cfg, args.mode, fetch=not args.no_fetch)
+            print(json.dumps(result, indent=2, default=str)) if args.json else print_scan(result)
+            for e in result["errors"]:
+                print(f"tidy: {e}", file=sys.stderr)
+            return 2 if result["errors"] else 0
+        raw = sys.stdin.read().strip() or "[]"
+        data = json.loads(raw)
+        items = data.get("findings", data.get("items", [])) if isinstance(data, dict) else data
+        results = apply(cfg, items, args.mode, args.dry_run)
+        if args.json:
+            print(json.dumps(results, indent=2))
+        else:
+            for r in results:
+                print(f"{r['status']:8} {r['kind']} {r['target']}: {r['detail']}")
+            if not args.dry_run:
+                print(f"log: {cfg['tidy_dir'] / 'log.jsonl'}")
+        return 1 if any(r["status"] == "failed" for r in results) else 0
+    except (TidyError, ValueError) as e:
+        print(f"tidy: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

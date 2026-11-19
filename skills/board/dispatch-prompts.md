@@ -136,6 +136,23 @@ For each line: read the target (thread tool with channel id plus thread ts; chan
 Reply exactly once: DONE: then one line per draft in the input order, then one line "Problems: <count>".
 ```
 
+## tidy-board-check (model: sonnet, Explore, `tidy` stale and weekly modes only)
+
+```
+You are listing old board lines for {{user_name}}'s weekly tidy, read-only. READ-ONLY. Never edit a page, a row or a property; never post anything.
+
+Inputs: today's board row {{today_row}}, the Projects data source {{projects}} (may be empty), carry_flag_days {{carry_flag_days}}, the Loose ends name {{loose_ends}} and age {{loose_ends_age}} days, today {{today}}.
+
+Read today's row and, when given, the Projects data source and the Loose ends row's page. Report, one line each with its age in days (from its `(since YYYY-MM-DD)` or `(added YYYY-MM-DD)` date):
+1. Deferred lines older than carry_flag_days x 3.
+2. Blocked rows with no nudge-due date that say "watch", older than carry_flag_days x 3.
+3. In-flight rows that are not in flight (not started, parked, or no agent or session named).
+4. Projects rows (skip the Loose ends row and Done rows) whose Next milestone is past and whose Last update is more than 14 days old.
+5. Loose ends items older than {{loose_ends_age}} days, plus the total item count and the oldest age.
+
+Reply exactly once: DONE: then the five numbered groups, each line `<group> | <age>d | <the line's text, first 12 words>`, then `Loose ends: N items, oldest D days`.
+```
+
 ## standup-builder (model: sonnet, general-purpose, rollover only)
 
 Dispatched after the goal is confirmed and the sync gatherers have returned. It reads only what it is given and calls no tools.

@@ -100,6 +100,11 @@ The manual equivalent, and what `update.sh` does under the hood:
 Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
 
+- 2026-11-19: New `tidy` skill and `~/bin/tidy` (scheduled cleanup at
+  board wrap, rollover and a weekly deep clean). Per machine: re-run
+  `./install.sh`, add the `### Tidy` block from the template to
+  `~/.claude/CLAUDE.md`, then run `/tidy weekly --dry-run` once and read
+  the report before any real run.
 - 2026-11-17: New `project-status` skill (a visual project status
   page). Per machine: re-run `./install.sh` to link it, then follow
   "`skills/project-status/SKILL.md`" in the fill-in checklist
@@ -219,6 +224,12 @@ Work through these once per machine:
 - Then ask Claude for "my project status page". It gathers your projects into `~/.claude/project-status/projects.json`, builds, publishes, and saves the Artifact link in `config.json` so every refresh updates the same page. "Add a one-off: ..." adds a standalone item.
 - Needs Python 3 and the Artifact tool. Reads the board's `Projects data source` when you use the `board` skill; without it, tell Claude where your project notes live.
 
+### `skills/tidy/SKILL.md`
+- No file edits. Copy the `### Tidy` block from `claude-md/CLAUDE.md.template` into `~/.claude/CLAUDE.md` and fill it in: the weekly day, any extra repos and report folders, the ages, the Loose ends name, and any `Never touch` paths. Without the section tidy only lists leftovers and changes nothing.
+- With a `Projects data source`, create one Projects row with the Loose ends name and Status Parked.
+- Check with `~/bin/tidy scan --mode weekly --no-fetch` (read-only; exit 2 means a config problem it names), then `/tidy weekly --dry-run`.
+- Needs `git`, `gh`, Python 3 and `~/bin/tidy` (linked by `install.sh`).
+
 ### `skills/review-pr/SKILL.md`
 - No file edits. Needs `gh` and the built-in `/code-review` skill. Uses the writing-voice skill named in the `### Writing voice` section of `~/.claude/CLAUDE.md` when present, otherwise only the `reviewing-prs` comment rules it pastes into `dispatch-prompt.md`.
 
@@ -333,5 +344,6 @@ For the plugins, open a fresh session and check:
 - `ExitPlanMode` without a review is denied with the plan-gate message; after `/self-review` it goes through once.
 - `bash plugins/plan-gate/tests/plan-gate.test.sh` prints `6/6 passed.`
 - `bash plugins/new-day/tests/new-day-check.test.sh` prints `9/9 passed.`
+- `python3 -m pytest bin/tests/test_tidy.py` passes (or `python3 -m unittest bin/tests/test_tidy.py` without pytest).
 
 If you set this repo up before the plugin existed, delete the leftover `~/bin/agent-model-guard` symlink by hand - `install.sh` no longer creates it, but it also never removes links it has stopped iterating over.

@@ -48,6 +48,7 @@ If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the 
    - `progress_pct` comes from real milestones or tickets, and `progress_basis` says how in one sentence. Never invent precision.
    - Keep `one_offs` already in the file. They are the user's own list.
    - Plain English, short sentences. Leave out finished projects.
+   - Skip the Projects row named by the `Loose ends` line of `### Tidy` in `~/.claude/CLAUDE.md` (the `tidy` skill's catch-all list).
    - Return a short list of anything unsure or stale. Relay it.
 2. **Check** the data before building: drop asks the user already answered in this session, and links that are not `https://`.
 3. **Build**: `python3 ~/.claude/skills/project-status/build.py ~/.claude/project-status/projects.json <scratchpad>/project-status.html --config ~/.claude/project-status/config.json`
