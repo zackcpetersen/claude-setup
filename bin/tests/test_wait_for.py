@@ -802,7 +802,7 @@ class SlackTests(Base):
         cfg = W.load_slack_config(self.cfg_path)
         self.assertEqual(cfg["triggers"], list(W.SLACK_DEFAULT_TRIGGERS))
         self.assertEqual(cfg["model"], "haiku")
-        self.assertEqual(cfg["quiet"], ["ack", "bot", "fyi"])
+        self.assertEqual(cfg["quiet"], [])  # the example line is a placeholder: nothing is quiet by default
 
 
 def claude_answer(obj, cost=0.004):
@@ -1003,6 +1003,7 @@ class QuietTests(SlackTests):
     def setUp(self):
         super().setUp()
         self.digest = self.tmp / "state" / "slack-poll-digest.jsonl"
+        self.cfg_path.write_text(SLACK_MD.format(tmp=self.tmp) + "- Slack poll quiet: ack, bot, fyi\n")
 
     def poll(self, events):
         rc, out, err, _ = self.slack([claude_answer({"events": events})], "--once")
@@ -1013,7 +1014,7 @@ class QuietTests(SlackTests):
         return [json.loads(l) for l in self.digest.read_text().splitlines()] if self.digest.exists() else []
 
     def test_ack_and_bot_go_to_the_digest_and_wake_no_one(self):
-        out = self.poll([ev("1.1", hint="ack"), ev("1.2", hint="bot")])
+        out = self.poll([ev("1.1", hint="ack", kind="thread-reply"), ev("1.2", hint="bot", kind="user-group")])
         self.assertEqual(out, "NOTHING")
         lines = self.digest_lines()
         self.assertEqual([l["ts"] for l in lines], ["1.1", "1.2"])
@@ -1021,7 +1022,8 @@ class QuietTests(SlackTests):
         self.assertEqual(json.loads(self.state.read_text())["seen"], ["D0DM:1.1", "D0DM:1.2"])
 
     def test_mixed_batch_wakes_with_only_the_ask(self):
-        out = self.poll([ev("1.1", hint="fyi"), ev("1.2", hint="ask"), ev("1.3", hint="ACK")])
+        out = self.poll([ev("1.1", hint="fyi", kind="user-group"), ev("1.2", hint="ask", kind="user-group"),
+                         ev("1.3", hint="ACK", kind="thread-reply")])
         word, count, path = out.split(" ")
         self.assertEqual((word, count), ("SLACK", "1"))
         self.assertEqual([e["ts"] for e in json.loads(Path(path).read_text())["events"]], ["1.2"])
@@ -1032,9 +1034,20 @@ class QuietTests(SlackTests):
         self.assertTrue(out.startswith("SLACK 2 "), out)
         self.assertFalse(self.digest.exists())
 
+    def test_dms_and_mentions_always_wake(self):
+        out = self.poll([ev("1.1", hint="fyi"), ev("1.2", hint="ack", kind="mention", channel_id="C0X")])
+        self.assertTrue(out.startswith("SLACK 2 "), out)
+        self.assertFalse(self.digest.exists())
+
+    def test_no_quiet_line_quiets_nothing(self):
+        self.cfg_path.write_text(SLACK_MD.format(tmp=self.tmp))
+        out = self.poll([ev("1.1", hint="fyi", kind="user-group"), ev("1.2", hint="bot", kind="thread-reply")])
+        self.assertTrue(out.startswith("SLACK 2 "), out)
+        self.assertFalse(self.digest.exists())
+
     def test_quiet_none_wakes_on_everything(self):
         self.cfg_path.write_text(SLACK_MD.format(tmp=self.tmp) + "- Slack poll quiet: none\n")
-        out = self.poll([ev("1.1", hint="ack"), ev("1.2", hint="bot")])
+        out = self.poll([ev("1.1", hint="ack", kind="user-group"), ev("1.2", hint="bot", kind="user-group")])
         self.assertTrue(out.startswith("SLACK 2 "), out)
         self.assertFalse(self.digest.exists())
 

@@ -254,6 +254,35 @@ class Report(Base):
         self.assertTrue(any("svc.rb:3 Faraday.get" in h for h in hits))
         self.assertTrue(any("svc.py:3 requests.get" in h for h in hits))
 
+    def test_one_line_lock_block_does_not_cover_siblings(self):
+        self.write("one.rb", "def go\n  User.transaction { save! }\n  Faraday.get(u)\n  x.with_lock { Faraday.put(u) }\nend\n")
+        hits = self.report()["inside_lock"]
+        self.assertEqual(len(hits), 1, hits)
+        self.assertIn("one.rb:4", hits[0])
+
+    def test_non_utf8_file_does_not_crash(self):
+        (self.repo / "latin.rb").write_bytes(b"# caf\xe9\nx = 1\n")
+        sh(self.repo, "git", "add", ".")
+        sh(self.repo, "git", "commit", "-qm", "latin")
+        sh(self.repo, "git", "push", "-q", "origin", "feature:main")
+        sh(self.repo, "git", "fetch", "-q", "origin")
+        (self.repo / "latin.rb").write_bytes(b"# caf\xe9 cr\xe8me\nx = 2\n")  # a tracked, edited, non-UTF-8 file
+        self.assertEqual(self.run_script("report").returncode, 0)
+        r = self.run_script("fix", "--no-tests")
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_renamed_generated_file_is_left_out(self):
+        self.write("db/schema.rb", "x\n" * 100)
+        sh(self.repo, "git", "add", ".")
+        sh(self.repo, "git", "commit", "-qm", "schema")
+        sh(self.repo, "git", "push", "-q", "origin", "feature:main")
+        sh(self.repo, "git", "fetch", "-q", "origin")
+        (self.repo / "db2").mkdir()
+        sh(self.repo, "git", "mv", "db/schema.rb", "db2/schema.rb")
+        self.write("db2/schema.rb", "x\n" * 99 + "y\n")  # renamed and edited
+        d = self.report()
+        self.assertEqual(d["size"]["changed_lines"], 0, d)
+
     def test_inside_lock_skips_test_files(self):
         self.write("spec/svc_spec.rb", "User.transaction do\n  Faraday.get(u)\nend\n")
         self.write("tests/test_svc.py", "with transaction.atomic():\n    requests.get(u)\n")
@@ -287,7 +316,34 @@ class Hook(Base):
         with mock.patch.object(P, "run_cmd", side_effect=lambda c, d, t=P.TIMEOUT: seen.append(t) or ("ok", 0, "")), \
                 mock.patch.object(sys, "stdin", io.StringIO(json.dumps(self.push()))):
             self.assertEqual(P.cmd_hook(), 0)
-        self.assertEqual(seen, [P.HOOK_TIMEOUT])
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(0 < seen[0] <= P.HOOK_TIMEOUT)  # what is left of the one shared budget
+
+    def test_push_text_inside_another_command_is_ignored(self):
+        self.write("app/models/user.rb", "class User\n  x\nend\n")
+        self.commit()
+        self.rc("rbcheck", 1)
+        r = self.hook(self.push('gh pr create --body "then git push the fix"'))
+        self.assertEqual((r.returncode, self.calls()), (0, []))
+        self.assertEqual(self.hook(self.push(f"cd {self.repo} && git push")).returncode, 2)
+
+    def test_dirty_files_are_skipped(self):
+        self.write("app/models/user.rb", "class User\n  x\nend\n")
+        self.commit()
+        self.write("app/models/user.rb", "class User\n  y\nend\n")
+        self.rc("rbcheck", 1)
+        r = self.hook(self.push())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("uncommitted edits", r.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_empty_hook_langs_means_none(self):
+        self.config(hook_langs=[])
+        self.write("app/models/user.rb", "class User\n  x\nend\n")
+        self.commit()
+        self.rc("rbcheck", 1)
+        self.assertEqual(self.hook(self.push()).returncode, 0)
+        self.assertEqual(self.calls(), [])
 
     def test_non_push_ignored(self):
         r = self.hook({"tool_input": {"command": "git status"}, "cwd": str(self.repo)})

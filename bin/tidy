@@ -84,8 +84,8 @@ def read_section(lines, heading):
     values, found, inside = {}, False, False
     for raw in lines:
         m = re.match(r"^(#+)\s+(.*)$", raw)
-        if m:
-            inside = m.group(2).strip().startswith(heading)
+        if m:  # a level-1 title ("# Tidy config") only ends a section, never starts one
+            inside = len(m.group(1)) > 1 and m.group(2).strip().startswith(heading)
             found = found or inside
             continue
         if not inside:

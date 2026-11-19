@@ -15,7 +15,7 @@
 - Slack poll group-dms lookback: 60m <!-- how recently you must have posted in a group DM for its messages to count as aimed at you -->
 - Slack poll user name: <your first name> <!-- optional; matched as a whole word in group DMs; leave it out and the poll reads it from your Slack profile -->
 - Slack poll ignore: <C0XXXXXXX, U0XXXXXXX> <!-- channels, people or groups to leave out; ids or names; optional -->
-- Slack poll quiet: ack, bot, fyi <!-- messages the cheap model tags with these hints go to slack-poll-digest.jsonl and never wake the session; none turns it off -->
+- Slack poll quiet: <ack, bot, fyi> <!-- optional; messages the cheap model tags with these hints go to slack-poll-digest.jsonl instead of waking the session. Default (line absent or placeholder): none. DMs and direct mentions always wake -->
 - Slack poll state file: ~/.claude/slack-poll.json <!-- cursor and seen list, written by the script; events land in slack-poll-events/, the triage log in slack-poll-triage.jsonl and held group DM messages in slack-poll-held.jsonl next to it -->
 - Dagster: https://<org>.dagster.cloud/<deployment>/graphql, env file ~/path/to/.env, token var DAGSTER_CLOUD_API_TOKEN <!-- optional; fill in <org> and <deployment> or delete this line; wait-for reads the token itself and never prints it -->
 - Deploy rules: <!-- one line per repo: `workflow <name> on <branch>`, `release-tag`, or `branch <name>` -->

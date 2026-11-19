@@ -112,9 +112,9 @@ than 6 months.
   (scripts and skills read both places); copy the new template lines
   (Standing default, CI/CD exception, Handoffs size, Issue Tracker,
   External Communications, Review comments, No-ticket repos) into
-  ~/.claude/CLAUDE.md; add `Slack poll quiet: none` to keep every Slack
-  message waking the session (the new default filters acks, bot posts
-  and FYIs).
+  ~/.claude/CLAUDE.md; optionally add `Slack poll quiet: ack, bot, fyi`
+  so acks, bot posts and FYIs go to a digest instead of waking the
+  session (off by default; DMs and direct mentions always wake).
 - 2026-11-19: New `tidy` skill and `~/bin/tidy` (scheduled cleanup at
   board wrap, rollover and a weekly deep clean). Per machine: re-run
   `./install.sh`, add the `### Tidy` block from the template to
@@ -229,7 +229,7 @@ Work through these once per machine:
 
 ### `skills/watch/SKILL.md`
 - No file edits. Copy `config/watch.example.md` to `~/.claude/config/watch.md` (install.sh does this only on a fresh install) and fill it in; the skill stops with a clear message if it is missing.
-- Slack poll lines: `Slack poll` (on or off), `Slack poll every`, `Slack poll model`, `Slack poll triggers`, `Slack poll user groups` (the Slack tools cannot list your groups, so type them), `Slack poll keywords`, `Slack poll ignore`, `Slack poll quiet` (hints that never wake the session, default `ack, bot, fyi`, `none` turns it off), `Slack poll state file`, and the optional group DM lines `Slack poll group-dms` (aimed-only or all, default aimed-only), `Slack poll group-dms lookback` (default 60m) and `Slack poll user name`. Check with `~/bin/wait-for slack --once`.
+- Slack poll lines: `Slack poll` (on or off), `Slack poll every`, `Slack poll model`, `Slack poll triggers`, `Slack poll user groups` (the Slack tools cannot list your groups, so type them), `Slack poll keywords`, `Slack poll ignore`, `Slack poll quiet` (optional hints that go to a digest instead of waking the session, for example `ack, bot, fyi`; off by default; DMs and direct mentions always wake), `Slack poll state file`, and the optional group DM lines `Slack poll group-dms` (aimed-only or all, default aimed-only), `Slack poll group-dms lookback` (default 60m) and `Slack poll user name`. Check with `~/bin/wait-for slack --once`.
 - Add the allow rules listed in the skill's Install section to `~/.claude/settings.json` by hand: `Bash(~/bin/wait-for *)` plus the Slack read tools and `slack_send_message_draft`, so triage and drafts never stop on a permission prompt.
 - Needs `gh`, Python 3, and `~/bin/wait-for` (linked by `install.sh`). The Slack poll needs the `claude` command and the Slack MCP plugin; Dagster waits need the `Dagster` config line.
 

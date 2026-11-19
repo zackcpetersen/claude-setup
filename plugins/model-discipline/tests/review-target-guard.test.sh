@@ -36,6 +36,7 @@ check "Skill call with the full URL is allowed" empty "$(run '{"tool_name":"Skil
 check "other skills are allowed" empty "$(run '{"tool_name":"Skill","tool_input":{"skill":"tidy","args":"medium 123"}}')"
 check "Agent prompt with a bare number is denied" denied "$(run '{"tool_name":"Agent","tool_input":{"prompt":"Run /code-review high 42 and report."}}')"
 check "Agent prompt with placeholder text is allowed" empty "$(run '{"tool_name":"Agent","tool_input":{"prompt":"Run /code-review <effort> <PR URL> and report."}}')"
+check "Agent prompt quoting a bare-number example in backticks is allowed" empty "$(run '{"tool_name":"Agent","tool_input":{"prompt":"Never write `/code-review 2249` with a bare number; pass the URL."}}')"
 check "Agent prompt with the full URL is allowed" empty "$(run '{"tool_name":"Agent","tool_input":{"prompt":"Run /code-review medium https://github.com/acme/app/pull/7"}}')"
 
 out="$(printf %s 'not json {' | bash "$HOOK" 2>/dev/null)"

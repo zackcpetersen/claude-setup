@@ -216,6 +216,14 @@ class TestConfig(Base):
         self.assertEqual(cfg["ages"]["Plan age"], 3)
         self.assertEqual((cfg["memory_dir"], cfg["handoffs"]), (self.home / "memory", self.home / "handoffs"))
 
+    def test_title_heading_alone_does_not_turn_tidy_on(self):
+        (self.claude / "CLAUDE.md").write_text("## Handoffs\n- Handoff folder: ~/handoffs/\n")
+        (self.claude / "config").mkdir()
+        (self.claude / "config" / "tidy.md").write_text("# Tidy config\n\n- Plan age: 3\n")
+        cfg = T.load_config(None, self.home)
+        self.assertFalse(cfg["enabled"])
+        self.assertEqual(cfg["ages"]["Plan age"], 14)
+
     def test_config_flag_reads_only_the_given_file(self):
         (self.claude / "config").mkdir()
         (self.claude / "config" / "tidy.md").write_text("### Tidy\n- Plan age: 3\n")

@@ -45,7 +45,8 @@ SLACK_GROUP_DM_MODES = ("aimed-only", "all")
 SLACK_GROUP_DM_LOOKBACK = "60m"  # the user posted in a group DM this recently: they are in the conversation
 SLACK_HELD_KEEP = timedelta(days=14)  # held group DM lines older than this are dropped on the next append
 SLACK_HELD_TAIL = 200  # lines checked for a duplicate key before appending
-SLACK_QUIET_HINTS = ("ack", "bot", "fyi")  # hints the `Slack poll quiet` line may list; also its default
+SLACK_QUIET_HINTS = ("ack", "bot", "fyi")  # hints the `Slack poll quiet` line may list; default is none of them
+SLACK_NEVER_QUIET = ("dm", "mention")  # a DM or a direct mention always wakes, whatever its hint
 _warned = set()
 SLACK_READ_TOOLS = ("slack_search_public_and_private", "slack_search_public", "slack_read_thread", "slack_read_channel",
                     "slack_read_user_profile", "slack_search_users", "slack_search_channels")
@@ -239,7 +240,7 @@ def load_slack_config(path=None):
     lookback = parse_duration(watches.get("Slack poll group-dms lookback") or SLACK_GROUP_DM_LOOKBACK)
     quiet_line = watches.get("Slack poll quiet")
     quiet = [] if (quiet_line or "").lower() == "none" else (
-        [w.lower() for w in _split_list(quiet_line)] if quiet_line else list(SLACK_QUIET_HINTS))
+        [w.lower() for w in _split_list(quiet_line)] if quiet_line else [])
     bad = [w for w in quiet if w not in SLACK_QUIET_HINTS]
     if bad:
         raise WaitError(f"unknown `Slack poll quiet` word {', '.join(bad)}; known: {', '.join(SLACK_QUIET_HINTS)}, or none")
@@ -725,7 +726,8 @@ def poll_slack(cfg, since=None):
         e["text"] = str(e.get("text") or "")[:SLACK_TEXT_CAP]
         if filtering and e.get("kind") == "group-dm" and not aimed_at_user(e, cfg, name, active):
             held.append(e)
-        elif str(e.get("hint") or "").lower() in cfg.get("quiet", ()):  # a missing or unknown hint wakes
+        elif (str(e.get("hint") or "").lower() in cfg.get("quiet", ())  # a missing or unknown hint wakes
+              and e.get("kind") not in SLACK_NEVER_QUIET):
             quiet.append(e)
         else:
             fresh.append(e)

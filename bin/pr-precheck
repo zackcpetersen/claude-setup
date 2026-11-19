@@ -42,10 +42,11 @@ import shlex
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 TIMEOUT = 300
-HOOK_TIMEOUT = 100  # under the hook's 120s limit, so the fail-open note still prints
+HOOK_TIMEOUT = 100  # one shared budget for hook mode, under the hook's 120s limit
 # Runner prefixes that do not exit 127 for a missing tool: poetry run ("Command not found: x", exit 1),
 # uv run ("Failed to spawn: `x`", exit 2), npx --no-install (npm 404 or "could not determine executable").
 MISSING_TOOL_RE = re.compile(r"^(Command not found: |error: Failed to spawn: |npm (error|ERR!) (code E404|could not determine executable))", re.M)
@@ -81,7 +82,7 @@ class UsageError(Exception):
 # ---------- small helpers ----------
 
 def git(top, *args, check=True):
-    p = subprocess.run(["git", *args], cwd=top, capture_output=True, text=True)
+    p = subprocess.run(["git", *args], cwd=top, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if check and p.returncode != 0:
         raise UsageError(f"git {' '.join(args)} failed: {p.stderr.strip()}")
     return p.stdout
@@ -126,7 +127,7 @@ def run_cmd(cmd, cwd, timeout=TIMEOUT):
     """Run a shell command; return (status, exit code, output). status: ok, failed, skipped."""
     try:
         p = subprocess.Popen(cmd, shell=True, cwd=cwd, env=clean_env(), stdin=subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
                              start_new_session=True)
         out, _ = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -193,7 +194,7 @@ def merge_base(top, base):
 
 
 def changed_files(top, mb):
-    tracked = git(top, "diff", "--name-only", "-z", "--diff-filter=ACMR", mb).split("\0")
+    tracked = git(top, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=ACMR", mb).split("\0")
     return sorted({f for f in tracked if f} | set(untracked(top)))
 
 
@@ -202,7 +203,8 @@ def untracked(top):
 
 
 def tree_hash(top, mb):
-    h = hashlib.sha256(git(top, "diff", "--binary", mb).encode())
+    h = hashlib.sha256(subprocess.run(["git", "diff", "--binary", "--no-renames", mb], cwd=top,
+                                      capture_output=True).stdout)  # bytes: any file encoding
     for f in sorted(untracked(top)):
         h.update(b"\0" + f.encode() + b"\0")
         try:
@@ -254,7 +256,7 @@ def find_up(start, top, name):
 
 def package_deps(root):
     try:
-        pkg = json.loads((root / "package.json").read_text())
+        pkg = json.loads((root / "package.json").read_text(errors="replace"))
     except (OSError, ValueError):
         return set()
     return set(pkg.get("dependencies") or {}) | set(pkg.get("devDependencies") or {})
@@ -268,7 +270,7 @@ def default_commands(lang, root, top):
                 "check": r + "rubocop --force-exclusion {files}", "tests": r + "rspec {files}"}
     if lang == "py":
         try:
-            pyproject = (root / "pyproject.toml").read_text()
+            pyproject = (root / "pyproject.toml").read_text(errors="replace")
         except OSError:
             pyproject = ""
         r = "poetry run " if "[tool.poetry]" in pyproject else "uv run " if (root / "uv.lock").exists() else ""
@@ -440,11 +442,13 @@ def generated_files(top, files, cfg):
     return gen
 
 
-def size_of(top, mb, files, gen):
+def size_of(top, mb, cfg, gen):
     n = 0
-    for line in git(top, "diff", "--numstat", mb).splitlines():
-        parts = line.split("\t", 2)
-        if len(parts) == 3 and parts[2] not in gen:
+    rows = [l.split("\t", 2) for l in git(top, "diff", "--numstat", "--no-renames", mb).splitlines()]
+    rows = [r for r in rows if len(r) == 3]
+    gen = gen | generated_files(top, [r[2] for r in rows], cfg)  # also deleted paths (a rename's old side)
+    for parts in rows:
+        if parts[2] not in gen:
             n += sum(int(x) for x in parts[:2] if x.isdigit())
     for f in untracked(top):
         if f not in gen:
@@ -489,6 +493,11 @@ def lock_hits(top, files, cfg):
         for i, line in enumerate(lines):
             if not any(o.search(line) for o in openers):
                 continue
+            if lang == "rb" and (("{" in line and line.count("{") == line.count("}"))
+                                 or re.search(r"\bdo\b.*\bend\b", line)):
+                if any(c.search(line) for c in calls):  # the whole block is this one line
+                    hits.append(f"inside lock: {f}:{i + 1} {line.strip()}")
+                continue
             base = indent(line)
             for j in range(i + 1, len(lines)):
                 body = lines[j]
@@ -513,7 +522,7 @@ def cmd_report(args):
         limit = args.max_lines or int(cfg.get("max_lines") or 500)
     except (TypeError, ValueError):
         raise UsageError(f"max_lines in the config must be a whole number, got {cfg.get('max_lines')!r}")
-    n = size_of(top, mb, files, gen)
+    n = size_of(top, mb, cfg, gen)
     data = {"size": {"changed_lines": n, "limit": limit, "over": n > limit, "generated_left_out": len(gen)},
             "stale_generated": stale_pairs(files, cfg), "inside_lock": lock_hits(top, files, cfg),
             "precheck": stamp_state(top, mb)}
@@ -532,7 +541,7 @@ def cmd_report(args):
 
 # ---------- hook ----------
 
-PUSH_RE = re.compile(r"git( +-C +[^ ]+)? +push")
+PUSH_RE = re.compile(r"(?:^|[;&|(]|\n)\s*(?:cd +\S+ *(?:&&|;) *)?git( +-C +[^ ]+)? +push\b")  # a command, not text
 
 
 def hook_repo(cmd, cwd):
@@ -556,24 +565,41 @@ def cmd_hook():
         repo = hook_repo(cmd, data.get("cwd") or "")
         if not repo or not os.path.isdir(repo):
             return 0
+        deadline = time.monotonic() + HOOK_TIMEOUT  # one budget for the fetch and every check
         top = toplevel(repo)
         cfg = load_config(None)
         branch = default_branch(top)
-        if subprocess.run(["git", "fetch", "--quiet", "origin", branch], cwd=top,
-                          capture_output=True).returncode != 0:
+        try:
+            fetched = subprocess.run(["git", "fetch", "--quiet", "origin", branch], cwd=top, capture_output=True,
+                                     timeout=max(1, deadline - time.monotonic())).returncode == 0
+        except subprocess.TimeoutExpired:
+            fetched = False
+        if not fetched:
             print(f"pr-precheck: could not fetch origin {branch}, skipping checks", file=sys.stderr)
             return 0
-        files = [f for f in git(top, "diff", "--name-only", "-z", "--diff-filter=ACMR",
+        files = [f for f in git(top, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=ACMR",
                                 f"origin/{branch}...HEAD").split("\0") if f]
+        # Lint what is pushed: a file that differs from HEAD in the working tree is skipped, so
+        # uncommitted edits can never block (or wrongly pass) the push.
+        dirty = set(f for f in git(top, "diff", "--name-only", "-z", "HEAD").split("\0") if f)
+        if dirty & set(files):
+            print(f"pr-precheck: skipped {len(dirty & set(files))} file(s) with uncommitted edits: "
+                  + ", ".join(sorted(dirty & set(files))[:5]), file=sys.stderr)
+        files = [f for f in files if f not in dirty]
         rconf = repo_conf(cfg, repo_key(top))
-        langs = set(cfg.get("hook_langs") or ["rb"])
+        langs = cfg.get("hook_langs", ["rb"])
+        langs = set(langs) if isinstance(langs, list) else {"rb"}
         groups, _ = group_files(top, files, langs, set(rconf.get("skip") or []))
         blocked = False
         for (lang, root), rels in sorted(groups.items()):
             check = commands_for(lang, root, top, cfg, rconf)["check"]
             if not check:
                 continue
-            status, code, out = run_cmd(fill(check, rels), root, HOOK_TIMEOUT)
+            left = deadline - time.monotonic()
+            if left < 1:
+                print("pr-precheck: out of time, remaining checks skipped, push not blocked", file=sys.stderr)
+                break
+            status, code, out = run_cmd(fill(check, rels), root, left)
             if code == 1:
                 print(f"pr-precheck: {lang} offenses in {root} (fix them before pushing):\n{out.rstrip()}",
                       file=sys.stderr)
