@@ -1,0 +1,619 @@
+#!/usr/bin/env python3
+"""pr-precheck: cheap local checks on a branch's changed files, before the first push.
+
+  pr-precheck fix    [--repo PATH] [--base REF] [--no-tests] [--force] [--config FILE] [--json]
+  pr-precheck report [--repo PATH] [--base REF] [--max-lines N] [--config FILE] [--json]
+  pr-precheck hook   (Claude Code PreToolUse hook, matcher Bash; reads the hook JSON on stdin)
+
+`fix` lints the changed files with autocorrect, then checks them, then runs only the
+tests tied to them (`--no-tests` skips tests). A clean full run writes a stamp in the
+git dir, so a second run on the same tree returns at once (`--force` runs anyway).
+`report` is read-only and advisory: change size, generated files that look stale,
+and outside calls made inside a lock or transaction, plus whether `fix` ran clean.
+`hook` blocks a `git push` (exit 2, offenses on stderr) when a check command finds
+offenses in changed files of the languages in `hook_langs` (default Ruby only). It
+is check-only and fails open: any unexpected error lets the push through.
+
+Changed files are the working tree against the merge base with the base ref
+(default origin/<default branch>), plus untracked files; deleted files are ignored.
+`fix` and `report` never fetch; only `hook` runs `git fetch origin <default>`.
+Every command runs from its project root (the nearest folder with the language's
+marker file), without VIRTUAL_ENV, with a 5-minute timeout. A missing tool is
+reported as skipped, not as a failure.
+
+Config: --config, else $PR_PRECHECK_CONFIG, else ~/.claude/config/pr-precheck.json
+(example: config/pr-precheck.example.json in claude-setup). A missing file means the
+built-in defaults. A language's "fix", "check" or "tests" set at the top level
+(for example {"rb": {"check": "..."}}) or under repos.<repo folder name>.<lang> is a
+full command run as given; {files} becomes the shell-quoted files of that group.
+repos.<name>.tests: "none" turns tests off for that repo, or a command that replaces
+test discovery (run once from the repo top level). repos.<name>.skip lists languages
+to leave out. The repo name is the main checkout's folder name, so worktrees share it.
+Exit status: fix 0 clean, 1 problems left; report 0; hook 0 allow, 2 block; 2 also
+means a usage or config error for fix and report. Standard library only.
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shlex
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
+TIMEOUT = 300
+HOOK_TIMEOUT = 100  # under the hook's 120s limit, so the fail-open note still prints
+# Runner prefixes that do not exit 127 for a missing tool: poetry run ("Command not found: x", exit 1),
+# uv run ("Failed to spawn: `x`", exit 2), npx --no-install (npm 404 or "could not determine executable").
+MISSING_TOOL_RE = re.compile(r"^(Command not found: |error: Failed to spawn: |npm (error|ERR!) (code E404|could not determine executable))", re.M)
+MAX_OUT_LINES = 80
+STAMP_NAME = "pr-precheck.stamp"
+LANGS = ("rb", "py", "ts", "sql", "tf")
+LANG_GLOBS = {
+    "rb": ("*.rb", "*.rake"),
+    "py": ("*.py",),
+    "ts": ("*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"),
+    "sql": ("*.sql",),
+    "tf": ("*.tf",),
+}
+LANG_MARKERS = {"rb": ("Gemfile",), "py": ("pyproject.toml", "setup.cfg"), "ts": ("package.json",),
+                "sql": (".sqlfluff",), "tf": ()}
+TEST_FILE_RE = re.compile(r"(_spec\.rb|_test\.py|\.test\.[^/]+|\.spec\.[^/]+)$|(^|/)test_[^/]*\.py$")
+GENERATED_DEFAULTS = ["**/schema.rb", "**/structure.sql", "**/*.lock", "**/package-lock.json",
+                      "**/pnpm-lock.yaml", "**/yarn.lock", "**/poetry.lock", "**/uv.lock",
+                      "**/__generated__/**", "**/*.generated.*", "**/*.min.js"]
+PAIR_DEFAULTS = [{"when": ["**/db/migrate/*.rb"], "expect": ["**/db/schema.rb", "**/db/structure.sql"],
+                  "hint": "run the migration and commit the schema dump"}]
+LOCK_DEFAULTS = {"rb": [r"\btransaction\s*(do|\{)", r"\bwith_lock\b", r"\block!", r"\bPgLock\b"],
+                 "py": [r"transaction\.atomic", r"select_for_update", r"with\s+.*\block\b"]}
+CALL_DEFAULTS = [r"Faraday", r"Net::HTTP", r"HTTParty", r"RestClient", r"\brequests\.", r"\bhttpx\.",
+                 r"urllib\.request", r"boto3", r"Aws::", r"_client\.", r"Client\.new", r"perform_now",
+                 r"deliver_now", r"\.post\(", r"\.put\("]
+
+
+class UsageError(Exception):
+    pass
+
+
+# ---------- small helpers ----------
+
+def git(top, *args, check=True):
+    p = subprocess.run(["git", *args], cwd=top, capture_output=True, text=True)
+    if check and p.returncode != 0:
+        raise UsageError(f"git {' '.join(args)} failed: {p.stderr.strip()}")
+    return p.stdout
+
+
+def glob_re(pattern):
+    """Glob to regex: ** spans folders, * and ? stay inside one folder."""
+    out, i = "", 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out, i = out + "(?:.*/)?", i + 3
+        elif pattern.startswith("**", i):
+            out, i = out + ".*", i + 2
+        elif pattern[i] == "*":
+            out, i = out + "[^/]*", i + 1
+        elif pattern[i] == "?":
+            out, i = out + "[^/]", i + 1
+        else:
+            out, i = out + re.escape(pattern[i]), i + 1
+    return re.compile(out + r"\Z")
+
+
+def matches(path, patterns):
+    return any(glob_re(p).match(path) for p in patterns)
+
+
+def lang_of(path):
+    name = path.rsplit("/", 1)[-1]
+    for lang, globs in LANG_GLOBS.items():
+        if matches(name, globs):
+            return lang
+    return None
+
+
+def clean_env():
+    env = dict(os.environ)
+    env.pop("VIRTUAL_ENV", None)
+    return env
+
+
+def run_cmd(cmd, cwd, timeout=TIMEOUT):
+    """Run a shell command; return (status, exit code, output). status: ok, failed, skipped."""
+    try:
+        p = subprocess.Popen(cmd, shell=True, cwd=cwd, env=clean_env(), stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                             start_new_session=True)
+        out, _ = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        p.communicate()
+        return "failed: timeout", -1, ""
+    if p.returncode == 0:
+        return "ok", 0, out
+    if p.returncode == 127 or MISSING_TOOL_RE.search(out or ""):
+        first = cmd.split()[0] if cmd.split() else cmd
+        return f"skipped: tool not found ({first})", 127, out
+    return "failed", p.returncode, out
+
+
+def fill(template, files):
+    return template.replace("{files}", " ".join(shlex.quote(f) for f in files))
+
+
+# ---------- config ----------
+
+def load_config(arg):
+    path = Path(arg or os.environ.get("PR_PRECHECK_CONFIG")
+                or Path.home() / ".claude" / "config" / "pr-precheck.json").expanduser()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as e:
+        raise UsageError(f"bad config {path}: {e}")
+    if not isinstance(data, dict):
+        raise UsageError(f"bad config {path}: top level must be a JSON object")
+    return data
+
+
+def repo_key(top):
+    common = git(top, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
+    return Path(common).parent.name
+
+
+def repo_conf(cfg, key):
+    return (cfg.get("repos") or {}).get(key) or {}
+
+
+# ---------- repo and changed files ----------
+
+def toplevel(repo):
+    p = subprocess.run(["git", "-C", repo, "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    if p.returncode != 0:
+        raise UsageError(f"not a git repo: {repo}")
+    return Path(p.stdout.strip())
+
+
+def default_branch(top):
+    out = git(top, "symbolic-ref", "--short", "refs/remotes/origin/HEAD", check=False).strip()
+    return out.split("/", 1)[1] if out.startswith("origin/") else "main"
+
+
+def merge_base(top, base):
+    base = base or f"origin/{default_branch(top)}"
+    return git(top, "merge-base", base, "HEAD").strip()
+
+
+def changed_files(top, mb):
+    tracked = git(top, "diff", "--name-only", "-z", "--diff-filter=ACMR", mb).split("\0")
+    return sorted({f for f in tracked if f} | set(untracked(top)))
+
+
+def untracked(top):
+    return [f for f in git(top, "ls-files", "--others", "--exclude-standard", "-z").split("\0") if f]
+
+
+def tree_hash(top, mb):
+    h = hashlib.sha256(git(top, "diff", "--binary", mb).encode())
+    for f in sorted(untracked(top)):
+        h.update(b"\0" + f.encode() + b"\0")
+        try:
+            h.update((top / f).read_bytes())
+        except OSError:
+            pass
+    return h.hexdigest()
+
+
+def stamp_path(top):
+    return Path(git(top, "rev-parse", "--absolute-git-dir").strip()) / STAMP_NAME
+
+
+def stamp_state(top, mb):
+    """clean: a full run passed on this tree; skipped: a full run had nothing it could check; else not run."""
+    p = stamp_path(top)
+    text = p.read_text().strip() if p.exists() else ""
+    h = tree_hash(top, mb)
+    return "clean" if text == h else "skipped" if text == f"skipped {h}" else "not run"
+
+
+def stamp_matches(top, mb):
+    return stamp_state(top, mb) == "clean"
+
+
+# ---------- language rules ----------
+
+def project_root(top, rel, lang):
+    if lang == "tf":
+        return top
+    d = (top / rel).parent
+    while True:
+        if any((d / m).exists() for m in LANG_MARKERS[lang]):
+            return d
+        if d == top or top not in d.parents:
+            return None
+        d = d.parent
+
+
+def find_up(start, top, name):
+    d = start
+    while True:
+        if (d / name).exists():
+            return True
+        if d == top or top not in d.parents:
+            return False
+        d = d.parent
+
+
+def package_deps(root):
+    try:
+        pkg = json.loads((root / "package.json").read_text())
+    except (OSError, ValueError):
+        return set()
+    return set(pkg.get("dependencies") or {}) | set(pkg.get("devDependencies") or {})
+
+
+def default_commands(lang, root, top):
+    """Built-in fix (list), check and tests commands for one project root."""
+    if lang == "rb":
+        r = "bundle exec "
+        return {"fix": [r + "rubocop -a --force-exclusion {files}"],
+                "check": r + "rubocop --force-exclusion {files}", "tests": r + "rspec {files}"}
+    if lang == "py":
+        try:
+            pyproject = (root / "pyproject.toml").read_text()
+        except OSError:
+            pyproject = ""
+        r = "poetry run " if "[tool.poetry]" in pyproject else "uv run " if (root / "uv.lock").exists() else ""
+        fix = [r + "ruff check --fix {files}"]
+        if "[tool.black]" in pyproject:
+            fix.append(r + "black {files}")
+        elif "[tool.ruff" in pyproject:
+            fix.append(r + "ruff format {files}")
+        return {"fix": fix, "check": r + "ruff check {files}", "tests": r + "pytest {files}"}
+    if lang == "ts":
+        r = ("pnpm exec " if find_up(root, top, "pnpm-lock.yaml")
+             else "yarn " if find_up(root, top, "yarn.lock") else "npx --no-install ")
+        deps = package_deps(root)
+        fix = [r + t for t, name in (("eslint --fix {files}", "eslint"), ("prettier --write {files}", "prettier"))
+               if name in deps]
+        tests = (r + "vitest run {files}" if "vitest" in deps else r + "jest {files}" if "jest" in deps else None)
+        return {"fix": fix, "check": r + "eslint {files}" if "eslint" in deps else None, "tests": tests}
+    if lang == "sql":
+        # sqlfluff 2.0 and later never prompt on `fix` (`--force` is a deprecated no-op there and
+        # gone in later versions), so the plain form is used. stdin is /dev/null for every command,
+        # so an older sqlfluff that does prompt exits instead of hanging.
+        return {"fix": ["sqlfluff fix {files}"], "check": "sqlfluff lint {files}", "tests": None}
+    return {"fix": ["terraform fmt {files}"], "check": "terraform fmt -check {files}", "tests": None}
+
+
+def commands_for(lang, root, top, cfg, rconf):
+    cmds = default_commands(lang, root, top)
+    for layer in (cfg.get(lang) or {}, rconf.get(lang) or {}):
+        for k in ("fix", "check", "tests"):
+            if k in layer:
+                v = layer[k]
+                cmds[k] = ([v] if isinstance(v, str) else list(v or [])) if k == "fix" else v
+    if cmds["tests"] == "none":
+        cmds["tests"] = None
+    return cmds
+
+
+def group_files(top, files, langs, skip):
+    """{(lang, root): [files relative to root]} plus a list of skipped notes."""
+    groups, notes = {}, []
+    for f in files:
+        lang = lang_of(f)
+        if lang is None or lang not in langs or lang in skip or not (top / f).is_file():
+            continue
+        root = project_root(top, f, lang)
+        if root is None:
+            notes.append(f"{f}: no {' or '.join(LANG_MARKERS[lang])} found, not checked")
+            continue
+        groups.setdefault((lang, root), []).append(str((top / f).relative_to(root)))
+    return groups, notes
+
+
+def discover_tests(lang, root, rels):
+    found = [r for r in rels if TEST_FILE_RE.search(r)]
+    for rel in rels:
+        if TEST_FILE_RE.search(rel):
+            continue
+        p = Path(rel)
+        cands = []
+        if lang == "rb" and p.suffix == ".rb":
+            parts = p.with_suffix("").parts
+            if parts[0] == "app" and len(parts) > 1:
+                cands.append(Path("spec", *parts[1:]).as_posix() + "_spec.rb")
+            elif parts[0] == "lib" and len(parts) > 1:
+                cands.append(Path("spec", "lib", *parts[1:]).as_posix() + "_spec.rb")
+                cands.append(Path("spec", *parts[1:]).as_posix() + "_spec.rb")
+        elif lang == "ts":
+            stem, ext = p.name.split(".", 1)[0], p.name.split(".", 1)[-1]
+            cands += [(p.parent / f"{stem}.test.{ext}").as_posix(), (p.parent / f"{stem}.spec.{ext}").as_posix(),
+                      (p.parent / "__tests__" / f"{stem}.test.{ext}").as_posix()]
+        elif lang == "py" and p.stem != "__init__":
+            names = {f"test_{p.stem}.py", f"{p.stem}_test.py"}
+            listed = subprocess.run(["git", "ls-files", "-co", "--exclude-standard"], cwd=root,
+                                    capture_output=True, text=True).stdout.splitlines()
+            cands += [f for f in listed if f.rsplit("/", 1)[-1] in names]
+        found += [c for c in cands if (root / c).is_file()]
+    return sorted(dict.fromkeys(found))
+
+
+# ---------- fix ----------
+
+def cmd_fix(args):
+    cfg = load_config(args.config)
+    top = toplevel(args.repo)
+    mb = merge_base(top, args.base)
+    full = not args.no_tests
+    if full and not args.force and stamp_matches(top, mb):
+        if args.json:
+            print(json.dumps({"lint": [], "tests": [], "skipped": [], "remaining": [], "already_clean": True}))
+        else:
+            print("pr-precheck: already clean for this tree")
+        return 0
+    rconf = repo_conf(cfg, repo_key(top))
+    groups, notes = group_files(top, changed_files(top, mb), LANGS, set(rconf.get("skip") or []))
+    result = {"lint": [], "tests": [], "skipped": list(notes), "remaining": []}
+    passed = []
+
+    def run(kind, cmd, cwd, label):
+        status, code, out = run_cmd(cmd, cwd)
+        if status == "ok" and label != "fix":
+            passed.append(cmd)
+        entry = {"cmd": cmd, "dir": str(cwd), "status": status}
+        result[kind].append(entry)
+        if status.startswith("skipped"):
+            result["skipped"].append(f"{label}: {status}")
+        elif status != "ok" and label != "fix":
+            result["remaining"].append(f"== {cmd} (in {cwd}): {status}\n{out.rstrip()}")
+        return status
+
+    for (lang, root), rels in sorted(groups.items()):
+        cmds = commands_for(lang, root, top, cfg, rconf)
+        for c in cmds["fix"]:
+            run("lint", fill(c, rels), root, "fix")
+        if cmds["check"]:
+            run("lint", fill(cmds["check"], rels), root, "check")
+
+    repo_tests = rconf.get("tests")
+    if full and repo_tests != "none":
+        if isinstance(repo_tests, str) and repo_tests:
+            files = sorted(str(root.joinpath(r).relative_to(top)) for (_, root), rs in groups.items() for r in rs)
+            if files:
+                run("tests", fill(repo_tests, files), top, "tests")
+        else:
+            for (lang, root), rels in sorted(groups.items()):
+                tmpl = commands_for(lang, root, top, cfg, rconf)["tests"]
+                tests = discover_tests(lang, root, rels) if tmpl else []
+                if tmpl and tests:
+                    run("tests", fill(tmpl, tests), root, "tests")
+                elif tmpl:
+                    result["skipped"].append(f"tests ({lang} in {root}): no tests tied to the changed files")
+
+    code = 1 if result["remaining"] else 0
+    if full and code == 0:  # stamp "clean" only when a check or test really ran and passed
+        stamp_path(top).write_text(("" if passed else "skipped ") + tree_hash(top, mb) + "\n")
+    if args.json:
+        print(json.dumps(result))
+        return code
+    for kind in ("lint", "tests"):
+        for e in result[kind]:
+            print(f"{e['status']}: {e['cmd']} (in {e['dir']})")
+    for s in result["skipped"]:
+        print(f"skipped: {s}")
+    if result["remaining"]:
+        lines = "\n".join(result["remaining"]).splitlines()
+        print("\nLeft to fix:")
+        print("\n".join(lines[:MAX_OUT_LINES]))
+        if len(lines) > MAX_OUT_LINES:
+            print(f"... {len(lines) - MAX_OUT_LINES} more lines")
+    elif passed:
+        print("pr-precheck: clean")
+    else:
+        print("pr-precheck: nothing checked (every check was skipped)")
+    return code
+
+
+# ---------- report ----------
+
+def generated_files(top, files, cfg):
+    globs = GENERATED_DEFAULTS + list(cfg.get("generated") or [])
+    gen = {f for f in files if matches(f, globs)}
+    rest = [f for f in files if f not in gen]
+    if rest:
+        out = subprocess.run(["git", "check-attr", "linguist-generated", "--", *rest], cwd=top,
+                             capture_output=True, text=True).stdout
+        for line in out.splitlines():
+            path, _, value = line.rpartition(": ")
+            if value.strip() in ("set", "true"):
+                gen.add(path.rsplit(": linguist-generated", 1)[0])
+    return gen
+
+
+def size_of(top, mb, files, gen):
+    n = 0
+    for line in git(top, "diff", "--numstat", mb).splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) == 3 and parts[2] not in gen:
+            n += sum(int(x) for x in parts[:2] if x.isdigit())
+    for f in untracked(top):
+        if f not in gen:
+            try:
+                n += len((top / f).read_bytes().splitlines())
+            except OSError:
+                pass
+    return n
+
+
+def stale_pairs(files, cfg):
+    out = []
+    for rule in PAIR_DEFAULTS + list(cfg.get("generated_pairs") or []):
+        trigger = next((f for f in files if matches(f, rule.get("when") or [])), None)
+        expect = rule.get("expect") or []
+        if trigger and not any(matches(f, expect) for f in files):
+            out.append(f"stale generated file? {' or '.join(expect)} (because {trigger} changed): "
+                       f"{rule.get('hint', '')}")
+    return out
+
+
+def indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def lock_hits(top, files, cfg):
+    calls = [re.compile(p) for p in CALL_DEFAULTS + list(cfg.get("external_call_patterns") or [])]
+    extra = list(cfg.get("lock_patterns") or [])
+    hits = []
+    for f in files:
+        if TEST_FILE_RE.search(f):
+            continue  # test fixtures often hold lock and call text on purpose
+        lang = "rb" if f.endswith(".rb") else "py" if f.endswith(".py") else None
+        if not lang or not (top / f).is_file():
+            continue
+        try:
+            lines = (top / f).read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        openers = [re.compile(p) for p in LOCK_DEFAULTS[lang] + extra]
+        seen = set()
+        for i, line in enumerate(lines):
+            if not any(o.search(line) for o in openers):
+                continue
+            base = indent(line)
+            for j in range(i + 1, len(lines)):
+                body = lines[j]
+                s = body.strip()
+                if lang == "rb" and (s.startswith("end") or s.startswith("}")) and indent(body) <= base:
+                    break
+                if lang == "py" and s and indent(body) <= base:
+                    break
+                if j not in seen and any(c.search(body) for c in calls):
+                    seen.add(j)
+                    hits.append(f"inside lock: {f}:{i + 1} {line.strip()} -> {f}:{j + 1} {s}")
+    return hits
+
+
+def cmd_report(args):
+    cfg = load_config(args.config)
+    top = toplevel(args.repo)
+    mb = merge_base(top, args.base)
+    files = changed_files(top, mb)
+    gen = generated_files(top, files, cfg)
+    try:
+        limit = args.max_lines or int(cfg.get("max_lines") or 500)
+    except (TypeError, ValueError):
+        raise UsageError(f"max_lines in the config must be a whole number, got {cfg.get('max_lines')!r}")
+    n = size_of(top, mb, files, gen)
+    data = {"size": {"changed_lines": n, "limit": limit, "over": n > limit, "generated_left_out": len(gen)},
+            "stale_generated": stale_pairs(files, cfg), "inside_lock": lock_hits(top, files, cfg),
+            "precheck": stamp_state(top, mb)}
+    if args.json:
+        print(json.dumps(data))
+        return 0
+    print(f"size: {n} changed lines, limit {limit} ({len(gen)} generated files left out)"
+          + (" OVER" if n > limit else ""))
+    for line in data["stale_generated"] + data["inside_lock"]:
+        print(line)
+    print({"clean": "precheck: clean for this tree",
+           "skipped": "precheck: skipped on this tree (no check could run)"}.get(data["precheck"],
+                                                                           "precheck: not run on this tree"))
+    return 0
+
+
+# ---------- hook ----------
+
+PUSH_RE = re.compile(r"git( +-C +[^ ]+)? +push")
+
+
+def hook_repo(cmd, cwd):
+    m = re.search(r"git +-C +([^ ;&|]+) +push", cmd)
+    if not m:
+        m = re.search(r"cd +([^ ;&|]+) *(&&|;).*git +push", cmd)
+    repo = m.group(1).strip("\"'") if m else ""
+    if repo.startswith("~"):
+        repo = str(Path(repo).expanduser())
+    if repo and not repo.startswith("/") and cwd:
+        repo = os.path.join(cwd, repo)
+    return repo or cwd
+
+
+def cmd_hook():
+    try:
+        data = json.loads(sys.stdin.read())
+        cmd = (data.get("tool_input") or {}).get("command") or ""
+        if not PUSH_RE.search(cmd):
+            return 0
+        repo = hook_repo(cmd, data.get("cwd") or "")
+        if not repo or not os.path.isdir(repo):
+            return 0
+        top = toplevel(repo)
+        cfg = load_config(None)
+        branch = default_branch(top)
+        if subprocess.run(["git", "fetch", "--quiet", "origin", branch], cwd=top,
+                          capture_output=True).returncode != 0:
+            print(f"pr-precheck: could not fetch origin {branch}, skipping checks", file=sys.stderr)
+            return 0
+        files = [f for f in git(top, "diff", "--name-only", "-z", "--diff-filter=ACMR",
+                                f"origin/{branch}...HEAD").split("\0") if f]
+        rconf = repo_conf(cfg, repo_key(top))
+        langs = set(cfg.get("hook_langs") or ["rb"])
+        groups, _ = group_files(top, files, langs, set(rconf.get("skip") or []))
+        blocked = False
+        for (lang, root), rels in sorted(groups.items()):
+            check = commands_for(lang, root, top, cfg, rconf)["check"]
+            if not check:
+                continue
+            status, code, out = run_cmd(fill(check, rels), root, HOOK_TIMEOUT)
+            if code == 1:
+                print(f"pr-precheck: {lang} offenses in {root} (fix them before pushing):\n{out.rstrip()}",
+                      file=sys.stderr)
+                blocked = True
+            elif code != 0:
+                tail = "\n".join(out.rstrip().splitlines()[-5:])
+                print(f"pr-precheck: {lang} check could not run in {root} ({status}), push not blocked"
+                      + (f":\n{tail}" if tail else ""), file=sys.stderr)
+        return 2 if blocked else 0
+    except Exception as e:  # fail open: never block a push on our own error
+        print(f"pr-precheck: hook error, push not blocked: {e}", file=sys.stderr)
+        return 0
+
+
+# ---------- main ----------
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="pr-precheck", description="Lint, test and review checks on changed files.")
+    sub = ap.add_subparsers(dest="mode", required=True)
+    for name in ("fix", "report"):
+        p = sub.add_parser(name)
+        p.add_argument("--repo", default=".")
+        p.add_argument("--base")
+        p.add_argument("--config")
+        p.add_argument("--json", action="store_true")
+        if name == "fix":
+            p.add_argument("--no-tests", action="store_true")
+            p.add_argument("--force", action="store_true")
+        else:
+            p.add_argument("--max-lines", type=int)
+    sub.add_parser("hook")
+    args = ap.parse_args(argv)
+    if args.mode == "hook":
+        return cmd_hook()
+    try:
+        return cmd_fix(args) if args.mode == "fix" else cmd_report(args)
+    except UsageError as e:
+        print(f"pr-precheck: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

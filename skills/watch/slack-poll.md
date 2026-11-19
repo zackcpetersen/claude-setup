@@ -10,7 +10,7 @@ Rules for editing this file:
 
 | Placeholder | Source |
 |---|---|
-| `{{slack_user_id}}` | `Slack user id` line of `### Work board` |
+| `{{slack_user_id}}` | `Slack user id` line of `~/.claude/config/board.md` (older installs: `### Work board` in CLAUDE.md) |
 | `{{after}}`, `{{after_iso}}` | the state file cursor minus 60 seconds (first run: 15 minutes ago), as Unix time and as a readable time |
 | `{{triggers}}` | `Slack poll triggers` line, plus `thread-replies-mpim` when group DMs are filtered and `thread-replies` is off |
 | `{{user_groups}}` | `Slack poll user groups` line |
@@ -64,8 +64,9 @@ For each kept message, fill one event:
 - kind: from the recipe.
 - text: the message text, cut to 500 characters.
 - permalink: the permalink URL.
+- hint: one word. "ack" for thanks, ok, sign-offs or emoji-like replies with no request; "bot" for a post by a bot or app; "fyi" for news or information with no question or request for the user; "ask" for a question or request the user may need to act on. When unsure, use "ask".
 
 Answer with ONLY one JSON object and nothing else, no prose and no code fence:
-{"events":[{"channel_id":"","channel_name":"","ts":"","thread_ts":null,"author":"","author_id":"","kind":"","text":"","permalink":""}],"user_active_mpims":[],"user_first_name":""}
+{"events":[{"channel_id":"","channel_name":"","ts":"","thread_ts":null,"author":"","author_id":"","kind":"","text":"","permalink":"","hint":""}],"user_active_mpims":[],"user_first_name":""}
 With nothing found, answer exactly: {"events":[],"user_active_mpims":[],"user_first_name":""}
 ```

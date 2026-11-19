@@ -16,7 +16,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-DEFAULT_CONFIG = "~/.claude/CLAUDE.md"
+CONFIG_BOUNDARY = "## (file boundary)"  # put between config files, so a section never runs across files
 DEFAULT_EVERY = "5m"
 DEFAULT_MAX = {"pr": "3d", "deploy": "4h", "dagster": "12h", "slack": "12h"}
 MAX_ERRORS = 3
@@ -45,6 +45,7 @@ SLACK_GROUP_DM_MODES = ("aimed-only", "all")
 SLACK_GROUP_DM_LOOKBACK = "60m"  # the user posted in a group DM this recently: they are in the conversation
 SLACK_HELD_KEEP = timedelta(days=14)  # held group DM lines older than this are dropped on the next append
 SLACK_HELD_TAIL = 200  # lines checked for a duplicate key before appending
+SLACK_QUIET_HINTS = ("ack", "bot", "fyi")  # hints the `Slack poll quiet` line may list; also its default
 _warned = set()
 SLACK_READ_TOOLS = ("slack_search_public_and_private", "slack_search_public", "slack_read_thread", "slack_read_channel",
                     "slack_read_user_profile", "slack_search_users", "slack_search_channels")
@@ -101,6 +102,15 @@ def _is_unset(value):
     return value == "" or (value.startswith("<") and value.endswith(">"))
 
 
+def _has_placeholder(value):
+    return bool(re.search(r"<[^<>]*>", value))
+
+
+def _where(src, name):
+    """Where a section was read from, for error messages."""
+    return f"of {src}" if src else f"(~/.claude/config/{name}.md or ~/.claude/CLAUDE.md)"
+
+
 def _field(value, line, path):
     """Unwrap one `<...>` field. A field that still holds `<` or `>` is an unfilled template placeholder."""
     value = value.strip()
@@ -108,7 +118,7 @@ def _field(value, line, path):
         value = value[1:-1].strip()
     if "<" in value or ">" in value or not value:
         raise WaitError(
-            f"the `{line}` line in the ### Watches section of {path} still has a template placeholder "
+            f"the `{line}` line in the ### Watches section {_where(path, 'watch')} still has a template placeholder "
             f"({value!r}); fill it in or delete the line"
         )
     return value
@@ -138,6 +148,8 @@ def _read_section(lines, heading):
             last_key = top.group(1).strip()
             value = _clean(top.group(2))
             if value and (last_key in ("Dagster", "Connectors") or not _is_unset(value)):
+                if _has_placeholder(value) and last_key in values and not _has_placeholder(values[last_key]):
+                    continue  # a placeholder never hides a real value read earlier
                 values[last_key] = value
             continue
         sub = re.match(r"^\s+- ([^:]+?):\s*(.*)$", line)
@@ -152,13 +164,37 @@ def _expand(path):
     return str(Path(path).expanduser())
 
 
-def load_config(path):
+def config_lines(path_arg):
+    """Return (lines, explicit path or None).
+
+    `--config` or WAIT_FOR_CONFIG names one file, read alone. Otherwise read ~/.claude/CLAUDE.md, then each
+    ~/.claude/config/*.md in name order, with a boundary heading before each file. Missing files are skipped.
+    _read_section keeps the last real value per key, so a value in ~/.claude/config/ wins over CLAUDE.md.
+    """
+    explicit = path_arg or os.environ.get("WAIT_FOR_CONFIG")
+    if explicit:
+        path = Path(explicit).expanduser()
+        try:
+            return path.read_text().splitlines(), path
+        except OSError as e:
+            raise WaitError(f"cannot read config {path}: {e.strerror}")
+    home = Path.home() / ".claude"
+    lines, read = [], 0
+    for f in [home / "CLAUDE.md"] + sorted((home / "config").glob("*.md")):
+        try:
+            text = f.read_text()
+        except OSError:
+            continue
+        lines += [CONFIG_BOUNDARY] + text.splitlines()
+        read += 1
+    if not read:
+        raise WaitError(f"cannot read config: no {home / 'CLAUDE.md'} and no {home / 'config'}/*.md")
+    return lines, None
+
+
+def load_config(path=None):
     """Read the kept lines of the `### Watches` section: Dagster and Deploy rules."""
-    path = Path(path).expanduser()
-    try:
-        lines = path.read_text().splitlines()
-    except OSError as e:
-        raise WaitError(f"cannot read config {path}: {e.strerror}")
+    lines, path = config_lines(path)
     watches, rules = _read_section(lines, "Watches")
 
     dagster = None
@@ -176,23 +212,19 @@ def _split_list(text):
     return [w.strip() for w in re.split(r"[,\n]", text or "") if w.strip()]
 
 
-def load_slack_config(path):
+def load_slack_config(path=None):
     """Read the `Slack poll` lines of `### Watches` and the Slack user id from `### Work board`."""
-    path = Path(path).expanduser()
-    try:
-        lines = path.read_text().splitlines()
-    except OSError as e:
-        raise WaitError(f"cannot read config {path}: {e.strerror}")
+    lines, path = config_lines(path)
     watches, _ = _read_section(lines, "Watches")
     board, _ = _read_section(lines, "Work board")
     if watches.get("Slack poll", "").lower() != "on":
-        raise WaitError(f"Slack poll is not on; set `- Slack poll: on` in the ### Watches section of {path}")
+        raise WaitError(f"Slack poll is not on; set `- Slack poll: on` in the ### Watches section {_where(path, 'watch')}")
     user = board.get("Slack user id", "")
     if not re.fullmatch(r"[UW][A-Z0-9]{2,}", user):
-        raise WaitError(f"no Slack user id in the ### Work board section of {path}")
+        raise WaitError(f"no Slack user id in the ### Work board section {_where(path, 'board')}")
     conn = re.search(r"slack\s+(\S+)", watches.get("Connectors", ""))
     if not conn or _is_unset(conn.group(1)):
-        raise WaitError(f"no slack prefix on the Connectors line in the ### Watches section of {path}")
+        raise WaitError(f"no slack prefix on the Connectors line in the ### Watches section {_where(path, 'watch')}")
     triggers = [t.lower() for t in _split_list(watches.get("Slack poll triggers"))] or list(SLACK_DEFAULT_TRIGGERS)
     bad = [t for t in triggers if t not in SLACK_TRIGGERS]
     if bad:
@@ -205,6 +237,12 @@ def load_slack_config(path):
         raise WaitError(f"unknown `Slack poll group-dms` value {group_dms}; known: {', '.join(SLACK_GROUP_DM_MODES)}")
     name = watches.get("Slack poll user name", "")
     lookback = parse_duration(watches.get("Slack poll group-dms lookback") or SLACK_GROUP_DM_LOOKBACK)
+    quiet_line = watches.get("Slack poll quiet")
+    quiet = [] if (quiet_line or "").lower() == "none" else (
+        [w.lower() for w in _split_list(quiet_line)] if quiet_line else list(SLACK_QUIET_HINTS))
+    bad = [w for w in quiet if w not in SLACK_QUIET_HINTS]
+    if bad:
+        raise WaitError(f"unknown `Slack poll quiet` word {', '.join(bad)}; known: {', '.join(SLACK_QUIET_HINTS)}, or none")
     return {
         "user": user,
         "prefix": conn.group(1),
@@ -218,6 +256,7 @@ def load_slack_config(path):
         "group_dms": group_dms,
         "user_name": "" if _is_unset(name) else name.split()[0],
         "group_dm_lookback": lookback,
+        "quiet": quiet,
     }
 
 
@@ -589,8 +628,14 @@ def held_path(state_file):
     return state_file.with_name(state_file.stem + "-held.jsonl")
 
 
-def append_held(path, events, now):
-    """Add held events to the held file, once each, and drop lines older than SLACK_HELD_KEEP. Atomic rewrite."""
+def digest_path(state_file):
+    state_file = Path(state_file)
+    return state_file.with_name(state_file.stem + "-digest.jsonl")
+
+
+def append_held(path, events, now, stamp="held_at"):
+    """Add events to a JSONL file (held or digest), once each, with a `stamp` time, and drop lines older than
+    SLACK_HELD_KEEP. Atomic rewrite."""
     path = Path(path)
     cutoff = (now - SLACK_HELD_KEEP).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
@@ -603,13 +648,13 @@ def append_held(path, events, now):
             item = json.loads(line)
         except ValueError:
             continue
-        if isinstance(item, dict) and str(item.get("held_at") or "") >= cutoff:
+        if isinstance(item, dict) and str(item.get(stamp) or "") >= cutoff:
             kept.append(item)
     tail = {f"{h.get('channel_id')}:{h.get('ts')}" for h in kept[-SLACK_HELD_TAIL:]}
-    held_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     for e in events:
         if f"{e['channel_id']}:{e['ts']}" not in tail:
-            kept.append({**e, "held_at": held_at})
+            kept.append({**e, stamp: at})
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text("".join(json.dumps(h) + "\n" for h in kept))
@@ -670,7 +715,7 @@ def poll_slack(cfg, since=None):
         else:
             warn_once("user-name", "slack user-name: could not read your first name from your Slack profile, so group "
                       "DM messages are not matched by name; set `Slack poll user name:` in the ### Watches section")
-    fresh, held = [], []
+    fresh, held, quiet = [], [], []
     for e in parse_events(data):
         key = f"{e['channel_id']}:{e['ts']}"
         names = {str(e.get(k) or "").lstrip("#@").lower() for k in ("channel_id", "channel_name", "author_id", "author")}
@@ -680,9 +725,11 @@ def poll_slack(cfg, since=None):
         e["text"] = str(e.get("text") or "")[:SLACK_TEXT_CAP]
         if filtering and e.get("kind") == "group-dm" and not aimed_at_user(e, cfg, name, active):
             held.append(e)
+        elif str(e.get("hint") or "").lower() in cfg.get("quiet", ()):  # a missing or unknown hint wakes
+            quiet.append(e)
         else:
             fresh.append(e)
-    new_seen = (state["seen"] + [f"{e['channel_id']}:{e['ts']}" for e in fresh + held])[-SLACK_SEEN_CAP:]
+    new_seen = (state["seen"] + [f"{e['channel_id']}:{e['ts']}" for e in fresh + held + quiet])[-SLACK_SEEN_CAP:]
     line = None
     if fresh:
         out = events_dir / (started.strftime("%Y%m%dT%H%M%SZ") + ".json")
@@ -693,6 +740,8 @@ def poll_slack(cfg, since=None):
                             "user_name": cached})
     if held:  # after the state file, so a failure here never holds a message twice
         append_held(held_path(state_file), held, started)
+    if quiet:
+        append_held(digest_path(state_file), quiet, started, "quiet_at")
     return line
 
 
@@ -731,7 +780,8 @@ def wait_loop(poll, what, every, max_wait, secrets=()):
 
 def build_parser():
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--config", default=os.environ.get("WAIT_FOR_CONFIG", DEFAULT_CONFIG), help="CLAUDE.md with the ### Watches section")
+    common.add_argument("--config", default=None,
+                        help="config file to read instead of ~/.claude/CLAUDE.md plus ~/.claude/config/*.md")
     common.add_argument("--every", default=None, help="poll interval, like 5m (default 5m)")
     common.add_argument("--max", dest="max_wait", default=None,
                         help="give up after this long (pr 3d, deploy 4h, dagster 12h, slack 12h)")

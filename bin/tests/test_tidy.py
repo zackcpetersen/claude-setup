@@ -206,6 +206,21 @@ class TestConfig(Base):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(json.loads(out.stdout)["mode"], "stale")
 
+    def test_split_config_files_are_read_without_config_flag(self):
+        (self.claude / "CLAUDE.md").write_text("## Handoffs\n- Handoff folder: ~/handoffs/\n")
+        (self.claude / "config").mkdir()
+        (self.claude / "config" / "tidy.md").write_text("# Tidy config\n\n### Tidy (`tidy` skill)\n- Plan age: 3\n")
+        (self.claude / "config" / "board.md").write_text("### Work board\n- Memory dir: ~/memory/\n")
+        cfg = T.load_config(None, self.home)
+        self.assertTrue(cfg["enabled"])
+        self.assertEqual(cfg["ages"]["Plan age"], 3)
+        self.assertEqual((cfg["memory_dir"], cfg["handoffs"]), (self.home / "memory", self.home / "handoffs"))
+
+    def test_config_flag_reads_only_the_given_file(self):
+        (self.claude / "config").mkdir()
+        (self.claude / "config" / "tidy.md").write_text("### Tidy\n- Plan age: 3\n")
+        self.assertEqual(T.load_config(self.config, self.home)["ages"]["Plan age"], 14)
+
 
 class TestMergedRule(Base):
     def test_merged_by_ancestry_is_tier1(self):
