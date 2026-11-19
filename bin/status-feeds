@@ -1,0 +1,568 @@
+#!/usr/bin/env python3
+"""status-feeds: refresh the status page's GitHub and Slack feed files. No model in the loop.
+
+  status-feeds run [--only github|slack] [--home DIR] [--config PATH] [--force] [--now ISO]
+  status-feeds doctor [--home DIR] [--config PATH]
+  status-feeds schedule --print launchd|cron [--home DIR] [--config PATH]
+
+--home defaults to ~/.claude/project-status and --config to <home>/config.json.
+`run` writes <home>/feeds/github.json and <home>/feeds/slack.json (raw facts; the project-status
+skill's derive.py turns them into inbox items). It does nothing outside config `feeds.hours` and
+`feeds.days` unless --force, so a plain interval schedule is enough. Exit 0 when every requested
+feed is ok, 1 when a feed failed (its file still says so), 2 on a usage or config problem.
+`schedule --print` only prints a launchd plist or a cron line; it never installs anything.
+Standard library only. See skills/project-status/SKILL.md.
+"""
+
+import argparse
+import fcntl
+import json
+import os
+import plistlib
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    ZoneInfo = None
+
+DEFAULT_HOME = "~/.claude/project-status"
+CMD_TIMEOUT = 60
+VERSION = 1
+LABEL = "com.claude-setup.status-feeds"
+# Copy of the shared keys in skills/project-status/derive.py DEFAULTS (this script is installed
+# on its own and cannot import from the skill folder). A test checks the two copies match.
+DEFAULTS = {
+    "tz": "",
+    "inbox": {
+        "cap": 7,
+        "home_count": 3,
+        "stale_days": 7,
+        "github_orgs": [],
+        "review_teams": [],
+        "slack_triage_log": "~/.claude/slack-poll-triage.jsonl",
+        "slack_lookback_days": 3,
+        "slack_url": "",
+        "effort_defaults": {},
+    },
+    "feeds": {"every_minutes": 15, "hours": "08:00-18:00", "days": "Mon-Fri"},
+}
+GITHUB_DATA = ("login", "orgs", "rate", "truncated", "my_prs", "review_requests", "merged_recent")
+SLACK_DATA = ("asks", "cleared", "skipped_lines")
+CLEARING = ("now", "skip", "handled")
+DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+PR_MINE = (
+    "number title url isDraft createdAt updatedAt reviewDecision mergeable mergeStateStatus additions deletions "
+    "repository{nameWithOwner} reviewThreads(first:100){nodes{isResolved}} "
+    "commits(last:1){nodes{commit{statusCheckRollup{state}}}}"
+)
+PR_ASK = (
+    "number title url createdAt additions deletions author{login} repository{nameWithOwner} "
+    "timelineItems(itemTypes:[REVIEW_REQUESTED_EVENT], last:10){nodes{... on ReviewRequestedEvent"
+    "{createdAt requestedReviewer{... on User{login} ... on Team{combinedSlug}}}}}"
+)
+PR_MERGED = "number title url mergedAt repository{nameWithOwner}"
+
+NOW = lambda: datetime.now(timezone.utc)
+WHICH = shutil.which
+
+
+class FeedError(Exception):
+    """One feed failed. The message is one line, safe to write into the feed file."""
+
+
+class UsageError(Exception):
+    """A usage or config problem. Exit 2."""
+
+
+def run_cmd(args):
+    return subprocess.run(args, capture_output=True, text=True, timeout=CMD_TIMEOUT, check=True).stdout
+
+
+# ---------- config and time ----------
+
+def load_config(path):
+    p = Path(path).expanduser()
+    if not p.exists():
+        return {}
+    try:
+        cfg = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        raise UsageError(f"cannot read config {p}: {e}")
+    if not isinstance(cfg, dict):
+        raise UsageError(f"config {p} is not a JSON object")
+    return cfg
+
+
+def settings(cfg):
+    out = json.loads(json.dumps(DEFAULTS))
+    for k, v in (cfg or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k].update(v)
+        else:
+            out[k] = v
+    return out
+
+
+def local_tz(name):
+    if name and ZoneInfo is not None:
+        try:
+            return ZoneInfo(name)
+        except Exception:
+            pass
+    return datetime.now().astimezone().tzinfo
+
+
+def tz_valid(name):
+    if not name:
+        return True
+    try:
+        ZoneInfo(name)
+        return True
+    except Exception:
+        return False
+
+
+def parse_time(value):
+    """Lenient ISO time: 'Z' or an offset, with or without seconds. Naive means UTC."""
+    if not value or not isinstance(value, str):
+        return None
+    t = value.strip()
+    if t[-1:] in ("Z", "z"):
+        t = t[:-1] + "+00:00"
+    try:
+        d = datetime.fromisoformat(t)
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def iso(d):
+    return d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_hours(text):
+    m = re.fullmatch(r"\s*(\d\d?):(\d\d)\s*-\s*(\d\d?):(\d\d)\s*", str(text or ""))
+    if not m:
+        return time(0, 0), time(23, 59, 59)
+    return time(int(m.group(1)), int(m.group(2))), time(int(m.group(3)), int(m.group(4)))
+
+
+def parse_days(text):
+    out = set()
+    for part in str(text or "Mon-Sun").lower().replace(" ", "").split(","):
+        if "-" in part:
+            a, b = part.split("-", 1)
+            if a[:3] in DAY_NAMES and b[:3] in DAY_NAMES:
+                k, j = DAY_NAMES.index(a[:3]), DAY_NAMES.index(b[:3])
+                while True:
+                    out.add(k)
+                    if k == j:
+                        break
+                    k = (k + 1) % 7
+        elif part[:3] in DAY_NAMES:
+            out.add(DAY_NAMES.index(part[:3]))
+    return out or set(range(7))
+
+
+def in_hours(now, conf, tz):
+    local = now.astimezone(tz)
+    h0, h1 = parse_hours(conf["feeds"].get("hours"))
+    return local.weekday() in parse_days(conf["feeds"].get("days")) and h0 <= local.time() <= h1
+
+
+def org_list(conf):
+    orgs = conf["inbox"].get("github_orgs") or []
+    if not orgs:
+        org = conf.get("github_org") or ""
+        if org and "FILL-IN" not in org:
+            orgs = [org]
+    return [o for o in orgs if o]
+
+
+# ---------- files ----------
+
+def write_json(path, obj):
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=1) + "\n")
+    os.replace(tmp, path)
+
+
+def read_json(path):
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def finish_feed(path, source, data_keys, now, data=None, error=None):
+    """Write one feed file. On error, keep the previous good data and its last_ok_at."""
+    head = {"source": source, "version": VERSION, "generated_at": iso(now), "ok": error is None, "error": None,
+            "last_ok_at": None}
+    if error is None:
+        head["last_ok_at"] = iso(now)
+        head.update(data)
+    else:
+        prev = read_json(path) or {}
+        head["error"] = error
+        head["last_ok_at"] = prev.get("last_ok_at")
+        for k in data_keys:
+            if k in prev:
+                head[k] = prev[k]
+    write_json(path, head)
+    return head
+
+
+# ---------- GitHub ----------
+
+def gh_json(args):
+    try:
+        out = run_cmd(args)
+    except FileNotFoundError:
+        raise FeedError("gh is not installed or not on PATH")
+    except subprocess.TimeoutExpired:
+        raise FeedError(f"gh timed out after {CMD_TIMEOUT}s")
+    except subprocess.CalledProcessError as e:
+        msg = _gql_errors(e.output) or (str(e.stderr or "").strip().splitlines() or ["gh failed"])[0]
+        raise FeedError(f"gh exited {e.returncode}: {msg[:200]}")
+    return out
+
+
+def _gql_errors(text):
+    try:
+        body = json.loads(text or "")
+    except ValueError:
+        return ""
+    errs = body.get("errors") if isinstance(body, dict) else None
+    if not errs:
+        return ""
+    return "GraphQL error: " + "; ".join(str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in errs)
+
+
+def search(alias, query, fields):
+    return f"{alias}: search(query: {json.dumps(query)}, type: ISSUE, first: 50) {{ issueCount nodes {{ ... on PullRequest {{ {fields} }} }} }}"
+
+
+def build_query(orgs, teams, monday):
+    org_q = "".join(f" org:{o}" for o in orgs)
+    parts = [
+        search("mine", f"is:pr is:open author:@me archived:false{org_q}", PR_MINE),
+        search("asks", f"is:pr is:open -is:draft user-review-requested:@me archived:false{org_q}", PR_ASK),
+    ]
+    for n, team in enumerate(teams):
+        parts.append(search(f"team_{n}", f"is:pr is:open -is:draft team-review-requested:{team} archived:false", PR_ASK))
+    parts.append(search("merged", f"is:pr is:merged author:@me merged:>={monday.isoformat()}{org_q}", PR_MERGED))
+    parts.append("rateLimit { cost remaining resetAt }")
+    return "query { " + " ".join(parts) + " }"
+
+
+def _repo(node):
+    return ((node.get("repository") or {}).get("nameWithOwner")) or ""
+
+
+def requested_at(node, who, team=False):
+    """Newest review-request event for this login (or team slug), else the PR's createdAt."""
+    best = None
+    for ev in ((node.get("timelineItems") or {}).get("nodes") or []):
+        r = (ev or {}).get("requestedReviewer") or {}
+        if (r.get("combinedSlug") if team else r.get("login")) == who and ev.get("createdAt"):
+            if best is None or parse_time(ev["createdAt"]) > parse_time(best):
+                best = ev["createdAt"]
+    return best or node.get("createdAt")
+
+
+def normalize(data, login, teams):
+    my_prs = []
+    for n in ((data.get("mine") or {}).get("nodes") or []):
+        if not n:
+            continue
+        threads = ((n.get("reviewThreads") or {}).get("nodes") or [])
+        commits = ((n.get("commits") or {}).get("nodes") or [])
+        roll = ((commits[0] or {}).get("commit") or {}).get("statusCheckRollup") if commits else None
+        my_prs.append({
+            "repo": _repo(n), "number": n.get("number"), "title": n.get("title") or "", "url": n.get("url") or "",
+            "draft": bool(n.get("isDraft")), "created_at": n.get("createdAt"), "updated_at": n.get("updatedAt"),
+            "review_decision": n.get("reviewDecision"), "mergeable": n.get("mergeable"),
+            "merge_state": n.get("mergeStateStatus"), "ci": (roll or {}).get("state"),
+            "unresolved_threads": sum(1 for t in threads if t and not t.get("isResolved")),
+            "additions": n.get("additions") or 0, "deletions": n.get("deletions") or 0,
+        })
+    reqs = {}
+
+    def take(nodes, via, who, team):
+        for n in nodes or []:
+            if not n or not n.get("url"):
+                continue
+            author = (n.get("author") or {}).get("login") or ""
+            if author and author == login:
+                continue
+            if n["url"] in reqs:
+                continue  # the user search runs first, so a PR found by both keeps "user"
+            reqs[n["url"]] = {
+                "repo": _repo(n), "number": n.get("number"), "title": n.get("title") or "", "url": n["url"],
+                "author": author, "requested_at": requested_at(n, who, team), "created_at": n.get("createdAt"),
+                "additions": n.get("additions") or 0, "deletions": n.get("deletions") or 0, "via": via,
+            }
+
+    take((data.get("asks") or {}).get("nodes"), "user", login, False)
+    for i, team in enumerate(teams):
+        take((data.get(f"team_{i}") or {}).get("nodes"), f"team:{team}", team, True)
+    merged = [{"repo": _repo(n), "number": n.get("number"), "title": n.get("title") or "", "url": n.get("url") or "",
+               "merged_at": n.get("mergedAt")} for n in ((data.get("merged") or {}).get("nodes") or []) if n]
+    truncated = any((data.get(k) or {}).get("issueCount", 0) > len((data.get(k) or {}).get("nodes") or [])
+                    for k in data if k != "rateLimit")
+    rate = data.get("rateLimit") or {}
+    return {"my_prs": my_prs, "review_requests": list(reqs.values()), "merged_recent": merged,
+            "truncated": truncated, "rate": {"cost": rate.get("cost"), "remaining": rate.get("remaining")}}
+
+
+def github_feed(conf, now, tz):
+    login = gh_json(["gh", "api", "user", "--jq", ".login"]).strip()
+    if not login:
+        raise FeedError("gh api user returned no login; run gh auth login")
+    orgs = org_list(conf)
+    teams = [t for t in (conf["inbox"].get("review_teams") or []) if t]
+    local = now.astimezone(tz).date()
+    monday = local - timedelta(days=local.weekday())
+    out = gh_json(["gh", "api", "graphql", "-f", "query=" + build_query(orgs, teams, monday)])
+    try:
+        body = json.loads(out)
+    except ValueError:
+        raise FeedError("gh returned text that is not JSON")
+    msg = _gql_errors(out)
+    if msg:
+        raise FeedError(msg[:300])
+    data = body.get("data")
+    if not isinstance(data, dict):
+        raise FeedError("GraphQL response has no data")
+    feed = {"login": login, "orgs": orgs}
+    feed.update(normalize(data, login, teams))
+    return feed
+
+
+# ---------- Slack (no network) ----------
+
+def read_triage(path):
+    """Triage log lines as (key, verdict, reason, at). Returns (rows, skipped line count)."""
+    rows, skipped = [], 0
+    for line in Path(path).read_text(errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+            key = obj.get("key") or obj.get("ts")
+            at = parse_time(obj.get("at"))
+            verdict = obj.get("verdict")
+        except (ValueError, AttributeError):
+            skipped += 1
+            continue
+        if not key or not verdict or not at:
+            skipped += 1
+            continue
+        rows.append((str(key), str(verdict), obj.get("reason") or obj.get("why") or "", at))
+    return rows, skipped
+
+
+def slack_feed(conf, now, tz):
+    path = Path(conf["inbox"].get("slack_triage_log") or DEFAULTS["inbox"]["slack_triage_log"]).expanduser()
+    if not path.exists():
+        return {"asks": [], "cleared": [], "skipped_lines": 0}
+    try:
+        rows, skipped = read_triage(path)
+    except OSError as e:
+        raise FeedError(f"cannot read the triage log: {e.strerror or e}")
+    lookback = timedelta(days=float(conf["inbox"].get("slack_lookback_days") or 3))
+    today = now.astimezone(tz).date()
+    last, was_not_now, cleared = {}, {}, {}
+    for key, verdict, reason, at in rows:  # file order: the last verdict for a key wins
+        if verdict == "not-now":
+            was_not_now[key] = reason
+            cleared.pop(key, None)
+        elif verdict in CLEARING and key in was_not_now and at.astimezone(tz).date() == today:
+            cleared[key] = {"key": key, "reason": was_not_now[key] or reason, "at": iso(at)}
+        last[key] = (verdict, reason, at)
+    asks = []
+    for key, (verdict, reason, at) in last.items():
+        if verdict != "not-now" or now - at > lookback:
+            continue
+        channel, _, ts = key.partition(":")
+        asks.append({"key": key, "channel": channel, "ts": ts, "reason": reason, "at": iso(at)})
+    asks.sort(key=lambda a: a["at"])
+    return {"asks": asks, "cleared": list(cleared.values()), "skipped_lines": skipped}
+
+
+# ---------- commands ----------
+
+def paths(args):
+    home = Path(args.home or DEFAULT_HOME).expanduser().absolute()
+    config = Path(args.config).expanduser().absolute() if args.config else home / "config.json"
+    return home, config
+
+
+def cmd_run(args):
+    home, config = paths(args)
+    conf = settings(load_config(config))
+    tz = local_tz(conf.get("tz"))
+    now = parse_time(args.now) if args.now else NOW()
+    if now is None:
+        raise UsageError(f"bad --now {args.now!r}")
+    if not args.force and not in_hours(now, conf, tz):
+        return 0
+    for d in ("feeds", "state", "logs"):
+        (home / d).mkdir(parents=True, exist_ok=True)
+    lock = open(home / "state" / "status-feeds.lock", "w")
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("status-feeds: another run holds the lock, skipping", file=sys.stderr)
+            return 0
+        wanted = [args.only] if args.only else ["github", "slack"]
+        failed = False
+        for name in wanted:
+            fn, keys = (github_feed, GITHUB_DATA) if name == "github" else (slack_feed, SLACK_DATA)
+            target = home / "feeds" / f"{name}.json"
+            try:
+                finish_feed(target, name, keys, now, data=fn(conf, now, tz))
+            except Exception as e:  # one odd response must not stop the other feed or skip the failure file
+                failed = True
+                msg = str(e) if isinstance(e, FeedError) else f"unexpected {type(e).__name__}: {e}"
+                msg = (msg.splitlines() or ["failed"])[0][:200]
+                finish_feed(target, name, keys, now, error=msg)
+                print(f"status-feeds: {name}: {msg}", file=sys.stderr)
+        return 1 if failed else 0
+    finally:
+        lock.close()
+
+
+def cmd_doctor(args):
+    home, config = paths(args)
+    conf = settings(load_config(config))
+    now = NOW()
+    lines, fail = [], False
+
+    def say(level, what, fix=""):
+        nonlocal fail
+        fail = fail or level == "fail"
+        lines.append(f"{level:<4}  {what}" + (f" - fix: {fix}" if fix else ""))
+
+    if WHICH("gh"):
+        say("ok", "gh is on PATH")
+        try:
+            run_cmd(["gh", "auth", "status"])
+            say("ok", "gh auth status")
+        except Exception:
+            say("fail", "gh is not logged in", "run gh auth login")
+        try:
+            login = run_cmd(["gh", "api", "user", "--jq", ".login"]).strip()
+            say("ok", f"GitHub login {login}") if login else say("fail", "no GitHub login", "run gh auth login")
+        except Exception:
+            say("fail", "gh api user failed", "run gh auth status to see why")
+    else:
+        say("fail", "gh is not on PATH", "install the GitHub CLI and run gh auth login")
+    log = Path(conf["inbox"].get("slack_triage_log") or "").expanduser()
+    if log.is_file() and os.access(log, os.R_OK):
+        say("ok", f"Slack triage log {log}")
+    else:
+        say("warn", f"no Slack triage log at {log}", "fine if the Slack poll is not used")
+    for name in ("github", "slack"):
+        f = home / "feeds" / f"{name}.json"
+        data = read_json(f)
+        if data is None:
+            say("warn", f"{name} feed missing at {f}", "run status-feeds run --force")
+            continue
+        gen = parse_time(data.get("generated_at"))
+        age = f"{int((now - gen).total_seconds() // 60)} min old" if gen else "no time stamp"
+        if data.get("ok") is False:
+            say("fail", f"{name} feed failing ({age}): {data.get('error')}", "fix the error, then run status-feeds run --force")
+        else:
+            say("ok", f"{name} feed ok, {age}")
+    if tz_valid(conf.get("tz")):
+        say("ok", f"time zone {conf.get('tz') or 'system local'}")
+    else:
+        say("fail", f"time zone {conf.get('tz')!r} is not a valid IANA name", "set tz like America/Denver in config.json")
+    print("\n".join(lines))
+    return 1 if fail else 0
+
+
+def cmd_schedule(args):
+    home, config = paths(args)
+    conf = settings(load_config(config))
+    script = os.path.abspath(__file__)
+    try:
+        every = int(conf["feeds"].get("every_minutes") or 15)
+    except (TypeError, ValueError):
+        every = 15
+    every = max(1, min(59, every))  # keeps */N valid in cron
+    path_env = os.environ.get("PATH", "/usr/bin:/bin")
+    if args.print == "launchd":
+        python = WHICH("python3") or sys.executable
+        env = {"HOME": str(Path.home()), "PATH": path_env}
+        if conf.get("tz"):
+            env["TZ"] = conf["tz"]
+        plist = {
+            "Label": LABEL,
+            "ProgramArguments": [python, script, "run", "--home", str(home), "--config", str(config)],
+            "StartInterval": every * 60,
+            "RunAtLoad": True,
+            "EnvironmentVariables": env,
+            "StandardOutPath": str(home / "logs" / "status-feeds.out.log"),
+            "StandardErrorPath": str(home / "logs" / "status-feeds.err.log"),
+        }
+        sys.stdout.write(plistlib.dumps(plist).decode())
+        agent = f"~/Library/LaunchAgents/{LABEL}.plist"
+        # The install commands go to stderr so stdout stays a valid plist file.
+        print("\n".join([
+            "# To install (run these yourself):",
+            f"#   mkdir -p {home}/logs",
+            f"#   status-feeds schedule --print launchd --home {home} --config {config} > {agent}",
+            f"#   launchctl bootout gui/$(id -u)/{LABEL} 2>/dev/null   (re-install only)",
+            f"#   launchctl bootstrap gui/$(id -u) {agent}",
+        ]), file=sys.stderr)
+    else:
+        print(f"# status-feeds every {every} minutes; the script itself skips times outside feeds.hours and feeds.days.")
+        print("# Add with crontab -e. A systemd user timer running the same command works too.")
+        q = shlex.quote
+        print(f"*/{every} * * * * PATH={q(str(path_env))} {q(str(script))} run --home {q(str(home))} --config {q(str(config))} "
+              f">> {q(str(home) + '/logs/status-feeds.log')} 2>&1")
+    return 0
+
+
+def build_parser():
+    ap = argparse.ArgumentParser(prog="status-feeds", description="Refresh the status page feed files.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run", help="refresh the feed files")
+    r.add_argument("--only", choices=["github", "slack"])
+    r.add_argument("--force", action="store_true", help="run even outside feeds.hours and feeds.days")
+    r.add_argument("--now", help="fixed clock, ISO time (tests only)")
+    d = sub.add_parser("doctor", help="check gh, login, triage log, feed files and time zone")
+    s = sub.add_parser("schedule", help="print a launchd plist or a cron line")
+    s.add_argument("--print", required=True, choices=["launchd", "cron"])
+    for p in (r, d, s):
+        p.add_argument("--home")
+        p.add_argument("--config")
+    return ap
+
+
+def main(argv=None):
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit as e:
+        return 2 if e.code else 0
+    try:
+        return {"run": cmd_run, "doctor": cmd_doctor, "schedule": cmd_schedule}[args.cmd](args)
+    except UsageError as e:
+        print(f"status-feeds: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
