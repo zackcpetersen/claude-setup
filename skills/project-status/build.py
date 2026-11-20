@@ -38,8 +38,9 @@ config.json (optional, keeps anything specific to one person or company out of t
   theme        {"light": {"--token": "value"}} overriding the page's color and font tokens (page.css :root).
                The page keeps one look in light and dark; add "dark" only if you want a separate dark palette.
   brand        {"logo": "logo.svg", "logo_dark": "logo-white.svg", "name": "Example Co"}: an optional logo, paths
-               relative to the config file's folder. "logo" is drawn on light backgrounds, "logo_dark" (optional)
-               on dark ones. SVG or PNG, at most 60 KB each; SVG is cleaned of scripts and event handlers.
+               relative to the config file's folder. "logo" is drawn on light backgrounds, "logo_dark" on dark
+               ones (the default rail is dark, so set "logo_dark" to replace the rail's letter tile). A spot whose
+               variant is missing keeps the letter tile. SVG, PNG, JPEG or WebP, at most 60 KB each.
                The page shows it at the top of the rail, and above the header on phones.
 """
 import argparse
@@ -74,7 +75,11 @@ LOGO_TYPES = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg"
 
 
 def clean_svg(text):
-    """An SVG with scripts, foreign HTML, event handlers and javascript: links taken out."""
+    """An SVG with the obvious scripts, foreign HTML, event handlers and javascript: links taken out.
+
+    This is a light tidy, not a full sanitizer. The real safety comes from how the page shows the logo: only as
+    <img src="data:...">, where browsers never run scripts inside the image. Never inline the SVG into the DOM.
+    """
     text = re.sub(r"<(script|foreignObject)\b.*?</\1\s*>", "", text, flags=re.S | re.I)
     text = re.sub(r"<(script|foreignObject)\b[^>]*/>", "", text, flags=re.I)
     text = re.sub(r"\s+on[a-z]+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", "", text, flags=re.I)
@@ -100,18 +105,27 @@ def logo_uri(value, base):
         print(f"warning: brand logo {path.name} {why}, skipped", file=sys.stderr)
         return None
     if kind == "image/svg+xml":
-        raw = clean_svg(raw.decode("utf-8", "replace")).encode()
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            print(f"warning: brand logo {path.name} is not UTF-8 text, skipped", file=sys.stderr)
+            return None
+        raw = clean_svg(text).encode()
     return f"data:{kind};base64," + base64.b64encode(raw).decode()
 
 
 def brand_view(brand, base):
-    """The page's brand block: logo data URIs and alt text, or None when no logo loads."""
+    """The page's brand block: logo data URIs and alt text, or None when no logo loads.
+
+    A missing variant stays missing (no fallback to the other one): a light-background logo on a dark rail
+    is near invisible, so the page keeps the letter tile there instead.
+    """
     if not isinstance(brand, dict):
         return None
     light, dark = logo_uri(brand.get("logo"), base), logo_uri(brand.get("logo_dark"), base)
     if not (light or dark):
         return None
-    out = {"logo": light or dark, "logo_dark": dark or light}
+    out = {k: v for k, v in (("logo", light), ("logo_dark", dark)) if v}
     if brand.get("name"):
         out["name"] = str(brand["name"])[:80]
     return out
@@ -177,7 +191,7 @@ def main(argv=None):
     page.setdefault("projects", [])
     page["config"] = {k: cfg[k] for k in ("title", "tracker_url", "github_org", "source_note") if k in cfg}
     page["config"]["inbox"] = view.pop("inbox_config")
-    brand = brand_view(cfg.get("brand"), pathlib.Path(a.config).expanduser().resolve().parent if a.config else pathlib.Path.cwd())
+    brand = brand_view(cfg.get("brand"), pathlib.Path(a.config).expanduser().absolute().parent if a.config else pathlib.Path.cwd())
     if brand:
         page["config"]["brand"] = brand
     page.update(view)

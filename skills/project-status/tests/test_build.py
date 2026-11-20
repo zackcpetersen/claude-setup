@@ -206,10 +206,11 @@ class Brand(unittest.TestCase):
     def decode(self, uri):
         return base64.b64decode(uri.split(",", 1)[1]).decode()
 
-    def test_no_brand_keeps_letter_mark(self):
+    def test_no_brand_means_no_brand_payload(self):
         _, cfg = self.build()
         self.assertNotIn("brand", cfg)
-        self.assertIn("rl-mark", self.out.read_text())
+        _, cfg = self.build({"name": "Example Co"})
+        self.assertNotIn("brand", cfg)
 
     def test_svg_logo_is_inlined_and_cleaned(self):
         (self.dir / "mark.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)" viewBox="0 0 10 10">'
@@ -218,7 +219,6 @@ class Brand(unittest.TestCase):
         _, cfg = self.build({"logo": "mark.svg", "name": "Example Co"})
         b = cfg["brand"]
         self.assertTrue(b["logo"].startswith("data:image/svg+xml;base64,"))
-        self.assertEqual(b["logo"], b["logo_dark"])
         self.assertEqual(b["name"], "Example Co")
         svg = self.decode(b["logo"])
         for bad in ("onload", "onclick", "<script", "javascript:", "foreignObject"):
@@ -232,6 +232,34 @@ class Brand(unittest.TestCase):
         self.assertTrue(cfg["brand"]["logo"].startswith("data:image/png;base64,"))
         self.assertNotEqual(cfg["brand"]["logo"], cfg["brand"]["logo_dark"])
         self.assertNotIn("name", cfg["brand"])
+
+    def test_missing_variant_is_not_filled_from_the_other(self):
+        (self.dir / "light.png").write_bytes(b"\x89PNG\r\n\x1a\nlight")
+        _, cfg = self.build({"logo": "light.png"})
+        self.assertIn("logo", cfg["brand"])
+        self.assertNotIn("logo_dark", cfg["brand"])
+        (self.dir / "dark.png").write_bytes(b"\x89PNG\r\n\x1a\ndark")
+        _, cfg = self.build({"logo_dark": "dark.png"})
+        self.assertIn("logo_dark", cfg["brand"])
+        self.assertNotIn("logo", cfg["brand"])
+
+    def test_non_utf8_svg_is_skipped(self):
+        (self.dir / "latin.svg").write_bytes('<svg><title>caf\u00e9</title></svg>'.encode("latin-1"))
+        r, cfg = self.build({"logo": "latin.svg"})
+        self.assertNotIn("brand", cfg)
+        self.assertIn("warning: brand logo latin.svg is not UTF-8 text", r.stderr)
+
+    def test_relative_logo_resolves_next_to_a_symlinked_config(self):
+        real = self.dir / "real"
+        real.mkdir()
+        (self.dir / "light.png").write_bytes(b"\x89PNG\r\n\x1a\nlight")
+        (real / "config.json").write_text(json.dumps({"brand": {"logo": "light.png"}}))
+        link = self.dir / "config-link.json"
+        link.symlink_to(real / "config.json")
+        r = subprocess.run([sys.executable, str(BUILD), str(SKILL / "sample-data.json"), str(self.out),
+                            "--config", str(link), "--now", NOW], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("logo", page_data(self.out.read_text())["config"]["brand"])
 
     def test_bad_logos_warn_and_fall_back(self):
         (self.dir / "big.svg").write_text("<svg>" + "x" * 70000 + "</svg>")
