@@ -40,6 +40,11 @@
     "min_remaining": 1000,
     "schedule": "06:30"
   },
+  "brand": {
+    "logo": "",
+    "logo_dark": "",
+    "name": "Example Co"
+  },
   "theme": {
     "light": {
       "--canvas": "#F3F5F7",

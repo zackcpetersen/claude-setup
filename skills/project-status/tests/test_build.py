@@ -1,5 +1,6 @@
 """End-to-end tests for build.py on fixtures. Run: python3 -m unittest discover -s skills/project-status/tests"""
 
+import base64
 import json
 import re
 import shutil
@@ -179,6 +180,69 @@ class Build(unittest.TestCase):
                     if host in line and "example" not in line and "FILL-IN" not in line and "acme" not in line:
                         bad.append(f"{p.name}: {host}")
         self.assertEqual(bad, [])
+
+
+class Brand(unittest.TestCase):
+    """The optional brand logo from config: inlined, cleaned, capped, and absent by default."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.out = self.dir / "out.html"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def build(self, brand=None):
+        cfg = {"title": "Example Status"}
+        if brand is not None:
+            cfg["brand"] = brand
+        (self.dir / "config.json").write_text(json.dumps(cfg))
+        r = subprocess.run([sys.executable, str(BUILD), str(SKILL / "sample-data.json"), str(self.out),
+                            "--config", str(self.dir / "config.json"), "--now", NOW], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r, page_data(self.out.read_text())["config"]
+
+    def decode(self, uri):
+        return base64.b64decode(uri.split(",", 1)[1]).decode()
+
+    def test_no_brand_keeps_letter_mark(self):
+        _, cfg = self.build()
+        self.assertNotIn("brand", cfg)
+        self.assertIn("rl-mark", self.out.read_text())
+
+    def test_svg_logo_is_inlined_and_cleaned(self):
+        (self.dir / "mark.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)" viewBox="0 0 10 10">'
+                                           '<script>alert(2)</script><a href="javascript:alert(3)"><rect onclick=\'x()\' width="10" height="10"/></a>'
+                                           '<foreignObject><div>hi</div></foreignObject></svg>')
+        _, cfg = self.build({"logo": "mark.svg", "name": "Example Co"})
+        b = cfg["brand"]
+        self.assertTrue(b["logo"].startswith("data:image/svg+xml;base64,"))
+        self.assertEqual(b["logo"], b["logo_dark"])
+        self.assertEqual(b["name"], "Example Co")
+        svg = self.decode(b["logo"])
+        for bad in ("onload", "onclick", "<script", "javascript:", "foreignObject"):
+            self.assertNotIn(bad, svg)
+        self.assertIn('<rect width="10" height="10"/>', svg)
+
+    def test_dark_variant_and_png(self):
+        (self.dir / "light.png").write_bytes(b"\x89PNG\r\n\x1a\nlight")
+        (self.dir / "dark.png").write_bytes(b"\x89PNG\r\n\x1a\ndark")
+        _, cfg = self.build({"logo": "light.png", "logo_dark": "dark.png"})
+        self.assertTrue(cfg["brand"]["logo"].startswith("data:image/png;base64,"))
+        self.assertNotEqual(cfg["brand"]["logo"], cfg["brand"]["logo_dark"])
+        self.assertNotIn("name", cfg["brand"])
+
+    def test_bad_logos_warn_and_fall_back(self):
+        (self.dir / "big.svg").write_text("<svg>" + "x" * 70000 + "</svg>")
+        (self.dir / "notes.txt").write_text("hi")
+        r, cfg = self.build({"logo": "big.svg", "logo_dark": "notes.txt"})
+        self.assertNotIn("brand", cfg)
+        self.assertIn("warning: brand logo big.svg is over 60 KB", r.stderr)
+        self.assertIn("warning: brand logo notes.txt", r.stderr)
+        r, cfg = self.build({"logo": "missing.svg"})
+        self.assertNotIn("brand", cfg)
+        self.assertIn("could not be read", r.stderr)
 
 
 if __name__ == "__main__":

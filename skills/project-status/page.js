@@ -575,9 +575,35 @@ function setFocus(on, save){
   const b = $('focus-btn'); if (b) b.setAttribute('aria-pressed', on ? 'true' : 'false');
   if (save) store('ps-focus', on ? '1' : '0');
 }
+// Optional logo from the local config (build.py inlines it). "logo" suits light backgrounds, "logo_dark" dark ones;
+// each image picks its variant from how dark the surface behind it is (the rail, or the page canvas on phones).
+const BRAND = C.brand && C.brand.logo ? C.brand : null;
+function brandImg(cls, surface){
+  const alt = BRAND.name || '';
+  return h('img', {class: cls, 'data-surface': surface, src: BRAND.logo, alt, 'aria-hidden': alt ? null : 'true'});
+}
+function isDark(color){
+  const m = (color || '').match(/[\d.]+/g);
+  if (!m || m.length < 3) return false;
+  const [r, g, b] = m.slice(0, 3).map(Number);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
+}
+function pickLogos(){
+  document.querySelectorAll('img[data-surface]').forEach(img => {
+    const el = img.dataset.surface === 'rail' ? $('rail') : document.body;
+    const src = isDark(getComputedStyle(el).backgroundColor) ? BRAND.logo_dark : BRAND.logo;
+    if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+  });
+}
 function buildNav(){
   const nav = navEntries(), rail = $('rail'), sheet = $('sheet');
-  rail.append(h('div', {class: 'rl-mark', 'aria-hidden': 'true'}, (BASE_TITLE.trim()[0] || 'S').toUpperCase()));
+  if (BRAND) {
+    rail.append(brandImg('rl-logo', 'rail'));
+    $('page-wrap').prepend(h('div', {class: 'ph-brand'}, brandImg('ph-logo', 'canvas')));
+    pickLogos();
+    if (window.matchMedia) { const mq = matchMedia('(prefers-color-scheme: dark)'); if (mq.addEventListener) mq.addEventListener('change', pickLogos); }
+    if (window.MutationObserver) new MutationObserver(pickLogos).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme', 'class', 'style']});
+  } else rail.append(h('div', {class: 'rl-mark', 'aria-hidden': 'true'}, (BASE_TITLE.trim()[0] || 'S').toUpperCase()));
   nav.rail.forEach(e => {
     const kids = [e.count ? h('span', {class: 'rl-badge num', 'aria-label': e.count + ' open'}, e.count) : null, icon(ICONS[e.icon], 22), h('span', {class: 'rl-l'}, e.label)];
     if (e.hash === 'more') { const b = h('button', {type: 'button', class: 'rl-i', id: 'more-btn', 'data-h': 'more', 'aria-expanded': 'false', 'aria-controls': 'sheet'}, kids); b.addEventListener('click', () => setMenu($('sheet').hidden)); rail.append(b); }
