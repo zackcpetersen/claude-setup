@@ -367,5 +367,299 @@ class ProjectItems(unittest.TestCase):
         self.assertEqual(it["hid"], D.hid_of("s:x"))
 
 
+
+TODAY = date(2026, 1, 14)
+CHI = D.local_tz("America/Chicago")
+LA = D.local_tz("America/Los_Angeles")
+
+
+def job(**kw):
+    base = {"label": "Backfill", "done": 610000, "total": 1000000, "unit": "files", "per_day": 45000,
+            "updated": "2026-01-14T15:00:00Z"}
+    base.update(kw)
+    return base
+
+
+def jv(j, today=TODAY):
+    return D.job_views({"jobs": [j]}, today, CHI)[0]
+
+
+class Jobs(unittest.TestCase):
+    def test_eta_computed_from_updated_day(self):
+        got = jv(job(updated="2026-01-12T15:00:00Z"))
+        self.assertEqual((got["eta"], got["eta_source"], got["pct"]), ("2026-01-21", "computed", 61))  # 01-12 + ceil(8.67)
+
+    def test_job_that_stopped_reporting_goes_late(self):
+        got = jv(job(done=865000, updated="2026-01-04T15:00:00Z"))  # 3 days left, last report 10 days ago
+        self.assertEqual(got["eta"], "2026-01-07")
+        self.assertTrue(got["late"])
+        self.assertTrue(got["stale"])
+
+    def test_given_eta_wins(self):
+        got = jv(job(eta="2026-02-01"))
+        self.assertEqual((got["eta"], got["eta_source"]), ("2026-02-01", "given"))
+
+    def test_no_per_day_no_eta(self):
+        self.assertIsNone(jv(job(per_day=None))["eta"])
+
+    def test_stale_after_two_days(self):
+        self.assertFalse(jv(job(updated="2026-01-12T15:00:00Z"))["stale"])
+        self.assertTrue(jv(job(updated="2026-01-11T15:00:00Z"))["stale"])
+
+    def test_finished(self):
+        got = jv(job(done=1000000, eta="2026-01-01"))
+        self.assertTrue(got["finished"])
+        self.assertFalse(got["late"])
+        self.assertEqual(got["pct"], 100)
+
+    def test_pct_clamps_and_null_on_zero_total(self):
+        self.assertEqual(jv(job(done=2000000))["pct"], 100)
+        self.assertEqual(jv(job(done=-5))["pct"], 0)
+        self.assertIsNone(jv(job(total=0))["pct"])
+        self.assertIsNone(jv(job(total=None))["pct"])
+
+    def test_left_text(self):
+        self.assertEqual(jv(job())["left"], "390,000 files")
+        self.assertEqual(jv(job(unit=""))["left"], "390,000")
+
+
+def proj(pid, **kw):
+    base = {"id": pid, "name": pid.title()}
+    base.update(kw)
+    return base
+
+
+class Timeline(unittest.TestCase):
+    def test_window_and_kinds(self):
+        p = proj("a", deadline="2026-01-30", next_milestone="Cutover", next_milestone_date="2026-01-20",
+                 needs_me=[{"ask": "Sign it", "due": "2026-01-16", "link": "https://example.com/x"}])
+        jobs = {"a": [{"label": "Backfill", "eta": "2026-01-22", "finished": False}]}
+        tl = D.timeline_view([p], jobs, TODAY)
+        self.assertEqual((tl["from"], tl["to"], tl["days"]), ("2026-01-14", "2026-02-03", 21))
+        self.assertEqual([(e["kind"], e["day"]) for e in tl["events"]],
+                         [("ask", 2), ("milestone", 6), ("job", 8), ("deadline", 16)])
+        self.assertEqual(tl["events"][2]["label"], "Backfill done")
+        self.assertEqual(tl["events"][0]["link"], "https://example.com/x")
+        self.assertEqual(tl["events"][3]["sub"], "A")
+
+    def test_after_window_dropped(self):
+        self.assertEqual(D.timeline_view([proj("a", deadline="2026-02-04")], {}, TODAY)["events"], [])
+        self.assertEqual(len(D.timeline_view([proj("a", deadline="2026-02-03")], {}, TODAY)["events"]), 1)
+
+    def test_passed_dates_kept_late_at_day_0(self):
+        p = proj("a", deadline="2026-01-10", needs_me=[{"ask": "x", "due": "2026-01-12"}])
+        jobs = {"a": [{"label": "J", "eta": "2026-01-07", "finished": False}, {"label": "F", "eta": "2026-01-07", "finished": True}]}
+        ev = D.timeline_view([p], jobs, TODAY)["events"]
+        self.assertEqual(len(ev), 3)
+        self.assertTrue(all(e["late"] and e["day"] == 0 and not e["soon"] for e in ev))
+
+    def test_soon(self):
+        ev = D.timeline_view([proj("a", deadline="2026-01-14"), proj("b", deadline="2026-01-17"),
+                              proj("c", deadline="2026-01-18")], {}, TODAY)["events"]
+        self.assertEqual([e["soon"] for e in ev], [True, True, False])
+
+    def test_sort_by_day_then_priority_then_name(self):
+        ps = [proj("zed", deadline="2026-01-20", priority="P1"), proj("abe", deadline="2026-01-20", priority="P2"),
+              proj("bob", deadline="2026-01-20"), proj("early", deadline="2026-01-15", priority="P4")]
+        self.assertEqual([e["project_id"] for e in D.timeline_view(ps, {}, TODAY)["events"]], ["early", "zed", "abe", "bob"])
+
+    def test_cap_and_more(self):
+        ps = [proj(f"p{i:02d}", deadline="2026-01-20") for i in range(15)]
+        tl = D.timeline_view(ps, {}, TODAY)
+        self.assertEqual((len(tl["events"]), tl["more"]), (12, 3))
+
+    def test_project_filter(self):
+        ps = [proj("a", deadline="2026-01-20"), proj("b", deadline="2026-01-21")]
+        self.assertEqual([e["project_id"] for e in D.timeline_view(ps, {}, TODAY, "b")["events"]], ["b"])
+
+
+class Pipeline(unittest.TestCase):
+    def test_none_without_feed(self):
+        self.assertIsNone(D.pipeline_view(None))
+
+    def test_stages_and_pills(self):
+        feed = gh(my_prs=[pr(3, draft=True, created_at="2026-01-03"), pr(2, review_decision="APPROVED", created_at="2026-01-02"),
+                          pr(5, ci="FAILURE", created_at="2026-01-05"), pr(4, mergeable="CONFLICTING", created_at="2026-01-01"),
+                          pr(6, mergeable="UNKNOWN", ci=None, created_at="2026-01-06")],
+                  reviews=[{"url": "u1"}, {"url": "u2"}],
+                  merged=[{"repo": "acme/web", "number": 9, "url": "m9", "merged_at": "2026-01-12T10:00:00Z"},
+                          {"repo": "acme/web", "number": 10, "url": "m10", "merged_at": "2026-01-13T10:00:00Z"}])
+        pv = D.pipeline_view(feed)
+        st = {s["key"]: s for s in pv["stages"]}
+        self.assertEqual([s["key"] for s in pv["stages"]], ["draft", "review", "approved", "merged"])
+        self.assertEqual([p["label"] for p in st["review"]["pills"]], ["billing#4", "billing#5", "billing#6"])
+        self.assertEqual([(p["ci_failed"], p["conflict"]) for p in st["review"]["pills"]],
+                         [(False, True), (True, False), (False, False)])
+        self.assertEqual((st["draft"]["n"], st["approved"]["n"]), (1, 1))
+        self.assertEqual([p["label"] for p in st["merged"]["pills"]], ["web#10", "web#9"])
+        self.assertEqual(st["merged"]["label"], "Merged this week")
+        self.assertEqual(pv["reviews_owed"], 2)
+        self.assertFalse(pv["stale"])
+
+    def test_failing_feed_marks_stale(self):
+        v = view(feeds={"github": {"ok": False, "my_prs": [pr(1)]}})
+        self.assertTrue(v["pipeline"]["stale"])
+
+
+class Waiting(unittest.TestCase):
+    def test_days_nudge_and_flags(self):
+        rows = [{"since": "2026-01-05", "nudge_due": "2026-01-12"}, {"since": "2026-01-10", "nudge_due": "2026-01-14"},
+                {"nudge_due": "2026-01-20"}]
+        wv = D.waiting_view(rows, TODAY, CHI)
+        self.assertEqual([(r["days"], r["nudge_at"], r["late"], r["due_today"]) for r in wv["rows"]],
+                         [(9, 7, True, False), (4, 4, False, True), (None, None, False, False)])
+        self.assertEqual(wv["scale_days"], 14)
+
+    def test_scale_grows(self):
+        wv = D.waiting_view([{"since": "2025-12-20", "nudge_due": "2026-01-30"}], TODAY, CHI)
+        self.assertEqual(wv["scale_days"], 41)
+
+    def test_local_date_of_since(self):
+        wv = D.waiting_view([{"since": "2026-11-19T06:30:00Z"}], date(2026, 11, 20), LA)
+        self.assertEqual(wv["rows"][0]["days"], 2)  # 11-18 local
+
+
+class Delivered(unittest.TestCase):
+    def test_only_confirm_with_due_and_snoozed_included(self):
+        its = [{"kind": "confirm", "hid": "a", "title": "A", "since": "2026-01-08T18:00:00Z", "due": "2026-01-16"},
+               {"kind": "confirm", "hid": "b", "title": "B", "since": "2026-01-01T18:00:00Z"},
+               {"kind": "todo", "hid": "c", "title": "C", "since": "2026-01-01T18:00:00Z", "due": "2026-01-15"}]
+        snz = [{"kind": "confirm", "hid": "d", "title": "D", "since": "2026-01-01T18:00:00Z", "due": "2026-01-10"}]
+        got = D.delivered_view(its, snz, TODAY, CHI)
+        self.assertEqual([g["hid"] for g in got], ["d", "a"])
+        d, a = got
+        self.assertEqual((a["total"], a["elapsed"], a["left"], a["late"]), (8, 6, 2, False))
+        self.assertEqual((d["total"], d["elapsed"], d["left"], d["late"]), (9, 9, -4, True))
+
+    def test_local_since_near_midnight(self):
+        its = [{"kind": "confirm", "hid": "a", "title": "A", "since": "2026-11-19T06:30:00Z", "due": "2026-11-21"}]
+        got = D.delivered_view(its, [], date(2026, 11, 20), LA)[0]
+        self.assertEqual((got["since"], got["total"], got["elapsed"]), ("2026-11-18", 3, 2))
+
+
+class StatsSource(unittest.TestCase):
+    def setUp(self):
+        self.cfg = D.settings({})
+
+    def st(self, feed, err=None, now=NOW):
+        return D.source_state("stats", feed, err, self.cfg, now, CHI)
+
+    def test_ok_stale_failing_missing(self):
+        self.assertEqual(self.st({"ok": True, "generated_at": "2026-01-13T13:00:00Z"})["state"], "ok")
+        self.assertEqual(self.st({"ok": True, "generated_at": "2026-01-13T11:00:00Z"})["state"], "stale")
+        self.assertEqual(self.st({"ok": False, "error": "x", "generated_at": "2026-01-14T11:00:00Z"})["state"], "failing")
+        self.assertEqual(self.st(None)["state"], "missing")
+
+    def test_stats_source_listed_only_with_file(self):
+        self.assertNotIn("stats", [s["name"] for s in view()["sources"]])
+        v = view(feeds={"stats": {"ok": True, "generated_at": "2026-01-14T11:00:00Z", "groups": {}}})
+        self.assertEqual(v["sources"][-1]["name"], "stats")
+        self.assertEqual(v["stats"]["groups"], {})
+        self.assertEqual(view(errors={"stats": "bad"})["sources"][-1]["state"], "failing")
+        self.assertIsNone(view()["stats"])
+
+    def test_as_of_has_date_when_not_today(self):
+        self.assertEqual(self.st({"ok": True, "generated_at": "2026-01-14T17:00:00Z"})["as_of"], "11:00")
+        self.assertEqual(self.st({"ok": True, "generated_at": "2026-01-13T17:00:00Z"})["as_of"], "01-13 11:00")
+
+
+LCFG = D.settings({"tracker_url": "https://tracker.example.com/browse/", "github_org": "acme",
+                   "inbox": {"slack_url": "https://acme.slack.com/archives/"},
+                   "links": {"patterns": [{"match": r"run-(\d+)", "url": "https://runs.example.com/{1}"}],
+                             "repos": ["billing"]}})
+
+
+class Links(unittest.TestCase):
+    def test_ticket_key_segment(self):
+        self.assertEqual(D.link_mentions("Ship ENG-142 today", LCFG),
+                         [{"text": "Ship "}, {"text": "ENG-142", "url": "https://tracker.example.com/browse/ENG-142"},
+                          {"text": " today"}])
+
+    def test_repo_ref_slack_key_pattern_and_url(self):
+        segs = D.link_mentions("See billing #91, C0TEAM01:1768000000.123456, run-77 and https://example.com/a.", LCFG)
+        urls = [s["url"] for s in segs if "url" in s]
+        self.assertEqual(urls, ["https://github.com/acme/billing/pull/91",
+                                "https://acme.slack.com/archives/C0TEAM01/p1768000000123456",
+                                "https://runs.example.com/77", "https://example.com/a"])
+        self.assertEqual("".join(s["text"] for s in segs),
+                         "See billing #91, C0TEAM01:1768000000.123456, run-77 and https://example.com/a.")
+
+    def test_ask_gets_parts_with_tracker(self):
+        data = {"projects": [{"id": "p", "name": "P", "needs_me": [{"ask": "Approve ENG-142"}]}]}
+        v = view(data=data, cfg={"tz": "America/Chicago", "tracker_url": "https://tracker.example.com/browse/"})
+        parts = v["projects"][0]["needs_me"][0]["ask_parts"]
+        self.assertEqual(parts[1], {"text": "ENG-142", "url": "https://tracker.example.com/browse/ENG-142"})
+        self.assertEqual(v["unlinked"], [])
+        self.assertNotIn("ask_parts", data["projects"][0]["needs_me"][0])  # input not changed
+
+    def test_ask_without_tracker_is_unlinked(self):
+        data = {"projects": [{"id": "p", "name": "P", "needs_me": [{"ask": "Approve ENG-142"}]}]}
+        v = view(data=data)
+        self.assertEqual(v["unlinked"], [{"where": "projects.p.needs_me[0].ask", "text": "ENG-142", "why": "no tracker_url"}])
+        self.assertNotIn("ask_parts", v["projects"][0]["needs_me"][0])
+
+    def test_standards_are_not_tickets(self):
+        segs = D.link_mentions("Use UTF-8 and SHA-256 for ENG-142", LCFG)
+        self.assertEqual([s["text"] for s in segs if "url" in s], ["ENG-142"])
+
+    def test_ticket_keys_limit_prefixes(self):
+        cfg = D.settings({"tracker_url": "https://tracker.example.com/browse/", "links": {"ticket_keys": ["eng"]}})
+        segs = D.link_mentions("ENG-142 and OPS-7", cfg)
+        self.assertEqual([s["text"] for s in segs if "url" in s], ["ENG-142"])
+
+    def test_unknown_word_hash_number_is_plain(self):
+        segs = D.link_mentions("Ran chunk #2 of billing #91", LCFG)
+        self.assertEqual([s["text"] for s in segs if "url" in s], ["billing #91"])
+
+    def test_feed_repos_are_known(self):
+        data = {"projects": [{"id": "p", "name": "P", "summary": "Waiting on ledger #5, step #3"}]}
+        feeds = {"github": {"ok": True, "my_prs": [{"repo": "acme/ledger", "number": 5}]}}
+        v = view(data=data, cfg={"tz": "America/Chicago", "github_org": "acme"}, feeds=feeds)
+        parts = v["projects"][0]["summary_parts"]
+        self.assertEqual([s["url"] for s in parts if "url" in s], ["https://github.com/acme/ledger/pull/5"])
+
+    def test_pattern_with_optional_group_does_not_crash(self):
+        cfg = D.settings({"links": {"patterns": [{"match": r"run(/(\d+))?", "url": "https://runs.example.com{1}"}]}})
+        segs = D.link_mentions("run and run/4", cfg)
+        self.assertEqual([s["url"] for s in segs if "url" in s], ["https://runs.example.com/4"])
+
+    def test_javascript_url_never_a_link(self):
+        cfg = D.settings({"links": {"patterns": [{"match": r"bad-(\d+)", "url": "javascript:alert({1})"}]}})
+        self.assertFalse(any("url" in s for s in D.link_mentions("bad-1 javascript:alert(1)", cfg)))
+
+    def test_thread_word_without_link_listed(self):
+        data = {"projects": [], "waiting_on": [{"person": "Ana", "what": "Answer in the Slack thread", "since": "2026-01-10"},
+                                               {"person": "Lee", "what": "Answer in the Slack thread too", "link": "https://example.com/t"}]}
+        un = view(data=data)["unlinked"]
+        self.assertEqual([(u["where"], u["why"]) for u in un], [("waiting_on[0].what", "names a thread or page but has no link")])
+
+    def test_no_mentions_no_entries(self):
+        data = {"projects": [{"id": "p", "name": "Plain", "summary": "Nothing to link here."}]}
+        self.assertEqual(view(data=data)["unlinked"], [])
+        self.assertEqual(D.link_mentions("plain words", LCFG), [{"text": "plain words"}])
+
+    def test_job_label_gets_parts(self):
+        data = {"projects": [{"id": "p", "name": "P", "jobs": [job(label="Backfill ENG-9")]}]}
+        v = view(data=data, cfg={"tz": "America/Chicago", "tracker_url": "https://tracker.example.com/browse/"})
+        self.assertEqual(v["jobs"]["p"][0]["label_parts"][1]["url"], "https://tracker.example.com/browse/ENG-9")
+
+    def test_duplicates_collapse(self):
+        data = {"projects": [{"id": "p", "name": "P", "summary": "ENG-1 and ENG-1", "needs_me": [{"ask": "ENG-1", "ticket": "ENG-1"}]}]}
+        self.assertEqual(len(view(data=data)["unlinked"]), 1)
+
+
+class DashboardView(unittest.TestCase):
+    def test_view_has_dashboard_keys(self):
+        data = {"projects": [proj("a", deadline="2026-01-20", jobs=[job()])], "waiting_on": [{"person": "Ana", "since": "2026-01-10"}]}
+        v = view(data=data, feeds={"github": gh(my_prs=[pr(1)])})
+        for k in ("timeline", "pipeline", "waiting", "delivered", "jobs", "stats", "unlinked", "projects", "waiting_on", "one_offs"):
+            self.assertIn(k, v)
+        self.assertEqual(v["jobs"]["a"][0]["label"], "Backfill")
+        self.assertEqual([e["kind"] for e in v["timeline"]["events"]], ["deadline", "job"])
+        self.assertEqual(v["waiting"]["rows"][0]["days"], 4)
+        self.assertEqual(v["pipeline"]["stages"][1]["n"], 1)
+        self.assertEqual(list(v["project_timelines"]), ["a"])
+
+
 if __name__ == "__main__":
     unittest.main()

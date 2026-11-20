@@ -1,16 +1,12 @@
+<meta charset="utf-8">
 <title>__TITLE__</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>/*__CSS__*/
 /*__THEME__*/</style>
-<div class="bar"><div class="bar-in gut">
-  <button class="menu-btn" id="menu-btn" aria-label="Open menu" aria-expanded="false" aria-controls="drawer"><span></span><span></span><span></span></button>
-  <div class="where" id="where"></div>
-  <button class="focus-btn" id="focus-btn" type="button" aria-pressed="false" title="Focus: show only today and the top of the inbox (key f)">Focus</button>
-  <div class="asof" id="asof"></div>
-</div></div>
+<nav class="rail" id="rail" aria-label="Pages"></nav>
 <div class="scrim" id="scrim" hidden></div>
-<nav class="drawer" id="drawer" aria-label="Pages" hidden></nav>
-<main class="gut"><div class="page" id="page"></div></main>
+<nav class="sheet" id="sheet" aria-label="More pages" hidden></nav>
+<main class="page gut" id="page-wrap"><div class="wrap" id="page"></div></main>
 <script type="application/json" id="data">__DATA__</script>
 <script>/*__JS__*/</script>

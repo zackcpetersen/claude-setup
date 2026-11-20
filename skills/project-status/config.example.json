@@ -22,12 +22,36 @@
     "hours": "08:00-18:00",
     "days": "Mon-Fri"
   },
+  "links": {
+    "patterns": [],
+    "ticket_keys": [],
+    "repos": []
+  },
+  "stats": {
+    "org": "",
+    "team_slug": "",
+    "team_members": [],
+    "repos_include": [],
+    "repos_skip": [],
+    "repo_groups": {},
+    "bots": [],
+    "business_hours_clock": false,
+    "keep_days": 100,
+    "min_remaining": 1000,
+    "schedule": "06:30"
+  },
   "theme": {
     "light": {
-      "--canvas": "#1F2A37",
+      "--canvas": "#F3F5F7",
+      "--rail": "#1F2A37",
       "--accent": "#2F7FBF",
-      "--accent-soft": "#A9CDEA",
-      "--strong": "#111827"
+      "--strong": "#1F2A37"
+    },
+    "dark": {
+      "--canvas": "#0E141B",
+      "--rail": "#070B10",
+      "--accent": "#4C9BD8",
+      "--strong": "#EEF2F6"
     }
   }
 }

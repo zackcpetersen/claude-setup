@@ -1,12 +1,14 @@
 {
  "as_of": "2026-01-14T17:30Z",
  "projects": [
-  {"id": "billing-migration", "name": "Billing migration", "status": "On track", "progress_pct": 60,
-   "deadline": "2026-01-30",
+  {"id": "billing-migration", "name": "Billing migration", "priority": "P1", "status": "On track", "progress_pct": 60,
+   "deadline": "2026-01-30", "next_milestone": "Region 3 cutover", "next_milestone_date": "2026-01-21",
+   "jobs": [{"label": "Backfill", "done": 610000, "total": 1000000, "unit": "files", "per_day": 45000,
+             "updated": "2026-01-13T15:00:00Z"}],
    "needs_me": [
     {"ask": "Approve the cutover window for region 3.", "ticket": "ENG-142", "due": "2026-01-13"},
     {"ask": "Sign off the rollback plan </script> today.", "ticket": "ENG-142", "due": "2026-01-14"},
-    {"ask": "Merge the region 3 cutover.", "link": "https://github.com/acme/billing/pull/91"}
+    {"ask": "Merge the region 3 cutover.", "link": "https://github.com/acme/billing/pull/91", "due": "2026-01-20"}
    ]},
   {"id": "search-revamp", "name": "Search revamp", "status": "At risk", "progress_pct": 25, "deadline": "2026-01-10"}
  ],

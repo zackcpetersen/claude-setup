@@ -16,7 +16,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `skills/review-pr/` | `review-pr` skill - review a teammate's PR, approve or comment with per-comment approval | `~/.claude/skills/` (symlink) |
 | `skills/daily-auth/` | `daily-auth` skill - check and fix every login the day needs, from `~/.claude/auth-checks.json` | `~/.claude/skills/` (symlink) |
 | `skills/sync-repos/` | `sync-repos` skill - fast-forward every repo in `~/.claude/sync-repos.json` to `origin/main` | `~/.claude/skills/` (symlink) |
-| `skills/project-status/` | `project-status` skill - a visual project status page (today strip, inbox, progress rings, status bars) built from a data file and published as a private Artifact | `~/.claude/skills/` (symlink) |
+| `skills/project-status/` | `project-status` skill - a visual project status dashboard (nav rail, today strip, KPI tiles, inbox, project bars, timeline, PR pipeline, stats) built from a data file and published as a private Artifact | `~/.claude/skills/` (symlink) |
 | `skills/watch/` | `watch` skill - background waits on PRs, deploys and Dagster runs that wake the session once, plus a cheap 5-minute Slack poll that wakes the session only when you are messaged | `~/.claude/skills/` (symlink) |
 | `output-styles/direct.md` | "Direct" output style - answer first, plain english, no hedging | `~/.claude/output-styles/` (symlink) |
 | `output-styles/momentum.md` | "Momentum" output style - Direct plus progress tracking and one next action | `~/.claude/output-styles/` (symlink) |
@@ -26,6 +26,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `bin/wait-for` | Background wait the `watch` skill starts: PR, deploy, Dagster run or Slack poll, one event line then exit (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
 | `bin/pr-precheck` | Lints changed files with autocorrect and runs only their tests, once before the first push; also a read-only `report` and a pre-push `hook` mode (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
 | `bin/status-feeds` | Refreshes the status page's GitHub and Slack inbox data on a schedule, no model in the loop (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
+| `bin/eng-stats` | Caches the org's pull requests and writes the status page's `#stats` numbers (aggregates for you and your team) once a day, no model in the loop (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
 | `config/*.example.*` | Per-skill config examples (board, watch, tidy, writing voice, optional self-review and pr-precheck) | the four `.md` files are copied to `~/.claude/config/` when absent, see below |
 | `plugins/model-discipline/` | `model-discipline` plugin - the agent-model-guard hook, a SessionStart rules block, and the `playbook` skill | `/plugin install`, see section 4 |
@@ -116,6 +117,20 @@ than 6 months.
   ~/.claude/CLAUDE.md; optionally add `Slack poll quiet: ack, bot, fyi`
   so acks, bot posts and FYIs go to a digest instead of waking the
   session (off by default; DMs and direct mentions always wake).
+- 2026-11-20: The `project-status` page becomes a dashboard: a new look
+  with a left nav rail (a bottom tab bar on phones), KPI tiles, a
+  timeline, a PR pipeline, aging bars and new `#projects`, `#prs`,
+  `#stats` and `#delivered` pages. Nothing breaks: old data and config
+  files build, and old page links still work. Per machine: run
+  `./install.sh` (adds `~/bin/eng-stats`). The repo now ships a neutral
+  light and dark palette: an old `theme.light` that set a dark
+  `--canvas` makes the new header hard to read, so move brand colors to
+  the new token names in `theme.light` and `theme.dark` (see
+  `skills/project-status/SKILL.md`, Setup step 3). Optional: a `stats`
+  block in `config.json` (`team_slug` at least), then
+  `eng-stats doctor`, `eng-stats run` (about 25 minutes the first
+  time) and the schedule from `eng-stats schedule --print launchd`;
+  `links.patterns` for extra link keys.
 - 2026-11-19: The `project-status` page gains a home view and an inbox.
   Nothing breaks: an existing `projects.json` and `config.json` build as
   before, and old page links (`#overview`, `#people`, `#oneoffs`,
@@ -252,6 +267,7 @@ Work through these once per machine:
 - No file edits. Per-machine files live in `~/.claude/project-status/`: `mkdir -p ~/.claude/project-status`, copy `skills/project-status/config.example.json` there as `config.json` and fill in the title, the tracker link prefix, the GitHub org and (optional) your colors under `theme.light`. Brand colors stay in that local file, never in the repo.
 - Try it: `python3 ~/.claude/skills/project-status/build.py ~/.claude/skills/project-status/sample-data.json /tmp/project-status.html --config ~/.claude/project-status/config.json --home ~/.claude/skills/project-status/sample-home --no-state --now 2026-01-12T18:00:00Z`, then ask Claude to publish that file as an Artifact.
 - Feeds (optional, fills the inbox from GitHub and the Slack poll): set `tz` in `config.json`, run `~/bin/status-feeds doctor`, then `~/bin/status-feeds run --force`, then install the schedule printed by `~/bin/status-feeds schedule --print launchd` (Linux: `--print cron`, add it with `crontab -e`).
+- Stats (optional, fills the `#stats` page and the home KPI tiles): add a `stats` block to `config.json` with at least `team_slug` (your GitHub team), run `~/bin/eng-stats doctor`, then `~/bin/eng-stats run`, then install the schedule printed by `~/bin/eng-stats schedule --print launchd` (Linux: `--print cron`).
 - Then ask Claude for "my project status page". It gathers your projects into `~/.claude/project-status/projects.json`, builds, publishes, and saves the Artifact link in `config.json` so every refresh updates the same page. "Add a one-off: ..." adds a standalone item.
 - Needs Python 3 and the Artifact tool. Reads the board's `Projects data source` when you use the `board` skill; without it, tell Claude where your project notes live.
 
@@ -393,7 +409,7 @@ For the plugins, open a fresh session and check:
 - `ExitPlanMode` without a review is denied with the plan-gate message; after `/self-review` it goes through once.
 - `bash plugins/plan-gate/tests/plan-gate.test.sh` prints `6/6 passed.`
 - `bash plugins/new-day/tests/new-day-check.test.sh` prints `9/9 passed.`
-- `python3 -m unittest bin/tests/test_status_feeds.py` and `python3 -m unittest discover -s skills/project-status/tests` pass.
+- `python3 -m unittest bin/tests/test_status_feeds.py bin/tests/test_eng_stats.py` and `python3 -m unittest discover -s skills/project-status/tests` pass.
 - `python3 -m pytest bin/tests/test_tidy.py` passes (or `python3 -m unittest bin/tests/test_tidy.py` without pytest).
 
 If you set this repo up before the plugin existed, delete the leftover `~/bin/agent-model-guard` symlink by hand - `install.sh` no longer creates it, but it also never removes links it has stopped iterating over.

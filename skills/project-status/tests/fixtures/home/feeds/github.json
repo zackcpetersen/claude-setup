@@ -3,11 +3,14 @@
  "last_ok_at": "2026-01-14T17:55:00Z", "login": "sam", "orgs": ["acme"], "truncated": false,
  "my_prs": [
   {"repo": "acme/billing", "number": 91, "title": "Cut over region 3", "url": "https://github.com/acme/billing/pull/91",
-   "draft": false, "updated_at": "2026-01-14T15:00:00Z", "review_decision": "APPROVED", "mergeable": "MERGEABLE",
+   "draft": false, "created_at": "2026-01-09T18:00:00Z", "updated_at": "2026-01-14T15:00:00Z", "review_decision": "APPROVED", "mergeable": "MERGEABLE",
    "merge_state": "CLEAN", "ci": "SUCCESS", "unresolved_threads": 0},
   {"repo": "acme/search", "number": 17, "title": "Ranking harness", "url": "https://github.com/acme/search/pull/17",
-   "draft": false, "updated_at": "2026-01-14T12:00:00Z", "review_decision": null, "mergeable": "MERGEABLE",
-   "merge_state": "UNSTABLE", "ci": "FAILURE", "unresolved_threads": 0}
+   "draft": false, "created_at": "2026-01-10T18:00:00Z", "updated_at": "2026-01-14T12:00:00Z", "review_decision": null, "mergeable": "MERGEABLE",
+   "merge_state": "UNSTABLE", "ci": "FAILURE", "unresolved_threads": 0},
+  {"repo": "acme/search", "number": 18, "title": "Index schema notes", "url": "https://github.com/acme/search/pull/18",
+   "draft": true, "created_at": "2026-01-11T18:00:00Z", "updated_at": "2026-01-11T18:00:00Z", "review_decision": null,
+   "mergeable": "UNKNOWN", "merge_state": "UNKNOWN", "ci": null, "unresolved_threads": 0}
  ],
  "review_requests": [
   {"repo": "acme/web", "number": 12, "title": "Invoice paging", "url": "https://github.com/acme/web/pull/12", "author": "ana",
