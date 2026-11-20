@@ -37,10 +37,17 @@ config.json (optional, keeps anything specific to one person or company out of t
   stats        settings for ~/bin/eng-stats (it writes feeds/stats.json, which the #stats page reads)
   theme        {"light": {"--token": "value"}} overriding the page's color and font tokens (page.css :root).
                The page keeps one look in light and dark; add "dark" only if you want a separate dark palette.
+  brand        {"logo": "logo.svg", "logo_dark": "logo-white.svg", "name": "Example Co"}: an optional logo, paths
+               relative to the config file's folder. "logo" is drawn on light backgrounds, "logo_dark" on dark
+               ones (the default rail is dark, so set "logo_dark" to replace the rail's letter tile). A spot whose
+               variant is missing keeps the letter tile. SVG, PNG, JPEG or WebP, at most 60 KB each.
+               The page shows it at the top of the rail, and above the header on phones.
 """
 import argparse
+import base64
 import json
 import pathlib
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -61,6 +68,67 @@ def theme_css(theme):
         css += "@media (prefers-color-scheme: dark){" + block(':root:not([data-theme="light"])', theme["dark"], "color-scheme:dark") + "}\n"
         css += block(':root[data-theme="dark"]', theme["dark"], "color-scheme:dark") + "\n"
     return css
+
+
+LOGO_MAX_BYTES = 60 * 1024
+LOGO_TYPES = {".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+
+def clean_svg(text):
+    """An SVG with the obvious scripts, foreign HTML, event handlers and javascript: links taken out.
+
+    This is a light tidy, not a full sanitizer. The real safety comes from how the page shows the logo: only as
+    <img src="data:...">, where browsers never run scripts inside the image. Never inline the SVG into the DOM.
+    """
+    text = re.sub(r"<(script|foreignObject)\b.*?</\1\s*>", "", text, flags=re.S | re.I)
+    text = re.sub(r"<(script|foreignObject)\b[^>]*/>", "", text, flags=re.I)
+    text = re.sub(r"\s+on[a-z]+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", "", text, flags=re.I)
+    text = re.sub(r"(href\s*=\s*[\"']?)\s*javascript:[^\"'\s>]*", r"\1#", text, flags=re.I)
+    return text
+
+
+def logo_uri(value, base):
+    """A data: URI for one logo file, or None (with a warning) when it is missing, too big or not an image."""
+    if not value:
+        return None
+    path = pathlib.Path(str(value)).expanduser()
+    if not path.is_absolute():
+        path = base / path
+    kind = LOGO_TYPES.get(path.suffix.lower())
+    try:
+        raw = path.read_bytes() if kind else b""
+    except OSError:
+        raw = None
+    why = ("not an SVG, PNG, JPEG or WebP file" if not kind else "could not be read" if raw is None
+           else f"is over {LOGO_MAX_BYTES // 1024} KB" if len(raw) > LOGO_MAX_BYTES else None)
+    if why:
+        print(f"warning: brand logo {path.name} {why}, skipped", file=sys.stderr)
+        return None
+    if kind == "image/svg+xml":
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            print(f"warning: brand logo {path.name} is not UTF-8 text, skipped", file=sys.stderr)
+            return None
+        raw = clean_svg(text).encode()
+    return f"data:{kind};base64," + base64.b64encode(raw).decode()
+
+
+def brand_view(brand, base):
+    """The page's brand block: logo data URIs and alt text, or None when no logo loads.
+
+    A missing variant stays missing (no fallback to the other one): a light-background logo on a dark rail
+    is near invisible, so the page keeps the letter tile there instead.
+    """
+    if not isinstance(brand, dict):
+        return None
+    light, dark = logo_uri(brand.get("logo"), base), logo_uri(brand.get("logo_dark"), base)
+    if not (light or dark):
+        return None
+    out = {k: v for k, v in (("logo", light), ("logo_dark", dark)) if v}
+    if brand.get("name"):
+        out["name"] = str(brand["name"])[:80]
+    return out
 
 
 def read_json(path, label, errors):
@@ -123,6 +191,9 @@ def main(argv=None):
     page.setdefault("projects", [])
     page["config"] = {k: cfg[k] for k in ("title", "tracker_url", "github_org", "source_note") if k in cfg}
     page["config"]["inbox"] = view.pop("inbox_config")
+    brand = brand_view(cfg.get("brand"), pathlib.Path(a.config).expanduser().absolute().parent if a.config else pathlib.Path.cwd())
+    if brand:
+        page["config"]["brand"] = brand
     page.update(view)
     page["_theme_css"] = theme_css(theme)
     title = str(cfg.get("title", "Project Status")).replace("<", "").replace(">", "").replace("&", "and")

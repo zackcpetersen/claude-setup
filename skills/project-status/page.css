@@ -52,6 +52,8 @@ a:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var
 /* rail and sheet */
 .rail{position:fixed;top:0;bottom:0;left:0;width:var(--rail-w);background:var(--rail);display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:calc(16px + env(safe-area-inset-top,0px));padding-left:env(safe-area-inset-left,0px);z-index:15}
 .rl-mark{width:36px;height:36px;border-radius:var(--radius-rail-item);background:var(--rail-on);color:var(--rail);font-weight:700;display:grid;place-items:center;margin-bottom:14px;font-size:15px}
+.rl-logo{display:block;max-width:56px;max-height:32px;width:auto;height:auto;object-fit:contain;margin:4px 0 18px}
+.ph-brand{display:none}
 .rl-i{width:60px;min-height:52px;padding:8px 0 6px;border:0;background:none;cursor:pointer;border-radius:var(--radius-rail-item);color:var(--rail-ink);text-decoration:none;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:10.5px;position:relative}
 .rl-i svg{fill:currentColor}
 .rl-i:hover{background:color-mix(in srgb,var(--rail-on) 8%,transparent)}
@@ -350,7 +352,9 @@ details[open] > summary::after{transform:rotate(-135deg)}
 /* phone */
 @media (max-width:860px){
   .rail{top:auto;right:0;width:auto;height:auto;flex-direction:row;justify-content:space-around;padding:6px max(8px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px));gap:0}
-  .rl-mark{display:none}
+  .rl-mark,.rl-logo{display:none}
+  .ph-brand{display:block;margin:0 auto 14px;max-width:var(--page-max)}
+  .ph-logo{display:block;max-width:120px;max-height:24px;width:auto;height:auto;object-fit:contain}
   .rl-i{width:auto;flex:1;max-width:72px}
   .sheet{top:auto;left:0;right:0;bottom:0;width:auto;max-height:75vh;border-right:0;border-top:1px solid var(--line);border-radius:16px 16px 0 0;padding-bottom:calc(env(safe-area-inset-bottom,0px) + 80px)}
   .page{margin-left:0;padding-block:16px calc(96px + env(safe-area-inset-bottom,0px))}

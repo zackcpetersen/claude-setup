@@ -40,6 +40,12 @@
     "min_remaining": 1000,
     "schedule": "06:30"
   },
+  "brand": {
+    "_note": "logo is for light backgrounds, logo_dark for dark ones; the default rail is dark, so it needs logo_dark",
+    "logo": "",
+    "logo_dark": "",
+    "name": "Example Co"
+  },
   "theme": {
     "light": {
       "--canvas": "#F3F5F7",

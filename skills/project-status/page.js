@@ -575,9 +575,55 @@ function setFocus(on, save){
   const b = $('focus-btn'); if (b) b.setAttribute('aria-pressed', on ? 'true' : 'false');
   if (save) store('ps-focus', on ? '1' : '0');
 }
+// Optional logo from the local config (build.py inlines it). "logo" suits light backgrounds, "logo_dark" dark ones;
+// each image picks its variant from how dark the surface behind it is (the rail, or the page canvas on phones).
+// When the variant a spot needs is missing, the image hides (the rail shows its letter tile instead).
+// The logo is only ever shown as <img src="data:...">, never inlined, so scripts inside an SVG cannot run.
+const BRAND = C.brand && (C.brand.logo || C.brand.logo_dark) ? C.brand : null;
+function brandImg(cls, surface){
+  const alt = BRAND.name || '';
+  return h('img', {class: cls, 'data-surface': surface, alt, hidden: true, 'aria-hidden': alt ? null : 'true'});
+}
+let colorCtx = null;
+// A CSS color as sRGB bytes [r, g, b, a], via a 1x1 canvas so oklch(), color() and named colors all work.
+function rgba(color){
+  if (!colorCtx) { const c = document.createElement('canvas'); c.width = c.height = 1; colorCtx = c.getContext('2d', {willReadFrequently: true}); }
+  if (!colorCtx) return null;
+  colorCtx.clearRect(0, 0, 1, 1);
+  colorCtx.fillStyle = 'rgba(0, 0, 0, 0)';
+  colorCtx.fillStyle = color || 'transparent';
+  colorCtx.fillRect(0, 0, 1, 1);
+  return Array.from(colorCtx.getImageData(0, 0, 1, 1).data);
+}
+// Whether the background behind el is dark: walks up past transparent backgrounds; none at all means light.
+function isDark(el){
+  for (; el; el = el.parentElement) {
+    const px = rgba(getComputedStyle(el).backgroundColor);
+    if (!px) return false;
+    if (px[3] > 0) return 0.2126 * px[0] + 0.7152 * px[1] + 0.0722 * px[2] < 128;
+  }
+  return false;
+}
+function pickLogos(){
+  document.querySelectorAll('img[data-surface]').forEach(img => {
+    const src = (isDark(img.dataset.surface === 'rail' ? $('rail') : document.body) ? BRAND.logo_dark : BRAND.logo) || '';
+    if (src && img.getAttribute('src') !== src) img.setAttribute('src', src);
+    img.hidden = !src;
+    if (img.parentElement && img.parentElement.classList.contains('ph-brand')) img.parentElement.hidden = !src;
+    const mark = img.dataset.surface === 'rail' ? $('rl-mark') : null;
+    if (mark) mark.hidden = !!src;
+  });
+}
 function buildNav(){
   const nav = navEntries(), rail = $('rail'), sheet = $('sheet');
-  rail.append(h('div', {class: 'rl-mark', 'aria-hidden': 'true'}, (BASE_TITLE.trim()[0] || 'S').toUpperCase()));
+  rail.append(h('div', {class: 'rl-mark', id: 'rl-mark', 'aria-hidden': 'true'}, (BASE_TITLE.trim()[0] || 'S').toUpperCase()));
+  if (BRAND) {
+    rail.append(brandImg('rl-logo', 'rail'));
+    $('page-wrap').prepend(h('div', {class: 'ph-brand'}, brandImg('ph-logo', 'canvas')));
+    pickLogos();
+    if (window.matchMedia) { const mq = matchMedia('(prefers-color-scheme: dark)'); if (mq.addEventListener) mq.addEventListener('change', pickLogos); }
+    if (window.MutationObserver) new MutationObserver(pickLogos).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme', 'class', 'style']});
+  }
   nav.rail.forEach(e => {
     const kids = [e.count ? h('span', {class: 'rl-badge num', 'aria-label': e.count + ' open'}, e.count) : null, icon(ICONS[e.icon], 22), h('span', {class: 'rl-l'}, e.label)];
     if (e.hash === 'more') { const b = h('button', {type: 'button', class: 'rl-i', id: 'more-btn', 'data-h': 'more', 'aria-expanded': 'false', 'aria-controls': 'sheet'}, kids); b.addEventListener('click', () => setMenu($('sheet').hidden)); rail.append(b); }
