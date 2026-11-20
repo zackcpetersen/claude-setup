@@ -44,7 +44,7 @@ class Build(unittest.TestCase):
         for marker in ("__TITLE__", "/*__CSS__*/", "/*__THEME__*/", "/*__JS__*/", "__DATA__"):
             self.assertNotIn(marker, html)
         self.assertIn("<title>Sam's Status and Plans</title>", html)
-        self.assertIn("--canvas:#203040", html)
+        self.assertIn("--canvas:#E9EEF2", html)
         self.assertNotIn("</script> today", html)
         d = page_data(html)
         bands = [i["band"] for i in d["inbox"]["items"]]
@@ -56,7 +56,8 @@ class Build(unittest.TestCase):
         merged = [i for i in d["inbox"]["items"] if i["id"] == "gh:acme/billing#91"]
         self.assertEqual(len(merged), 1)
         self.assertEqual((merged[0]["title"], merged[0]["kind"]), ("Merge the region 3 cutover.", "merge"))
-        self.assertEqual([s["state"] for s in d["sources"]], ["ok", "ok", "ok", "ok"])
+        self.assertEqual([s["state"] for s in d["sources"]], ["ok", "ok", "ok", "ok", "ok"])
+        self.assertEqual(d["sources"][-1]["name"], "stats")
         self.assertEqual(d["strip"]["next_meeting"]["time"], "15:00")
         self.assertIn("inbox items", r.stdout)
 
@@ -102,8 +103,74 @@ class Build(unittest.TestCase):
 
     def test_no_em_or_en_dashes(self):
         files = [p for p in SKILL.rglob("*") if p.is_file() and p.suffix in (".py", ".js", ".css", ".html", ".json", ".md")]
-        files.append(REPO / "bin" / "status-feeds")
+        files += [REPO / "bin" / "status-feeds", REPO / "bin" / "eng-stats"]
         bad = [str(p) for p in files if p.exists() and any(chr(c) in p.read_text() for c in (0x2014, 0x2013))]
+        self.assertEqual(bad, [])
+
+    def fixture_build(self, *extra):
+        return self.build(self.home / "projects.json", "--config", str(self.home / "config.json"), "--home", str(self.home),
+                          "--now", NOW, "--no-state", *extra)
+
+    def test_dashboard_data_in_fixture_build(self):
+        r, html = self.fixture_build()
+        d = page_data(html)
+        for k in ("timeline", "pipeline", "waiting", "delivered", "jobs", "stats", "unlinked"):
+            self.assertIn(k, d)
+        self.assertEqual(d["jobs"]["billing-migration"][0]["eta"], "2026-01-22")
+        self.assertIn("job", [e["kind"] for e in d["timeline"]["events"]])
+        self.assertTrue(any(e["late"] and e["project_id"] == "search-revamp" for e in d["timeline"]["events"]))
+        self.assertEqual([s["n"] for s in d["pipeline"]["stages"]], [1, 1, 1, 1])
+        self.assertEqual(len(d["waiting"]["rows"]), 2)
+        self.assertEqual([x["title"] for x in d["delivered"]], ["Confirm Ana got the export"])
+        self.assertEqual(d["stats"]["login"], "sam")
+        self.assertIn("stats ok", r.stdout)
+
+    def test_no_stats_file(self):
+        (self.home / "feeds" / "stats.json").unlink()
+        _, html = self.fixture_build()
+        d = page_data(html)
+        self.assertIsNone(d["stats"])
+        self.assertNotIn("stats", [s["name"] for s in d["sources"]])
+
+    def test_broken_stats_file_marks_failing(self):
+        (self.home / "feeds" / "stats.json").write_text("{nope")
+        _, html = self.fixture_build()
+        states = {s["name"]: s["state"] for s in page_data(html)["sources"]}
+        self.assertEqual(states["stats"], "failing")
+
+    def test_sample_without_home_has_timeline_only(self):
+        _, html = self.build(SKILL / "sample-data.json", "--now", "2026-01-12T18:00:00Z")
+        d = page_data(html)
+        self.assertIsNone(d["pipeline"])
+        self.assertIsNone(d["stats"])
+        self.assertTrue(d["timeline"]["events"])
+
+    def test_ticket_keys_link_with_tracker_url(self):
+        _, html = self.fixture_build()
+        d = page_data(html)
+        ask = d["projects"][0]["needs_me"][0]
+        self.assertEqual(ask["ticket_parts"], [{"text": "ENG-142", "url": "https://tracker.example.com/browse/ENG-142"}])
+        self.assertNotIn("ENG-142", [u["text"] for u in d["unlinked"]])
+
+    def test_unlinked_mention_warns_without_tracker_url(self):
+        cfg = json.loads((self.home / "config.json").read_text())
+        del cfg["tracker_url"]
+        (self.home / "config.json").write_text(json.dumps(cfg))
+        r, html = self.fixture_build()
+        self.assertIn("ENG-142", [u["text"] for u in page_data(html)["unlinked"]])
+        self.assertIn("warning: unlinked mention ENG-142", r.stderr)
+
+    def test_no_hardcoded_workspace_hosts(self):
+        files = [p for p in SKILL.rglob("*") if p.is_file() and p.suffix in (".py", ".js", ".css", ".html", ".json", ".md")
+                 and "fixtures" not in p.parts and p.name != "test_build.py"]
+        files.append(REPO / "bin" / "eng-stats")
+        bad = []
+        for p in files:
+            text = p.read_text() if p.exists() else ""
+            for host in ("atlassian.net", "slack.com/archives", "notion.so", "notion.com"):
+                for line in text.splitlines():
+                    if host in line and "example" not in line and "FILL-IN" not in line and "acme" not in line:
+                        bad.append(f"{p.name}: {host}")
         self.assertEqual(bad, [])
 
 

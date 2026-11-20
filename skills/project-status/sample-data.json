@@ -10,6 +10,9 @@
    "progress_pct": 60,
    "progress_basis": "3 of 5 milestones done.",
    "next_milestone": "Cut over the last region, 2026-01-20",
+   "next_milestone_date": "2026-01-20",
+   "jobs": [{"label": "Backfill", "done": 610000, "total": 1000000, "unit": "files", "per_day": 45000,
+             "updated": "2026-01-12T15:00:00Z"}],
    "deadline": "2026-01-30",
    "needs_me": [
     {"ask": "Approve the cutover window for the last region.", "ticket": "ENG-142", "due": "2026-01-15",

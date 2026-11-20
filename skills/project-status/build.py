@@ -15,7 +15,10 @@ projects.json:
                progress_pct (0-100), progress_basis, next_milestone, deadline,
                needs_me[] {ask, ticket, due, link, effort ("5m"), who_waits}, summary,
                breakdown[] {group, items[] {text, state (done | in progress | waiting | blocked | not started), owner, ref, date}},
-               decisions[] {date, decision}, recent_progress[] {date, text}, links[] {label, url}
+               decisions[] {date, decision}, recent_progress[] {date, text}, links[] {label, url},
+               next_milestone_date (YYYY-MM-DD, puts the milestone on the timeline),
+               jobs[] {label, done, total, unit, per_day, eta, updated}: long jobs such as a backfill.
+               Written by job.py, not by hand; the page works out percent, finish date and lateness.
   waiting_on[] person, what, project_id, since, nudge_due, where, link
   one_offs[]   title (the only required field), state, needs_me (true/false), due, note, ref, progress_pct
                Small standalone items that belong to no project. Add one with add_oneoff.py.
@@ -30,6 +33,8 @@ config.json (optional, keeps anything specific to one person or company out of t
   tz           IANA time zone for "today" (default: this machine's zone)
   inbox        cap, home_count, stale_days, slack_url, effort_defaults and the feed settings (see derive.DEFAULTS)
   feeds        every_minutes, hours, days: the status-feeds schedule, used to tell when a feed is stale
+  links        {"patterns": [{"match": "<regex with one group>", "url": "<base>{1}"}]}: link bases for other keys
+  stats        settings for ~/bin/eng-stats (it writes feeds/stats.json, which the #stats page reads)
   theme        {"light": {"--token": "value"}} overriding the page's color and font tokens (page.css :root).
                The page keeps one look in light and dark; add "dark" only if you want a separate dark palette.
 """
@@ -98,7 +103,7 @@ def main(argv=None):
     theme = cfg.pop("theme", {}) or {}
     d.pop("unsure", None)
 
-    errors, inbox, feeds, prev = {}, None, {"github": None, "slack": None}, {}
+    errors, inbox, feeds, prev = {}, None, {"github": None, "slack": None, "stats": None}, {}
     home = pathlib.Path(a.home).expanduser() if a.home else None
     if home:
         inbox = read_json(home / "inbox.json", "session", errors)
@@ -114,7 +119,7 @@ def main(argv=None):
         tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1) + "\n")
         tmp.replace(sdir / "build.json")
 
-    page = {k: d[k] for k in ("as_of", "projects", "waiting_on", "one_offs") if k in d}
+    page = {k: d[k] for k in ("as_of",) if k in d}
     page.setdefault("projects", [])
     page["config"] = {k: cfg[k] for k in ("title", "tracker_url", "github_org", "source_note") if k in cfg}
     page["config"]["inbox"] = view.pop("inbox_config")
@@ -123,8 +128,14 @@ def main(argv=None):
     title = str(cfg.get("title", "Project Status")).replace("<", "").replace(">", "").replace("&", "and")
     html = render(page, title)
     pathlib.Path(a.out).write_text(html)
+    unlinked = view.get("unlinked") or []
+    for u in unlinked[:20]:
+        print(f"warning: unlinked mention {u['text']} at {u['where']} ({u['why']})", file=sys.stderr)
+    if len(unlinked) > 20:
+        print(f"warning: and {len(unlinked) - 20} more unlinked mentions", file=sys.stderr)
+    stats_state = next((x["state"] for x in view["sources"] if x["name"] == "stats"), "missing")
     print(f"{a.out}: {len(html)} bytes, {len(page['projects'])} projects, {len(d.get('waiting_on') or [])} waits, "
-          f"{view['inbox']['open']} inbox items")
+          f"{view['inbox']['open']} inbox items, stats {stats_state}, {len(unlinked)} unlinked")
     return 0
 
 

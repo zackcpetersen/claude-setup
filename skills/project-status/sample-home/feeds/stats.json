@@ -1,0 +1,43 @@
+{
+ "source": "stats",
+ "version": 1,
+ "generated_at": "2026-01-12T14:31:00Z",
+ "ok": true,
+ "error": null,
+ "last_ok_at": "2026-01-12T14:31:00Z",
+ "login": "sam",
+ "org": "acme",
+ "team": {"slug": "acme/platform", "size": 6, "source": "github"},
+ "coverage": {"from": "2025-10-14", "to": "2026-01-12", "prs": 1240, "truncated_windows": 0},
+ "groups": {
+  "me": {
+   "weekly": {
+    "weeks": ["2025-10-27", "2025-11-03", "2025-11-10", "2025-11-17", "2025-11-24", "2025-12-01", "2025-12-08", "2025-12-15", "2025-12-22", "2025-12-29", "2026-01-05", "2026-01-12"],
+    "merged": [2, 3, 4, 3, 5, 2, 0, 3, 4, 3, 4, 2],
+    "given": [3, 4, 5, 4, 6, 3, 1, 4, 5, 4, 5, 3],
+    "received": [1, 2, 3, 2, 4, 1, 0, 2, 3, 2, 3, 1],
+    "ttfr_h": [null, 4.2, 3.1, 5.0, 2.5, 3.3, null, 4.0, 3.8, 2.9, 3.5, 3.0],
+    "ttm_h": [null, 30.5, 28.0, 26.1, 40.2, 33.6, null, 29.9, 31.0, 24.4, 27.5, 26.0]
+   },
+   "windows": {
+    "30": {"merged": 14, "reviews_given": 21, "reviews_received": 15, "ttfr_h": {"median": 3.3, "p90": 9.0}, "ttm_h": {"median": 33.6, "p90": 70.1}, "merged_no_review": 1, "re_reviews": 2, "by_repo_group": {"app": 10, "data": 2, "other": 2}},
+    "90": {"merged": 40, "reviews_given": 55, "reviews_received": 41, "ttfr_h": {"median": 3.8, "p90": 11.2}, "ttm_h": {"median": 30.1, "p90": 75.0}, "merged_no_review": 3, "re_reviews": 6, "by_repo_group": {"app": 28, "data": 7, "other": 5}}
+   }
+  },
+  "team": {
+   "weekly": {
+    "weeks": ["2025-10-27", "2025-11-03", "2025-11-10", "2025-11-17", "2025-11-24", "2025-12-01", "2025-12-08", "2025-12-15", "2025-12-22", "2025-12-29", "2026-01-05", "2026-01-12"],
+    "merged": [12, 18, 24, 18, 30, 12, 0, 18, 24, 18, 24, 12],
+    "given": [13, 19, 25, 19, 31, 13, 1, 19, 25, 19, 25, 13],
+    "received": [11, 17, 23, 17, 29, 11, 0, 17, 23, 17, 23, 11],
+    "ttfr_h": [null, 4.2, 3.1, 5.0, 2.5, 3.3, null, 4.0, 3.8, 2.9, 3.5, 3.0],
+    "ttm_h": [null, 30.5, 28.0, 26.1, 40.2, 33.6, null, 29.9, 31.0, 24.4, 27.5, 26.0]
+   },
+   "windows": {
+    "30": {"merged": 84, "reviews_given": 126, "reviews_received": 90, "ttfr_h": {"median": 3.3, "p90": 9.0}, "ttm_h": {"median": 33.6, "p90": 70.1}, "merged_no_review": 1, "re_reviews": 2, "by_repo_group": {"app": 60, "data": 12, "other": 12}},
+    "90": {"merged": 240, "reviews_given": 330, "reviews_received": 246, "ttfr_h": {"median": 3.8, "p90": 11.2}, "ttm_h": {"median": 30.1, "p90": 75.0}, "merged_no_review": 3, "re_reviews": 6, "by_repo_group": {"app": 168, "data": 42, "other": 30}}
+   }
+  }
+ },
+ "excluded": {"bot_prs": 42}
+}

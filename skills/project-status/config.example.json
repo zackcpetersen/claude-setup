@@ -22,6 +22,9 @@
     "hours": "08:00-18:00",
     "days": "Mon-Fri"
   },
+  "links": {
+    "patterns": []
+  },
   "theme": {
     "light": {
       "--canvas": "#1F2A37",
