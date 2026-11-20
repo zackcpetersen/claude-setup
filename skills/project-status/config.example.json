@@ -25,6 +25,19 @@
   "links": {
     "patterns": []
   },
+  "stats": {
+    "org": "",
+    "team_slug": "",
+    "team_members": [],
+    "repos_include": [],
+    "repos_skip": [],
+    "repo_groups": {},
+    "bots": [],
+    "business_hours_clock": false,
+    "keep_days": 100,
+    "min_remaining": 1000,
+    "schedule": "06:30"
+  },
   "theme": {
     "light": {
       "--canvas": "#1F2A37",

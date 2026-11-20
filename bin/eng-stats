@@ -1,0 +1,946 @@
+#!/usr/bin/env python3
+"""eng-stats: pull-request stats for the status page's #stats view. No model in the loop.
+
+  eng-stats refresh [--since 90d] [--full] [--max-pages N] [--home DIR] [--config PATH] [--now ISO]
+  eng-stats report  [--home DIR] [--config PATH] [--now ISO]
+  eng-stats run     [same flags as refresh]      refresh, then report (what the schedule calls)
+  eng-stats doctor  [--home DIR] [--config PATH]
+  eng-stats schedule --print launchd|cron [--home DIR] [--config PATH]
+
+--home defaults to ~/.claude/project-status and --config to <home>/config.json.
+`refresh` pages GitHub's PR search for the org (read-only) into <home>/cache/prs.jsonl, a week
+at a time, and keeps a cursor so the next run only fetches what changed. `report` reads only the
+cache and writes <home>/feeds/stats.json: aggregates for you and your team (merged PRs, reviews
+given and received, time to first review, time to merge). No per-person rows, no PR titles.
+Exit 0 ok, 1 a GitHub or data failure (the report still says so), 2 a usage or config problem.
+`schedule --print` only prints a launchd plist or a cron line; it never installs anything.
+Settings live in the config's `stats` section. Standard library only. See
+skills/project-status/SKILL.md.
+"""
+
+import argparse
+import fcntl
+import json
+import math
+import os
+import plistlib
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import time as _time
+from datetime import datetime, time, timedelta, timezone
+from pathlib import Path
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    ZoneInfo = None
+
+DEFAULT_HOME = "~/.claude/project-status"
+CMD_TIMEOUT = 60
+VERSION = 1
+SCHEMA = 1
+LABEL = "com.claude-setup.eng-stats"
+PAGE_SIZE = 50
+SEARCH_CAP = 1000
+WINDOW = timedelta(days=7)
+FLOOR = timedelta(hours=1)
+OVERLAP = timedelta(hours=1)
+TEAM_TTL = timedelta(hours=24)
+WINDOWS = (30, 90)
+WEEKS = 12
+# `tz` and `feeds` are copies of the shared keys in skills/project-status/derive.py DEFAULTS (this
+# script is installed on its own and cannot import from the skill folder). A test checks they match.
+# `stats` lives only here.
+DEFAULTS = {
+    "tz": "",
+    "feeds": {"every_minutes": 15, "hours": "08:00-18:00", "days": "Mon-Fri"},
+    "stats": {
+        "org": "",
+        "team_slug": "",
+        "team_members": [],
+        "repos_include": [],
+        "repos_skip": [],
+        "repo_groups": {},
+        "bots": [],
+        "business_hours_clock": False,
+        "keep_days": 100,
+        "min_remaining": 1000,
+        "schedule": "06:30",
+    },
+}
+DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+QUERY = """query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: %d, after: $after) {
+    issueCount pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest {
+      number repository { nameWithOwner } author { login __typename }
+      createdAt updatedAt mergedAt closedAt state isDraft additions deletions changedFiles
+      timelineItems(itemTypes: [READY_FOR_REVIEW_EVENT], first: 5) { nodes { ... on ReadyForReviewEvent { createdAt } } }
+      reviews(first: 30) { totalCount nodes { author { login __typename } state submittedAt } }
+      reviewThreads { totalCount }
+    } }
+  }
+  rateLimit { cost remaining resetAt }
+}""" % PAGE_SIZE
+
+NOW = lambda: datetime.now(timezone.utc)
+WHICH = shutil.which
+SLEEP = _time.sleep
+
+
+class FeedError(Exception):
+    """A GitHub or data failure. The message is one line, safe to write into stats.json."""
+
+
+class UsageError(Exception):
+    """A usage or config problem. Exit 2."""
+
+
+class Stop(Exception):
+    """A clean stop (rate limit floor or --max-pages). Completed windows are kept."""
+
+
+def run_cmd(args):
+    return subprocess.run(args, capture_output=True, text=True, timeout=CMD_TIMEOUT, check=True).stdout
+
+
+# ---------- config and time (small copies from status-feeds and derive.py) ----------
+
+def load_config(path):
+    p = Path(path).expanduser()
+    if not p.exists():
+        return {}
+    try:
+        cfg = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        raise UsageError(f"cannot read config {p}: {e}")
+    if not isinstance(cfg, dict):
+        raise UsageError(f"config {p} is not a JSON object")
+    return cfg
+
+
+def settings(cfg):
+    out = json.loads(json.dumps(DEFAULTS))
+    for k, v in (cfg or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k].update(v)
+        else:
+            out[k] = v
+    return out
+
+
+def local_tz(name):
+    if name and ZoneInfo is not None:
+        try:
+            return ZoneInfo(name)
+        except Exception:
+            pass
+    return datetime.now().astimezone().tzinfo
+
+
+def tz_valid(name):
+    if not name:
+        return True
+    try:
+        ZoneInfo(name)
+        return True
+    except Exception:
+        return False
+
+
+def parse_time(value):
+    """Lenient ISO time: 'Z' or an offset, with or without seconds. Naive means UTC."""
+    if not value or not isinstance(value, str):
+        return None
+    t = value.strip()
+    if t[-1:] in ("Z", "z"):
+        t = t[:-1] + "+00:00"
+    try:
+        d = datetime.fromisoformat(t)
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def iso(d):
+    return d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_hours(text):
+    m = re.fullmatch(r"\s*(\d\d?):(\d\d)\s*-\s*(\d\d?):(\d\d)\s*", str(text or ""))
+    if not m:
+        return time(0, 0), time(23, 59, 59)
+    return time(int(m.group(1)), int(m.group(2))), time(int(m.group(3)), int(m.group(4)))
+
+
+def parse_days(text):
+    out = set()
+    for part in str(text or "Mon-Sun").lower().replace(" ", "").split(","):
+        if "-" in part:
+            a, b = part.split("-", 1)
+            if a[:3] in DAY_NAMES and b[:3] in DAY_NAMES:
+                k, j = DAY_NAMES.index(a[:3]), DAY_NAMES.index(b[:3])
+                while True:
+                    out.add(k)
+                    if k == j:
+                        break
+                    k = (k + 1) % 7
+        elif part[:3] in DAY_NAMES:
+            out.add(DAY_NAMES.index(part[:3]))
+    return out or set(range(7))
+
+
+def in_hours_minutes(start, end, tz, hours, days):
+    """Minutes between two times that fall inside the scheduled hours and days, local time."""
+    if end <= start:
+        return 0.0
+    h0, h1 = hours
+    s, e = start.astimezone(tz), end.astimezone(tz)
+    total, d = 0.0, s.date()
+    while d <= e.date():
+        if d.weekday() in days:
+            lo = datetime.combine(d, h0, tzinfo=tz)
+            hi = datetime.combine(d, h1, tzinfo=tz)
+            a, b = max(lo, s), min(hi, e)
+            if b > a:
+                total += (b - a).total_seconds() / 60
+        d += timedelta(days=1)
+    return total
+
+
+def parse_since(text):
+    m = re.fullmatch(r"\s*(\d+)\s*([dh])\s*", str(text or ""))
+    if not m or int(m.group(1)) <= 0:
+        raise UsageError(f"bad --since {text!r}, use a number of days or hours like 90d or 12h")
+    n = int(m.group(1))
+    return timedelta(days=n) if m.group(2) == "d" else timedelta(hours=n)
+
+
+def parse_clock(text):
+    m = re.fullmatch(r"\s*(\d\d?):(\d\d)\s*", str(text or ""))
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        raise UsageError(f"bad stats.schedule {text!r}, use HH:MM like 06:30")
+    return int(m.group(1)), int(m.group(2))
+
+
+def stats_org(conf):
+    org = (conf["stats"].get("org") or "").strip()
+    if not org:
+        org = (conf.get("github_org") or "").strip()
+    if not org or "FILL-IN" in org:
+        return ""
+    return org
+
+
+def bot_set(conf):
+    return {b for b in (conf["stats"].get("bots") or []) if b}
+
+
+# ---------- files ----------
+
+def write_json(path, obj):
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=1) + "\n")
+    os.replace(tmp, path)
+
+
+def read_json(path):
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def write_rows(path, rows):
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        for key in sorted(rows):
+            f.write(json.dumps(rows[key], ensure_ascii=False, separators=(",", ":")) + "\n")
+    os.replace(tmp, path)
+
+
+def read_rows(path):
+    rows = {}
+    try:
+        lines = Path(path).read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("key"):
+            rows[row["key"]] = row
+    return rows
+
+
+# ---------- GitHub ----------
+
+def _first_line(text, default):
+    return (str(text or "").strip().splitlines() or [default])[0]
+
+
+def _gql_errors(text):
+    try:
+        body = json.loads(text or "")
+    except ValueError:
+        return ""
+    errs = body.get("errors") if isinstance(body, dict) else None
+    if not errs:
+        return ""
+    return "GraphQL error: " + "; ".join(str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in errs)
+
+
+def gh(args, retry=False):
+    """Run gh. With retry, one more try after 5 seconds on a 502 or a timeout."""
+    for attempt in (0, 1):
+        try:
+            return run_cmd(args)
+        except FileNotFoundError:
+            raise FeedError("gh is not installed or not on PATH")
+        except subprocess.TimeoutExpired:
+            if retry and attempt == 0:
+                SLEEP(5)
+                continue
+            raise FeedError(f"gh timed out after {CMD_TIMEOUT}s")
+        except subprocess.CalledProcessError as e:
+            text = f"{e.stderr or ''} {e.output or ''}"
+            if retry and attempt == 0 and "502" in text:
+                SLEEP(5)
+                continue
+            msg = _gql_errors(e.output) or _first_line(e.stderr, "gh failed")
+            raise FeedError(f"gh exited {e.returncode}: {msg[:200]}")
+    raise FeedError("gh failed")  # pragma: no cover
+
+
+def search_string(org, conf, start, end):
+    q = f"org:{org} is:pr updated:{iso(start)}..{iso(end)} sort:updated-asc"
+    q += "".join(f" repo:{org}/{r}" for r in (conf["stats"].get("repos_include") or []) if r)
+    q += "".join(f" -repo:{org}/{r}" for r in (conf["stats"].get("repos_skip") or []) if r)
+    return q
+
+
+def _login(actor):
+    actor = actor or {}
+    return actor.get("login") or "", actor.get("__typename") == "Bot"
+
+
+def normalize(node, bots):
+    """One search node as a cache row, or None for a node that is not a pull request."""
+    if not node or node.get("number") is None:
+        return None
+    repo = ((node.get("repository") or {}).get("nameWithOwner")) or ""
+    author, is_bot = _login(node.get("author"))
+    ready = [e.get("createdAt") for e in ((node.get("timelineItems") or {}).get("nodes") or [])
+             if e and parse_time(e.get("createdAt"))]
+    reviews = []
+    for r in ((node.get("reviews") or {}).get("nodes") or []):
+        if not r or r.get("state") == "PENDING":
+            continue
+        by, rb = _login(r.get("author"))
+        reviews.append({"by": by, "bot": rb or by in bots, "state": r.get("state"), "at": r.get("submittedAt")})
+    return {
+        "key": f"{repo}#{node['number']}", "repo": repo, "number": node["number"], "author": author,
+        "bot": is_bot or author in bots, "created_at": node.get("createdAt"),
+        "ready_at": min(ready, key=parse_time) if ready else None, "merged_at": node.get("mergedAt"),
+        "closed_at": node.get("closedAt"), "state": node.get("state"), "draft": bool(node.get("isDraft")),
+        "additions": node.get("additions") or 0, "deletions": node.get("deletions") or 0,
+        "changed_files": node.get("changedFiles") or 0,
+        "threads": (node.get("reviewThreads") or {}).get("totalCount") or 0,
+        "reviews_total": (node.get("reviews") or {}).get("totalCount") or 0,
+        "reviews": reviews, "updated_at": node.get("updatedAt"),
+    }
+
+
+class Fetcher:
+    """Pages the search API with a page budget and a rate-limit floor."""
+
+    def __init__(self, org, conf, max_pages):
+        self.org, self.conf = org, conf
+        self.max_pages = max_pages
+        self.min_remaining = int(conf["stats"].get("min_remaining") or 0)
+        self.bots = bot_set(conf)
+        self.pages = 0
+        self.remaining = None
+        self.truncated = []
+
+    def page(self, q, after):
+        if self.max_pages is not None and self.pages >= self.max_pages:
+            raise Stop(f"stopped at --max-pages {self.max_pages}")
+        if self.remaining is not None and self.remaining < self.min_remaining:
+            raise Stop(f"stopped with {self.remaining} GraphQL points left (stats.min_remaining {self.min_remaining})")
+        if self.pages:
+            SLEEP(1)
+        self.pages += 1
+        args = ["gh", "api", "graphql", "-f", "query=" + QUERY, "-f", "q=" + q]
+        if after:
+            args += ["-f", "after=" + after]
+        out = gh(args, retry=True)
+        msg = _gql_errors(out)
+        if msg:
+            raise FeedError(msg[:300])
+        try:
+            body = json.loads(out)
+        except ValueError:
+            raise FeedError("gh returned text that is not JSON")
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, dict) or not isinstance(data.get("search"), dict):
+            raise FeedError("GraphQL response has no search data")
+        rate = data.get("rateLimit") or {}
+        if isinstance(rate.get("remaining"), int):
+            self.remaining = rate["remaining"]
+        return data["search"]
+
+    def fetch(self, start, end):
+        """Rows updated in [start, end]. Splits a window over the search cap in half, never below one hour."""
+        q = search_string(self.org, self.conf, start, end)
+        first = self.page(q, None)
+        count = first.get("issueCount") or 0
+        if count > SEARCH_CAP and (end - start) / 2 >= FLOOR:
+            mid = start + (end - start) / 2
+            mid = mid.replace(microsecond=0)
+            return self.fetch(start, mid) + self.fetch(mid, end)
+        if count > SEARCH_CAP:
+            self.truncated.append({"from": iso(start), "to": iso(end)})
+        rows, res = [], first
+        while True:
+            rows += [r for r in (normalize(n, self.bots) for n in (res.get("nodes") or [])) if r]
+            info = res.get("pageInfo") or {}
+            if not info.get("hasNextPage") or not info.get("endCursor"):
+                return rows
+            res = self.page(q, info["endCursor"])
+
+
+def windows(start, end):
+    out, a = [], start
+    while a < end:
+        b = min(a + WINDOW, end)
+        out.append((a, b))
+        a = b
+    return out
+
+
+def get_login():
+    login = gh(["gh", "api", "user", "--jq", ".login"]).strip()
+    if not login:
+        raise FeedError("gh api user returned no login; run gh auth login")
+    return login
+
+
+def refresh_team(home, conf, org, now):
+    """Team members into cache/team.json: from GitHub (cached 24 hours), else stats.team_members."""
+    path = home / "cache" / "team.json"
+    slug = (conf["stats"].get("team_slug") or "").strip()
+    members = [m for m in (conf["stats"].get("team_members") or []) if m]
+    full = f"{org}/{slug}" if slug else ""
+    if slug:
+        prev = read_json(path) or {}
+        fetched = parse_time(prev.get("fetched_at"))
+        if prev.get("source") == "github" and prev.get("slug") == full and fetched and now - fetched < TEAM_TTL:
+            return prev
+        try:
+            out = gh(["gh", "api", f"orgs/{org}/teams/{slug}/members", "--paginate", "--jq", ".[].login"])
+            got = sorted({line.strip() for line in out.splitlines() if line.strip()})
+            team = {"slug": full, "members": got, "fetched_at": iso(now), "source": "github"}
+            write_json(path, team)
+            return team
+        except FeedError:
+            note = "team lookup failed, gh needs the read:org scope"
+            team = ({"slug": full, "members": sorted(set(members)), "fetched_at": iso(now), "source": "config",
+                     "note": note} if members else {"slug": full, "members": [], "fetched_at": iso(now),
+                                                    "source": None, "note": note})
+            write_json(path, team)
+            return team
+    team = {"slug": "", "members": sorted(set(members)), "fetched_at": iso(now),
+            "source": "config" if members else None}
+    write_json(path, team)
+    return team
+
+
+def refresh(home, conf, args, now):
+    """Fetch changed PRs into the cache. Returns a one-line stop note or None. Raises FeedError."""
+    org = stats_org(conf)
+    if not org:
+        raise UsageError("set stats.org (or github_org) in config.json")
+    since = parse_since(args.since)
+    cache = home / "cache"
+    meta_path, rows_path = cache / "meta.json", cache / "prs.jsonl"
+    meta = read_json(meta_path) or {}
+    rows = read_rows(rows_path) or {}
+    cursor = parse_time(meta.get("cursor"))
+    full = bool(args.full) or meta.get("org") != org or cursor is None or meta.get("schema") != SCHEMA
+    if full:
+        start, rows = now - since, {}
+        meta = {"schema": SCHEMA, "org": org, "login": meta.get("login"), "cursor": None,
+                "filled_from": iso(now - since), "last_refresh_at": None, "last_error": None, "truncated": []}
+    else:
+        start = cursor - OVERLAP
+    keep = timedelta(days=float(conf["stats"].get("keep_days") or 100))
+
+    def save(error=None):
+        cover = max(parse_time(meta.get("filled_from")) or now - keep, now - keep)
+        for k in [k for k, r in rows.items() if (parse_time(r.get("updated_at")) or now) < now - keep]:
+            del rows[k]
+        meta["truncated"] = [t for t in meta.get("truncated") or [] if (parse_time(t.get("to")) or now) >= cover]
+        meta["last_refresh_at"] = iso(now)
+        meta["last_error"] = error
+        write_rows(rows_path, rows)
+        write_json(meta_path, meta)
+
+    def upsert(new):
+        for r in new:
+            rows[r["key"]] = r
+
+    try:
+        meta["login"] = get_login()
+        refresh_team(home, conf, org, now)
+        f = Fetcher(org, conf, args.max_pages)
+        spans = windows(start, now)
+        for a, b in spans:
+            got = f.fetch(a, b)
+            upsert(got)
+            meta["truncated"] = (meta.get("truncated") or []) + f.truncated
+            f.truncated = []
+            meta["cursor"] = iso(b)
+            save()
+        if spans:  # second pass over the newest window catches PRs that moved while paging
+            a, b = spans[-1]
+            upsert(f.fetch(a, b))
+            known = {(t["from"], t["to"]) for t in meta.get("truncated") or []}
+            meta["truncated"] = (meta.get("truncated") or []) + [t for t in f.truncated
+                                                                  if (t["from"], t["to"]) not in known]
+            save()
+        return None
+    except Stop as s:
+        save()
+        return str(s)
+    except FeedError as e:
+        save(str(e)[:200])
+        raise
+
+
+# ---------- metrics (cache only) ----------
+
+def median(vals):
+    s = sorted(vals)
+    n = len(s)
+    if not n:
+        return None
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def p90(vals):
+    s = sorted(vals)
+    return s[math.ceil(0.9 * len(s)) - 1] if s else None
+
+
+def _r(v):
+    return None if v is None else round(v, 1)
+
+
+def spread(vals):
+    if len(vals) < 5:
+        return {"median": None, "p90": None}
+    return {"median": _r(median(vals)), "p90": _r(p90(vals))}
+
+
+class Clock:
+    def __init__(self, conf, tz):
+        self.business = bool(conf["stats"].get("business_hours_clock"))
+        self.tz = tz
+        self.hours = parse_hours(conf["feeds"].get("hours"))
+        self.days = parse_days(conf["feeds"].get("days"))
+
+    def hours_between(self, a, b):
+        if b <= a:
+            return 0.0
+        if self.business:
+            return in_hours_minutes(a, b, self.tz, self.hours, self.days) / 60
+        return (b - a).total_seconds() / 3600
+
+
+class Pr:
+    """A cache row with parsed times and the review facts the metrics need."""
+
+    def __init__(self, row, bots):
+        self.key = row.get("key")
+        self.repo = (row.get("repo") or "").split("/")[-1]
+        self.author = row.get("author") or ""
+        self.bot = bool(row.get("bot")) or self.author in bots
+        self.created = parse_time(row.get("created_at"))
+        self.start = parse_time(row.get("ready_at")) or self.created
+        self.merged = parse_time(row.get("merged_at"))
+        self.reviews = []  # (by, at) by others, not bots, oldest first
+        for r in row.get("reviews") or []:
+            at = parse_time(r.get("at"))
+            by = r.get("by") or ""
+            if at and by and by != self.author and not r.get("bot") and by not in bots:
+                self.reviews.append((by, at))
+        self.reviews.sort(key=lambda x: x[1])
+        self.first_review = self.reviews[0][1] if self.reviews else None
+
+
+def _in(t, a, b):
+    return t is not None and a < t <= b
+
+
+def window_facts(prs, members, a, b, clock):
+    """Counts and turnaround hours for one group over the times in (a, b]."""
+    mine = [p for p in prs if p.author in members and not p.bot]
+    merged = [p for p in mine if _in(p.merged, a, b)]
+    given = set()
+    for p in prs:
+        for by, at in p.reviews:
+            if by in members and _in(at, a, b):
+                given.add((by, p.key))
+    return {"merged": merged, "given": len(given),
+            "received": sum(1 for p in mine if _in(p.first_review, a, b)),
+            "ttfr": [clock.hours_between(p.start, p.first_review) for p in merged if p.first_review and p.start],
+            "ttm": [clock.hours_between(p.start, p.merged) for p in merged if p.start]}
+
+
+def group_window(prs, members, a, b, clock, repo_groups):
+    f = window_facts(prs, members, a, b, clock)
+    merged = f["merged"]
+    re_reviews = 0
+    for p in merged:
+        counts = {}
+        for by, _ in p.reviews:
+            counts[by] = counts.get(by, 0) + 1
+        re_reviews += sum(c - 1 for c in counts.values())
+    by_group = {name: 0 for name in repo_groups}
+    by_group["other"] = 0
+    for p in merged:
+        name = next((g for g, repos in repo_groups.items() if p.repo in (repos or [])), "other")
+        by_group[name] += 1
+    return {"merged": len(merged), "reviews_given": f["given"], "reviews_received": f["received"],
+            "ttfr_h": spread(f["ttfr"]), "ttm_h": spread(f["ttm"]),
+            "merged_no_review": sum(1 for p in merged if not p.reviews), "re_reviews": re_reviews,
+            "by_repo_group": by_group}
+
+
+def week_starts(now, tz):
+    today = now.astimezone(tz).date()
+    monday = today - timedelta(days=today.weekday())
+    return [monday - timedelta(weeks=i) for i in range(WEEKS - 1, -1, -1)]
+
+
+def group_weekly(prs, members, now, tz, clock):
+    starts = week_starts(now, tz)
+    out = {"weeks": [d.isoformat() for d in starts], "merged": [], "given": [], "received": [],
+           "ttfr_h": [], "ttm_h": []}
+    tick = timedelta(microseconds=1)  # (a, b] shifted by a tick: a week runs from Monday 00:00 up to the next
+    for d in starts:
+        a = datetime.combine(d, time(0), tzinfo=tz)
+        b = datetime.combine(d + timedelta(days=7), time(0), tzinfo=tz)
+        f = window_facts(prs, members, a - tick, min(b - tick, now), clock)
+        out["merged"].append(len(f["merged"]))
+        out["given"].append(f["given"])
+        out["received"].append(f["received"])
+        out["ttfr_h"].append(_r(median(f["ttfr"])) if len(f["ttfr"]) >= 3 else None)
+        out["ttm_h"].append(_r(median(f["ttm"])) if len(f["ttm"]) >= 3 else None)
+    return out
+
+
+def load_team(home, conf, org):
+    """The team from cache/team.json when it matches the configured slug, else stats.team_members."""
+    slug = (conf["stats"].get("team_slug") or "").strip()
+    full = f"{org}/{slug}" if slug else ""
+    team = read_json(home / "cache" / "team.json")
+    if not isinstance(team, dict) or team.get("slug") != full:
+        team = None
+    if team and team.get("members"):
+        return team
+    members = [m for m in (conf["stats"].get("team_members") or []) if m]
+    if members:
+        return {"slug": full, "members": sorted(set(members)), "source": "config", "note": (team or {}).get("note")}
+    return None
+
+
+def compute(home, conf, now, tz):
+    """The stats body from the cache, or None when there is no cache yet."""
+    meta = read_json(home / "cache" / "meta.json")
+    rows = read_rows(home / "cache" / "prs.jsonl")
+    if not isinstance(meta, dict) or rows is None or not meta.get("cursor"):
+        return None
+    bots = bot_set(conf)
+    clock = Clock(conf, tz)
+    prs = [Pr(r, bots) for r in rows.values()]
+    login = meta.get("login") or ""
+    repo_groups = conf["stats"].get("repo_groups") or {}
+    if not isinstance(repo_groups, dict):
+        repo_groups = {}
+    team = load_team(home, conf, meta.get("org") or stats_org(conf))
+    groups = {"me": {login}}
+    if team:
+        groups["team"] = set(team["members"])
+    out_groups = {}
+    for name, members in groups.items():
+        out_groups[name] = {
+            "weekly": group_weekly(prs, members, now, tz, clock),
+            "windows": {str(d): group_window(prs, members, now - timedelta(days=d), now, clock, repo_groups)
+                        for d in WINDOWS},
+        }
+    start90 = now - timedelta(days=max(WINDOWS))
+    cover = max(parse_time(meta.get("filled_from")) or start90, start90)
+    upto = min(parse_time(meta.get("cursor")) or now, now)
+    team_out = None
+    if team:
+        team_out = {"slug": team.get("slug") or "", "size": len(team["members"]), "source": team.get("source")}
+        if team.get("note"):
+            team_out["note"] = team["note"]
+    return {
+        "login": login,
+        "org": meta.get("org") or stats_org(conf),
+        "team": team_out,
+        "coverage": {
+            "from": cover.astimezone(tz).date().isoformat(), "to": upto.astimezone(tz).date().isoformat(),
+            "prs": sum(1 for r in rows.values() if (parse_time(r.get("updated_at")) or start90) >= cover),
+            "truncated_windows": sum(1 for t in meta.get("truncated") or []
+                                     if (parse_time(t.get("to")) or start90) >= cover),
+        },
+        "groups": out_groups,
+        "excluded": {"bot_prs": sum(1 for p in prs if p.bot and _in(p.merged, start90, now))},
+    }
+
+
+def report(home, conf, now, tz, error=None):
+    """Write feeds/stats.json. Returns the written object."""
+    path = home / "feeds" / "stats.json"
+    prev = read_json(path) or {}
+    body = compute(home, conf, now, tz)
+    if body is None:
+        error = error or "no cache yet, run eng-stats refresh"
+    ok = error is None
+    out = {"source": "stats", "version": VERSION, "generated_at": iso(now), "ok": ok,
+           "error": None if ok else _first_line(error, "failed")[:200],
+           "last_ok_at": iso(now) if ok else prev.get("last_ok_at")}
+    if body is not None:
+        out.update(body)
+    write_json(path, out)
+    return out
+
+
+# ---------- commands ----------
+
+def paths(args):
+    home = Path(args.home or DEFAULT_HOME).expanduser().absolute()
+    config = Path(args.config).expanduser().absolute() if args.config else home / "config.json"
+    return home, config
+
+
+def _now(args):
+    now = parse_time(args.now) if getattr(args, "now", None) else NOW()
+    if now is None:
+        raise UsageError(f"bad --now {args.now!r}")
+    return now
+
+
+def cmd_data(args):
+    """refresh, report and run share the lock and the folders."""
+    home, config = paths(args)
+    conf = settings(load_config(config))
+    tz = local_tz(conf.get("tz"))
+    now = _now(args)
+    if args.cmd in ("refresh", "run"):
+        if not stats_org(conf):
+            raise UsageError("set stats.org (or github_org) in config.json")
+        parse_since(args.since)
+    for d in ("cache", "feeds", "state", "logs"):
+        (home / d).mkdir(parents=True, exist_ok=True)
+    lock = open(home / "state" / "eng-stats.lock", "w")
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("eng-stats: another run holds the lock, skipping", file=sys.stderr)
+            return 0
+        error = None
+        if args.cmd in ("refresh", "run"):
+            try:
+                note = refresh(home, conf, args, now)
+                if note:
+                    print(f"eng-stats: {note}; the next run continues from the cursor", file=sys.stderr)
+            except FeedError as e:
+                error = _first_line(str(e), "refresh failed")[:200]
+            except Exception as e:  # an odd response must still leave a report saying so
+                error = f"unexpected {type(e).__name__}: {_first_line(str(e), '')}"[:200]
+            if error:
+                print(f"eng-stats: refresh: {error}", file=sys.stderr)
+        if args.cmd in ("report", "run"):
+            out = report(home, conf, now, tz, error)
+            if not out["ok"]:
+                if args.cmd == "report":
+                    print(f"eng-stats: report: {out['error']}", file=sys.stderr)
+                return 1
+        return 1 if error else 0
+    finally:
+        lock.close()
+
+
+def cmd_doctor(args):
+    home, config = paths(args)
+    conf = settings(load_config(config))
+    now = NOW()
+    lines, fail = [], False
+
+    def say(level, what, fix=""):
+        nonlocal fail
+        fail = fail or level == "fail"
+        lines.append(f"{level:<4}  {what}" + (f" - fix: {fix}" if fix else ""))
+
+    org = stats_org(conf)
+    if WHICH("gh"):
+        say("ok", "gh is on PATH")
+        try:
+            run_cmd(["gh", "auth", "status"])
+            say("ok", "gh auth status")
+        except Exception:
+            say("fail", "gh is not logged in", "run gh auth login")
+        try:
+            login = run_cmd(["gh", "api", "user", "--jq", ".login"]).strip()
+            say("ok", f"GitHub login {login}") if login else say("fail", "no GitHub login", "run gh auth login")
+        except Exception:
+            say("fail", "gh api user failed", "run gh auth status to see why")
+        slug = (conf["stats"].get("team_slug") or "").strip()
+        if org and slug:
+            try:
+                run_cmd(["gh", "api", f"orgs/{org}/teams/{slug}", "--jq", ".slug"])
+                say("ok", f"team {org}/{slug} is readable")
+            except Exception:
+                say("warn", f"cannot read team {org}/{slug}",
+                    "run gh auth refresh -s read:org, or list stats.team_members")
+        elif not slug and not conf["stats"].get("team_members"):
+            say("warn", "no team set, stats show only you", "set stats.team_slug or stats.team_members")
+        try:
+            left = run_cmd(["gh", "api", "rate_limit", "--jq", ".resources.graphql.remaining"]).strip()
+            n = int(left)
+            floor = int(conf["stats"].get("min_remaining") or 0)
+            if n < floor:
+                say("warn", f"GraphQL points left {n}, under stats.min_remaining {floor}", "wait for the hourly reset")
+            else:
+                say("ok", f"GraphQL points left {n}")
+        except Exception:
+            say("warn", "cannot read the GraphQL rate limit", "run gh api rate_limit to see why")
+    else:
+        say("fail", "gh is not on PATH", "install the GitHub CLI and run gh auth login")
+    if org:
+        say("ok", f"org {org}")
+    else:
+        say("fail", "no org set", "set stats.org (or github_org) in config.json")
+    meta = read_json(home / "cache" / "meta.json")
+    if not isinstance(meta, dict):
+        say("warn", f"no cache at {home / 'cache'}", "run eng-stats run")
+    else:
+        at = parse_time(meta.get("last_refresh_at"))
+        age = f"{int((now - at).total_seconds() // 3600)} h old" if at else "never refreshed"
+        if meta.get("last_error"):
+            say("fail", f"cache {age}, last refresh failed: {meta['last_error']}", "fix the error, then run eng-stats run")
+        else:
+            say("ok", f"cache {age}, cursor {meta.get('cursor')}")
+    f = home / "feeds" / "stats.json"
+    data = read_json(f)
+    if data is None:
+        say("warn", f"stats feed missing at {f}", "run eng-stats run")
+    else:
+        gen = parse_time(data.get("generated_at"))
+        age = f"{int((now - gen).total_seconds() // 3600)} h old" if gen else "no time stamp"
+        if data.get("ok") is False:
+            say("fail", f"stats feed failing ({age}): {data.get('error')}", "fix the error, then run eng-stats run")
+        else:
+            say("ok", f"stats feed ok, {age}")
+    if tz_valid(conf.get("tz")):
+        say("ok", f"time zone {conf.get('tz') or 'system local'}")
+    else:
+        say("fail", f"time zone {conf.get('tz')!r} is not a valid IANA name", "set tz like America/Denver in config.json")
+    print("\n".join(lines))
+    return 1 if fail else 0
+
+
+def cmd_schedule(args):
+    home, config = paths(args)
+    conf = settings(load_config(config))
+    hour, minute = parse_clock(conf["stats"].get("schedule") or DEFAULTS["stats"]["schedule"])
+    script = os.path.abspath(__file__)
+    path_env = os.environ.get("PATH", "/usr/bin:/bin")
+    if args.print == "launchd":
+        python = WHICH("python3") or sys.executable
+        env = {"HOME": str(Path.home()), "PATH": path_env}
+        if conf.get("tz"):
+            env["TZ"] = conf["tz"]
+        plist = {
+            "Label": LABEL,
+            "ProgramArguments": [python, script, "run", "--home", str(home), "--config", str(config)],
+            "StartCalendarInterval": {"Hour": hour, "Minute": minute},
+            "EnvironmentVariables": env,
+            "StandardOutPath": str(home / "logs" / "eng-stats.out.log"),
+            "StandardErrorPath": str(home / "logs" / "eng-stats.err.log"),
+        }
+        sys.stdout.write(plistlib.dumps(plist).decode())
+        agent = f"~/Library/LaunchAgents/{LABEL}.plist"
+        # The install commands go to stderr so stdout stays a valid plist file.
+        print("\n".join([
+            "# To install (run these yourself):",
+            f"#   mkdir -p {home}/logs",
+            f"#   eng-stats schedule --print launchd --home {home} --config {config} > {agent}",
+            f"#   launchctl bootout gui/$(id -u)/{LABEL} 2>/dev/null   (re-install only)",
+            f"#   launchctl bootstrap gui/$(id -u) {agent}",
+        ]), file=sys.stderr)
+    else:
+        print(f"# eng-stats once a day at {hour:02d}:{minute:02d} local time.")
+        print("# Add with crontab -e. A systemd user timer running the same command works too.")
+        q = shlex.quote
+        print(f"{minute} {hour} * * * PATH={q(str(path_env))} {q(str(script))} run --home {q(str(home))} "
+              f"--config {q(str(config))} >> {q(str(home) + '/logs/eng-stats.log')} 2>&1")
+    return 0
+
+
+def build_parser():
+    ap = argparse.ArgumentParser(prog="eng-stats", description="Pull-request stats for the status page.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    parsers = []
+    for name, text in (("refresh", "fetch changed PRs into the cache"), ("run", "refresh, then report")):
+        p = sub.add_parser(name, help=text)
+        p.add_argument("--since", default="90d", help="first fill range, like 90d or 12h (default 90d)")
+        p.add_argument("--full", action="store_true", help="drop the cache and fetch the whole range again")
+        p.add_argument("--max-pages", type=int, help="stop after this many search pages")
+        p.add_argument("--now", help="fixed clock, ISO time (tests only)")
+        parsers.append(p)
+    r = sub.add_parser("report", help="write feeds/stats.json from the cache (no network)")
+    r.add_argument("--now", help="fixed clock, ISO time (tests only)")
+    parsers.append(r)
+    parsers.append(sub.add_parser("doctor", help="check gh, login, org, team, rate limit, cache and time zone"))
+    s = sub.add_parser("schedule", help="print a launchd plist or a cron line")
+    s.add_argument("--print", required=True, choices=["launchd", "cron"])
+    parsers.append(s)
+    for p in parsers:
+        p.add_argument("--home")
+        p.add_argument("--config")
+    return ap
+
+
+def main(argv=None):
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit as e:
+        return 2 if e.code else 0
+    try:
+        if args.cmd == "doctor":
+            return cmd_doctor(args)
+        if args.cmd == "schedule":
+            return cmd_schedule(args)
+        return cmd_data(args)
+    except UsageError as e:
+        print(f"eng-stats: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
