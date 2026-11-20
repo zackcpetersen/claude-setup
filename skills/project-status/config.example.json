@@ -40,10 +40,16 @@
   },
   "theme": {
     "light": {
-      "--canvas": "#1F2A37",
+      "--canvas": "#F3F5F7",
+      "--rail": "#1F2A37",
       "--accent": "#2F7FBF",
-      "--accent-soft": "#A9CDEA",
-      "--strong": "#111827"
+      "--strong": "#1F2A37"
+    },
+    "dark": {
+      "--canvas": "#0E141B",
+      "--rail": "#070B10",
+      "--accent": "#4C9BD8",
+      "--strong": "#EEF2F6"
     }
   }
 }
