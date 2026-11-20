@@ -264,6 +264,17 @@ class CacheTests(Base):
         self.assertIn("updated:2026-01-15T18:00:00Z..", self.queries()[0])
         self.assertEqual(sorted(self.rows()), ["acme/billing#2"])
 
+    def test_stopped_full_run_keeps_old_cache(self):
+        self.handler = lambda q, after: page([node(1)])
+        self.cmd("refresh", "--since", "1d")
+        before = self.meta()["cursor"]
+        code, _, err = self.cmd("refresh", "--since", "14d", "--full", "--max-pages", "0", now="2026-01-16T18:00:00Z")
+        self.assertEqual(code, 0)
+        self.assertIn("max-pages", err)
+        self.assertEqual(sorted(self.rows()), ["acme/billing#1"])
+        self.assertEqual(self.meta()["cursor"], before)
+        self.assertEqual(self.meta()["last_refresh_at"], "2026-01-16T18:00:00Z")
+
     def test_org_change_rebuilds(self):
         self.handler = lambda q, after: page([node(1)])
         self.cmd("refresh", "--since", "1d")
@@ -420,6 +431,21 @@ class ReportTests(Base):
         rows.append(node(9, author="deps", author_type="Bot", merged="2026-01-12T10:00:00Z"))
         self.handler = lambda q, after: page(rows)
         self.cfg["stats"]["team_members"] = ["sam", "ana", "lee"]
+
+    def test_no_login_leaves_out_me(self):
+        self.seed()
+        self.cmd("refresh", "--since", "30d")
+        meta = self.meta()
+        meta.pop("login")
+        (self.home / "cache" / "meta.json").write_text(json.dumps(meta))
+        self.cmd("report")
+        self.assertEqual(set(self.stats()["groups"]), {"team"})
+
+    def test_short_keep_days_narrows_coverage(self):
+        self.seed()
+        self.cfg["stats"]["keep_days"] = 10
+        self.cmd("run", "--since", "30d")
+        self.assertEqual(self.stats()["coverage"]["from"], "2026-01-05")
 
     def test_shape_and_only_the_login(self):
         self.seed()

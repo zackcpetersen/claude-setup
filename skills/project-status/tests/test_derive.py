@@ -494,6 +494,11 @@ class Pipeline(unittest.TestCase):
         self.assertEqual([p["label"] for p in st["merged"]["pills"]], ["web#10", "web#9"])
         self.assertEqual(st["merged"]["label"], "Merged this week")
         self.assertEqual(pv["reviews_owed"], 2)
+        self.assertFalse(pv["stale"])
+
+    def test_failing_feed_marks_stale(self):
+        v = view(feeds={"github": {"ok": False, "my_prs": [pr(1)]}})
+        self.assertTrue(v["pipeline"]["stale"])
 
 
 class Waiting(unittest.TestCase):
@@ -560,7 +565,8 @@ class StatsSource(unittest.TestCase):
 
 LCFG = D.settings({"tracker_url": "https://tracker.example.com/browse/", "github_org": "acme",
                    "inbox": {"slack_url": "https://acme.slack.com/archives/"},
-                   "links": {"patterns": [{"match": r"run-(\d+)", "url": "https://runs.example.com/{1}"}]}})
+                   "links": {"patterns": [{"match": r"run-(\d+)", "url": "https://runs.example.com/{1}"}],
+                             "repos": ["billing"]}})
 
 
 class Links(unittest.TestCase):
@@ -591,6 +597,31 @@ class Links(unittest.TestCase):
         v = view(data=data)
         self.assertEqual(v["unlinked"], [{"where": "projects.p.needs_me[0].ask", "text": "ENG-142", "why": "no tracker_url"}])
         self.assertNotIn("ask_parts", v["projects"][0]["needs_me"][0])
+
+    def test_standards_are_not_tickets(self):
+        segs = D.link_mentions("Use UTF-8 and SHA-256 for ENG-142", LCFG)
+        self.assertEqual([s["text"] for s in segs if "url" in s], ["ENG-142"])
+
+    def test_ticket_keys_limit_prefixes(self):
+        cfg = D.settings({"tracker_url": "https://tracker.example.com/browse/", "links": {"ticket_keys": ["eng"]}})
+        segs = D.link_mentions("ENG-142 and OPS-7", cfg)
+        self.assertEqual([s["text"] for s in segs if "url" in s], ["ENG-142"])
+
+    def test_unknown_word_hash_number_is_plain(self):
+        segs = D.link_mentions("Ran chunk #2 of billing #91", LCFG)
+        self.assertEqual([s["text"] for s in segs if "url" in s], ["billing #91"])
+
+    def test_feed_repos_are_known(self):
+        data = {"projects": [{"id": "p", "name": "P", "summary": "Waiting on ledger #5, step #3"}]}
+        feeds = {"github": {"ok": True, "my_prs": [{"repo": "acme/ledger", "number": 5}]}}
+        v = view(data=data, cfg={"tz": "America/Chicago", "github_org": "acme"}, feeds=feeds)
+        parts = v["projects"][0]["summary_parts"]
+        self.assertEqual([s["url"] for s in parts if "url" in s], ["https://github.com/acme/ledger/pull/5"])
+
+    def test_pattern_with_optional_group_does_not_crash(self):
+        cfg = D.settings({"links": {"patterns": [{"match": r"run(/(\d+))?", "url": "https://runs.example.com{1}"}]}})
+        segs = D.link_mentions("run and run/4", cfg)
+        self.assertEqual([s["url"] for s in segs if "url" in s], ["https://runs.example.com/4"])
 
     def test_javascript_url_never_a_link(self):
         cfg = D.settings({"links": {"patterns": [{"match": r"bad-(\d+)", "url": "javascript:alert({1})"}]}})

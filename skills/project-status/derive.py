@@ -34,7 +34,9 @@ DEFAULTS = {
     },
     "feeds": {"every_minutes": 15, "hours": "08:00-18:00", "days": "Mon-Fri"},
     # links.patterns: [{"match": "<regex with one group>", "url": "<base>{1}"}] for other keys a user names.
-    "links": {"patterns": []},
+    # links.ticket_keys: tracker project keys ("ENG"); empty links any KEY-123 except standards like UTF-8.
+    # links.repos: repo names a "repo #123" mention may name, on top of the repos in the GitHub feed.
+    "links": {"patterns": [], "ticket_keys": [], "repos": []},
 }
 
 EFFORT = {"merge": 2, "send-draft": 2, "approve-agent": 2, "slack": 5, "nudge": 5, "confirm": 5, "todo": 5,
@@ -641,8 +643,8 @@ def _pill(pr):
             "ci_failed": pr.get("ci") in ("FAILURE", "ERROR"), "conflict": pr.get("mergeable") == "CONFLICTING"}
 
 
-def pipeline_view(gh):
-    """My PRs by stage, from the GitHub feed. None when there is no feed."""
+def pipeline_view(gh, gh_ok=True):
+    """My PRs by stage, from the GitHub feed. None when there is no feed; stale when the feed is failing."""
     if not gh:
         return None
     far = "9999"
@@ -653,7 +655,7 @@ def pipeline_view(gh):
     by["merged"] = [_pill(m) for m in sorted(gh.get("merged_recent") or [], key=lambda x: x.get("merged_at") or "",
                                               reverse=True)]
     return {"stages": [{"key": k, "label": lab, "n": len(by[k]), "pills": by[k]} for k, lab in PIPE_STAGES],
-            "reviews_owed": len(gh.get("review_requests") or [])}
+            "reviews_owed": len(gh.get("review_requests") or []), "stale": not gh_ok}
 
 
 def waiting_view(waiting_on, today, tz):
@@ -688,7 +690,10 @@ def delivered_view(items, snoozed, today, tz):
 
 # ---------- links for every mention ----------
 
-TICKET_RE = r"(?<![A-Za-z0-9-])[A-Z][A-Z0-9]+-\d+(?![A-Za-z0-9])"
+TICKET_RE = r"(?<![A-Za-z0-9-])([A-Z][A-Z0-9]+)-\d+(?![A-Za-z0-9])"
+# Standards and names shaped like a ticket key ("UTF-8", "SHA-256"); used only when links.ticket_keys is empty.
+NOT_TICKETS = frozenset({"UTF", "SHA", "ISO", "COVID", "RFC", "CVE", "PEP", "IPV4", "IPV6", "HTTP", "TLS", "SSL",
+                         "AES", "RSA", "MD", "MP", "GPT", "ES", "UTC", "GMT", "IEEE", "ANSI", "WCAG", "WPA", "EAN"})
 REPO_REF_RE = r"(?<![\w/-])([a-z][a-z0-9-]+) #(\d+)\b"
 SLACK_KEY_RE = r"(?<![A-Za-z0-9])([A-Z][A-Z0-9]{6,}):(\d{10}\.\d{6})(?!\d)"
 URL_RE = r"https?://[^\s<>\"')\]]+"
@@ -714,16 +719,31 @@ def _bases(conf):
     return (tracker if ok(tracker) else ""), (org if ok(org) else ""), (slack if ok(slack) else ""), pats
 
 
+def _is_ticket(prefix, conf):
+    keys = [str(k).upper() for k in ((conf.get("links") or {}).get("ticket_keys") or []) if k]
+    return prefix in keys if keys else prefix not in NOT_TICKETS
+
+
+def _known_repos(conf):
+    """Repo names a "word #N" mention may name: links.repos plus the repos in the GitHub feed."""
+    return {str(r).split("/")[-1] for r in ((conf.get("links") or {}).get("repos") or []) if r} | set(conf.get("_feed_repos") or ())
+
+
 def _matches(text, conf):
     """Every mention in text as (start, end, kind, url or None), earliest first, no overlaps."""
     tracker, org, slack, pats = _bases(conf)
+    repos = _known_repos(conf)
     found = []
     for m in re.finditer(URL_RE, text):
         u = m.group(0).rstrip(".,;:")
         found.append((m.start(), m.start() + len(u), "url", _http(u)))
     for m in re.finditer(TICKET_RE, text):
+        if not _is_ticket(m.group(1), conf):
+            continue
         found.append((m.start(), m.end(), "ticket", _http(tracker + m.group(0)) if tracker else None))
     for m in re.finditer(REPO_REF_RE, text):
+        if m.group(1) not in repos:  # "chunk #2" or "step #3" is not a PR
+            continue
         url = f"https://github.com/{org}/{m.group(1)}/pull/{m.group(2)}" if org else None
         found.append((m.start(), m.end(), "repo", url))
     for m in re.finditer(SLACK_KEY_RE, text):
@@ -733,6 +753,8 @@ def _matches(text, conf):
         for m in rx.finditer(text):
             if m.end() > m.start():
                 val = m.group(1) if rx.groups else m.group(0)
+                if not isinstance(val, str) or not val:  # an optional group that did not match
+                    continue
                 found.append((m.start(), m.end(), "pattern", _http(base.replace("{1}", val))))
     found.sort(key=lambda f: (f[0], -(f[1] - f[0])))
     out, pos = [], 0
@@ -883,6 +905,10 @@ def build_view(data, cfg, inbox, feeds, prev_state, now, errors=None):
     errors = errors or {}
     feeds = feeds or {}
     prev_state = prev_state or {}
+    gh_feed = feeds.get("github") or {}
+    conf["_feed_repos"] = {str(pr.get("repo") or "").split("/")[-1]
+                           for k in ("my_prs", "review_requests", "merged_recent")
+                           for pr in gh_feed.get(k) or [] if isinstance(pr, dict) and pr.get("repo")}
     tz = local_tz(conf.get("tz"))
     today = now.astimezone(tz).date()
     ib = conf["inbox"]
@@ -959,7 +985,7 @@ def build_view(data, cfg, inbox, feeds, prev_state, now, errors=None):
         tl = timeline_view(projects, jobs, today, p.get("id", ""))
         if tl["events"]:
             view["project_timelines"][p.get("id", "")] = tl
-    view["pipeline"] = pipeline_view(gh)
+    view["pipeline"] = pipeline_view(gh, gh_ok)
     view["waiting"] = waiting_view(data.get("waiting_on"), today, tz)
     for it in items + later:
         add_parts(it, "inbox", conf)

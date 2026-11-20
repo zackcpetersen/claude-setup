@@ -23,7 +23,9 @@
     "days": "Mon-Fri"
   },
   "links": {
-    "patterns": []
+    "patterns": [],
+    "ticket_keys": [],
+    "repos": []
   },
   "stats": {
     "org": "",

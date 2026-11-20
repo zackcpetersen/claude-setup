@@ -122,8 +122,8 @@ A job that runs for days (a backfill, a big export) shows as a bar with a finish
 
 Every ticket key, PR, Notion page, Slack thread, run or doc the page names is drawn as a link. The rule lives in `derive.py` (`link_mentions`), with the link bases from local config only:
 
-- Ticket keys (`ENG-142`): `tracker_url` plus the key.
-- `repo #123`: a PR in `github_org`.
+- Ticket keys (`ENG-142`): `tracker_url` plus the key. Set `links.ticket_keys` (for example `["ENG"]`) to link only your tracker's keys; left empty, any `KEY-123` links except standards like `UTF-8` or `SHA-256`.
+- `repo #123`: a PR in `github_org`, only when `repo` is in `links.repos` or in the GitHub feed, so "step #3" stays plain text.
 - Slack triage keys (`C0123ABC:1768000000.123456`): `inbox.slack_url`.
 - Anything else named by a key: `links.patterns`, a list of `{"match": "<regex with one group>", "url": "<base>{1}"}`.
 - Notion pages, docs and threads have no key, so they link only through the item's own `link`, `ref` or `links[]` field.

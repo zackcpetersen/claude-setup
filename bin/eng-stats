@@ -476,6 +476,8 @@ def refresh(home, conf, args, now):
     rows = read_rows(rows_path) or {}
     cursor = parse_time(meta.get("cursor"))
     full = bool(args.full) or meta.get("org") != org or cursor is None or meta.get("schema") != SCHEMA
+    # A full run keeps the old cache on disk until its first window completes, so a stopped run never wipes it.
+    old_meta, old_rows = (dict(meta), dict(rows)) if full and cursor is not None else (None, None)
     if full:
         start, rows = now - since, {}
         meta = {"schema": SCHEMA, "org": org, "login": meta.get("login"), "cursor": None,
@@ -485,6 +487,11 @@ def refresh(home, conf, args, now):
     keep = timedelta(days=float(conf["stats"].get("keep_days") or 100))
 
     def save(error=None):
+        if old_meta is not None and meta.get("cursor") is None:
+            old_meta["last_refresh_at"] = iso(now)
+            old_meta["last_error"] = error
+            write_json(meta_path, old_meta)
+            return
         cover = max(parse_time(meta.get("filled_from")) or now - keep, now - keep)
         for k in [k for k, r in rows.items() if (parse_time(r.get("updated_at")) or now) < now - keep]:
             del rows[k]
@@ -678,7 +685,8 @@ def compute(home, conf, now, tz):
     if not isinstance(repo_groups, dict):
         repo_groups = {}
     team = load_team(home, conf, meta.get("org") or stats_org(conf))
-    groups = {"me": {login}}
+    # With no login (the first lookup failed) "me" would match every ghost author, so it is left out.
+    groups = {"me": {login}} if login else {}
     if team:
         groups["team"] = set(team["members"])
     out_groups = {}
@@ -689,7 +697,8 @@ def compute(home, conf, now, tz):
                         for d in WINDOWS},
         }
     start90 = now - timedelta(days=max(WINDOWS))
-    cover = max(parse_time(meta.get("filled_from")) or start90, start90)
+    kept = now - timedelta(days=float(conf["stats"].get("keep_days") or 100))
+    cover = max(parse_time(meta.get("filled_from")) or start90, start90, kept)
     upto = min(parse_time(meta.get("cursor")) or now, now)
     team_out = None
     if team:
@@ -887,6 +896,7 @@ def cmd_schedule(args):
         agent = f"~/Library/LaunchAgents/{LABEL}.plist"
         # The install commands go to stderr so stdout stays a valid plist file.
         print("\n".join([
+            "# Note: launchd fires at the machine's local time; TZ only sets the zone the script reports in.",
             "# To install (run these yourself):",
             f"#   mkdir -p {home}/logs",
             f"#   eng-stats schedule --print launchd --home {home} --config {config} > {agent}",

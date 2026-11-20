@@ -217,7 +217,7 @@ function fmtH(hrs){
 function choice(){
   let c = {group: 'me', win: '30'};
   try { const raw = store('ps-stats'); if (raw) c = Object.assign(c, JSON.parse(raw)); } catch (e) { /* defaults */ }
-  if (!GROUPS[c.group]) c.group = 'me';
+  if (!GROUPS[c.group]) c.group = GROUPS.me || !GROUPS.team ? 'me' : 'team';
   if (c.win !== '30' && c.win !== '90') c.win = '30';
   return c;
 }
@@ -400,7 +400,8 @@ function pill(p, stageKey){
 function pipelinePanel(all){
   if (!PIPE) return null;
   const owed = PIPE.reviews_owed || 0, any = PIPE.stages.some(x => x.n);
-  return tile('PR pipeline', owed ? h('a', {class: 'chip is-owed num', href: '#inbox'}, plural(owed, 'review') + ' owed') : null,
+  const stale = PIPE.stale ? h('span', {class: 'chip', title: 'The GitHub feed is failing; these stages may be out of date'}, 'stale') : null;
+  return tile('PR pipeline', [stale, owed ? h('a', {class: 'chip is-owed num', href: '#inbox'}, plural(owed, 'review') + ' owed') : null],
     any ? [flowBar(PIPE.stages), PIPE.stages.map(st => {
       const pills = all ? st.pills : st.pills.slice(0, PILLS_PER_STAGE), extra = st.pills.length - pills.length;
       return h('div', {class: 'pl-stage'}, h('span', {class: 'pl-sn'}, st.label), h('span', {class: 'pl-sc num'}, st.n),
