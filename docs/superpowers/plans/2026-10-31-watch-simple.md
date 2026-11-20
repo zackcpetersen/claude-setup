@@ -2,10 +2,10 @@
 
 Repo: ~/Projects/claude-setup. Date 2026-10-31. Supersedes the registry design (`docs/superpowers/specs/2026-10-28-watch-design.md`, `docs/superpowers/plans/2026-10-28-watch.md`).
 
-## Decisions (Zack, 2026-10-31)
+## Decisions (the user, 2026-10-31)
 
 - The simple version: delete the registry script and use one-off background waits plus an hourly Slack sweep.
-- Merges stay with Claude: it merges only after Zack approves that PR, and only while the head commit is still the one he approved.
+- Merges stay with Claude: it merges only after the user approves that PR, and only while the head commit is still the one they approved.
 - What gets watched: Slack replies, PRs/CI, deploys, Dagster runs. Email and the requests channel are dropped.
 - Proposals come both in the moment and from an hourly sweep. Nothing is watched without a yes.
 - Frequency: PR, deploy and Dagster checks every 5 min, free; Slack hourly.
@@ -52,13 +52,13 @@ The registry, cursors, ticks and expiry stay behind and are deleted in PR 2.
 
 The event line carries the answer, so Fable acts in one short turn:
 
-- `READY` with Zack's approval on record for this PR: run `gh pr merge <n> --squash --match-head-commit <approved sha>`, so GitHub refuses if the head moved between READY and the merge (for example, when the event queued while Fable was mid-task). Then say "Merged #n". On refusal, treat it as `HEAD_MOVED`. If Zack asked to verify once deployed, start `wait-for deploy` on the merge sha (from `MERGED`, or `gh pr view --json mergeCommit`).
+- `READY` with the user's approval on record for this PR: run `gh pr merge <n> --squash --match-head-commit <approved sha>`, so GitHub refuses if the head moved between READY and the merge (for example, when the event queued while Fable was mid-task). Then say "Merged #n". On refusal, treat it as `HEAD_MOVED`. If the user asked to verify once deployed, start `wait-for deploy` on the merge sha (from `MERGED`, or `gh pr view --json mergeCommit`).
 - `READY` without approval: "#n is green and approved. Merge?"
 - `HEAD_MOVED`: "#n got a new commit after your approval. Merge on the new head?" Never merge on the old approval.
 - `FAILED`, `DEPLOY_FAILED`, `ERROR`, Dagster `FAILED`: one line, also sent through the session's push notification tool (urgent).
-- `DEPLOYED` with verify commands Zack named: run them read-only and report. Otherwise "deployed".
+- `DEPLOYED` with verify commands the user named: run them read-only and report. Otherwise "deployed".
 - `CHANGES_REQUESTED`, `CLOSED`, `TIMEOUT`, `SUCCEEDED`: one line.
-- After a non-terminal event (`FAILED`, `CHANGES_REQUESTED`, `HEAD_MOVED`), re-launch the same wait once Zack pushes a fix or re-approves.
+- After a non-terminal event (`FAILED`, `CHANGES_REQUESTED`, `HEAD_MOVED`), re-launch the same wait once the user pushes a fix or re-approves.
 
 Approval is the user's words in this session plus the head sha read with `gh pr view --json headRefOid` at that moment. It lives in the conversation (and the handoff doc). After `/clear` it is gone, and the next sweep re-proposes the PR.
 
@@ -67,13 +67,13 @@ Approval is the user's words in this session plus the head sha read with `gh pr 
 - **Schedule:** a session `CronCreate` at `7 8-17 * * 1-5`, built from the `Business hours` line. Session crons use the machine's local clock, so SKILL.md says the hours are local time. Rollover always deletes and re-creates the job, which resets the 7-day expiry. Wrap deletes it.
 - **Cron prompt:** dispatch one `watch-sweep` agent (sonnet, general-purpose) from `skills/watch/sweep.md` with its config. Relay its report and do nothing else. No inline Slack reading by Fable.
 - **The agent, read-only plus drafts:**
-  1. Asks to Zack in the Work board's watched channels and DMs since the last sweep, with no reply from him. It follows the board's `slack-status` unanswered-asks procedure (board `dispatch-prompts.md`, around line 94) by reference, not a copy.
-  2. Threads where Zack asked something and got a reply since the last sweep. It judges each one MET, PARTIAL or NOT MET.
-  3. Zack's open PRs (`gh pr list --author @me`) that are not already being waited on. The main session passes its running wait list in the prompt.
+  1. Asks to the user in the Work board's watched channels and DMs since the last sweep, with no reply from them. It follows the board's `slack-status` unanswered-asks procedure (board `dispatch-prompts.md`, around line 94) by reference, not a copy.
+  2. Threads where the user asked something and got a reply since the last sweep. It judges each one MET, PARTIAL or NOT MET.
+  3. The user's open PRs (`gh pr list --author @me`) that are not already being waited on. The main session passes its running wait list in the prompt.
 - **For each item, at most 4 per sweep, oldest first:**
   - A reply needed: create a threaded Slack draft (`slack_send_message_draft`) and report `DRAFT <channel> <thread> <draft id> <gist>`.
   - Something to watch: report `PROPOSE <one plain-English line>`.
-  - No reply after 1 business day on Zack's own ask: `NUDGE? <thread>`.
+  - No reply after 1 business day on the user's own ask: `NUDGE? <thread>`.
   - Extras roll over to the next sweep.
 - **State:** the existing Work board `Watch-slack state file` line, repointed to `~/.claude/watch-sweep.json`. No new config line. It holds:
   - `last_sweep`
@@ -81,14 +81,14 @@ Approval is the user's words in this session plus the head sha read with `gh pr 
 
   The agent only reads it. The main session writes it in the same turn it relays the report:
   - `last_sweep` = the timestamp of the oldest item left over by the 4-item cap, or now when nothing is left over. Rollover items are never lost.
-  - `declined` after Zack answers.
+  - `declined` after the user answers.
 
   That is the only state.
 - **The main session** relays DRAFT and NUDGE lines, and asks PROPOSE items in one AskUserQuestion (multiSelect, up to 4). A yes starts the matching `wait-for`.
 
 ### 4. In-the-moment proposals
 
-`/pr` step 4 and board step 8 replace `~/bin/watch add` with one line to Zack: "Watch #n? (a) merge when green and approved (b) just tell me (c) no". On (a) or (b), start `wait-for pr`, adding `--sha` on (a).
+`/pr` step 4 and board step 8 replace `~/bin/watch add` with one line to the user: "Watch #n? (a) merge when green and approved (b) just tell me (c) no". On (a) or (b), start `wait-for pr`, adding `--sha` on (a).
 
 ## Files
 
@@ -130,7 +130,7 @@ Approval is the user's words in this session plus the head sha read with `gh pr 
 - `README.md:36`: the registry description.
 - Superseded note at the top of both 2026-10-28 docs. This plan goes to `docs/superpowers/plans/2026-10-31-watch-simple.md`.
 
-**Changelog, per-machine steps** (Zack does these by hand, nothing is auto-deleted):
+**Changelog, per-machine steps** (the user does these by hand, nothing is auto-deleted):
 - run `./install.sh`;
 - `rm ~/bin/watch`, and archive or delete `~/.claude/watches.json`;
 - trim the `### Watches` block;
@@ -146,6 +146,6 @@ Per PR: tests first, sonnet implementer in a worktree, opus review, `python3 -m 
 
 ## Out of scope
 
-- Turning it on on this machine: memory `no-watch-skill` stands until Zack asks.
+- Turning it on here: a local memory note (`no-watch-skill`) stands until the user asks.
 - Surviving `/clear` mid-wait (accepted: the next sweep re-proposes).
 - Email, the requests channel, GitHub auto-merge.
