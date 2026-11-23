@@ -45,19 +45,19 @@ transcript() {
 input() { printf '{"session_id":"s1","transcript_path":"%s"%s}' "$T" "${1:-}"; }
 run() { input "${1:-}" | bash "$HOOK" 2>/dev/null; }
 empty() { [[ -z "$1" ]]; }
-warns() { printf %s "$1" | jq -e '.hookSpecificOutput.hookEventName == "PostToolUse" and (.hookSpecificOutput.additionalContext | contains("Context is at 160k tokens (warning line 150k)"))' >/dev/null 2>&1; }
+warns() { printf %s "$1" | jq -e '.hookSpecificOutput.hookEventName == "PostToolUse" and (.hookSpecificOutput.additionalContext | contains("Context is at 410k tokens (warning line 400k)"))' >/dev/null 2>&1; }
 
 transcript 100000
 check "below the line: no output" empty "$(run)"
 
-transcript 160000
+transcript 410000
 check "above the line: one warning" warns "$(run)"
 check "second call above: no output" empty "$(run)"
 
 transcript 50000
 out="$(run)"
 check "back below: no output and marker removed" bash -c '[[ -z "$1" && ! -e "$2" ]]' _ "$out" "$HOME/.claude/context-warn/s1"
-transcript 160000
+transcript 410000
 check "next crossing warns again" warns "$(run)"
 
 rm -rf "$HOME/.claude/context-warn"

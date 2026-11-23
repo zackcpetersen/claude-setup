@@ -9,7 +9,7 @@
 # Sub-agents: their PostToolUse input carries a non-empty `agent_id` (checked
 # with a probe; their `transcript_path` is the parent's file), so the hook
 # skips any input with one. Sidechain entries are skipped as a backstop.
-# Line: env CLAUDE_CONTEXT_WARN_AT (tokens), default 150000; 0 or off turns
+# Line: env CLAUDE_CONTEXT_WARN_AT (tokens), default 400000; 0 or off turns
 # it off. A marker in ~/.claude/context-warn/<session_id> makes the warning
 # print once per crossing; dropping below the line (after /clear or a compact)
 # removes the marker and re-arms it.
@@ -30,7 +30,7 @@ transcript=$(printf %s "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
 [[ -n "$session_id" && -n "$transcript" && -r "$transcript" ]] || pass
 [[ "$session_id" =~ ^[A-Za-z0-9_-]+$ ]] || pass
 
-limit="${CLAUDE_CONTEXT_WARN_AT:-150000}"
+limit="${CLAUDE_CONTEXT_WARN_AT:-400000}"
 [[ "$limit" == "off" || "$limit" == "0" ]] && pass
 [[ "$limit" =~ ^[0-9]+$ ]] || pass
 

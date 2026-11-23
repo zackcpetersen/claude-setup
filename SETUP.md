@@ -344,7 +344,7 @@ Notes:
 - Both the local-path and GitHub registrations use the marketplace name `claude-setup`, so run `/plugin marketplace remove claude-setup` before switching between them.
 - Installed plugins are cached copies under `~/.claude/plugins/cache/`, not live links. After editing the guard, run `/plugin marketplace update claude-setup`, then uninstall and reinstall (`/plugin uninstall model-discipline@claude-setup`, `/plugin install model-discipline@claude-setup`) - `plugin update` and a bare `install` are no-ops while the version in `plugin.json` is unchanged. Or run `claude --plugin-dir ~/Projects/claude-setup/plugins/model-discipline` while you iterate. `update.sh` reports when the cache has drifted.
 
-The plugin also ships two newer hooks: `context-warn` (PostToolUse) tells the main session once when its context passes `CLAUDE_CONTEXT_WARN_AT` tokens (default 150000; `0` or `off` turns it off), and `review-target-guard` denies `/code-review` with a bare PR number.
+The plugin also ships two newer hooks: `context-warn` (PostToolUse) tells the main session once when its context passes `CLAUDE_CONTEXT_WARN_AT` tokens (default 400000; `0` or `off` turns it off), and `review-target-guard` denies `/code-review` with a bare PR number.
 
 ### Pre-push lint hook (optional)
 
