@@ -796,7 +796,11 @@ class Focus(unittest.TestCase):
         row = [r for r in f["running"] if r["kind"] == "today"][0]
         self.assertTrue(row["late"])
         self.assertEqual(row["step"], "chunk 2 of 4, was due 01-12")
-        self.assertEqual(f["tiles"][0]["late"], 1)
+        # The late milestone and the passed deadline are two late rows; the badge and the header count both.
+        self.assertEqual(f["tiles"][0]["late"], 2)
+        self.assertEqual(f["late"], 2)
+        self.assertEqual(sorted(x["kind"] for x in f["late_items"]), ["deadline", "today"])
+        self.assertEqual({x["project_id"] for x in f["late_items"]}, {"a"})
 
     def test_far_confirm_runs_and_is_not_parked(self):
         inbox = {"items": [{"id": "c", "kind": "confirm", "title": "Confirm Ana got it", "since": "2026-01-10", "due": "2026-03-01"}]}
@@ -841,6 +845,97 @@ class Focus(unittest.TestCase):
         f = view(inbox=inbox, cfg={"tz": "America/Chicago", "focus": {"cap": 0, "up_next": 0}})["focus"]
         self.assertEqual((f["cap"], f["up_next_shown"]), (0, 0))
         self.assertEqual(f["hero"]["minutes"], 0)
+
+
+TRACKER = {"tz": "America/Chicago", "tracker_url": "https://tracker.example.com/browse/"}
+
+
+class LateAndProjects(unittest.TestCase):
+    """The late list, project refs and order, shelf and done one-offs in focus_view."""
+
+    def test_two_asks_on_one_ticket_link_stay_two_rows(self):
+        link = "https://tracker.example.com/browse/ENG-7"
+        data = {"projects": [proj("s", needs_me=[{"ask": "Pick an owner", "due": "2026-01-10", "link": link}])]}
+        inbox = session(sitem("q", title="Send the question list", link=link))
+        v = view(data=data, inbox=inbox, cfg=TRACKER)
+        rows = {i["title"]: i for i in items(v)}
+        self.assertEqual(set(rows), {"Pick an owner", "Send the question list"})
+        self.assertTrue(rows["Pick an owner"]["late"])
+        self.assertFalse(rows["Send the question list"]["late"])
+        self.assertEqual(len({i["id"] for i in items(v)}), 2)
+        f = v["focus"]
+        self.assertEqual([x["title"] for x in f["late_items"]], ["Pick an owner"])
+        self.assertEqual((f["late_items"][0]["date"], f["late_items"][0]["link"]), ("2026-01-10", link))
+        self.assertEqual((f["late"], [t["late"] for t in f["tiles"]]), (1, [1]))
+
+    def test_same_ticket_link_and_same_title_still_merge(self):
+        link = "https://tracker.example.com/browse/ENG-7"
+        data = {"projects": [proj("s", needs_me=[{"ask": "Pick an owner", "due": "2026-01-20", "link": link}])]}
+        v = view(data=data, inbox=session(sitem("q", title="Pick an owner", link=link)), cfg=TRACKER)
+        self.assertEqual(len(items(v)), 1)
+        self.assertEqual(items(v)[0]["due"], "2026-01-20")
+
+    def test_pr_links_still_merge_without_matching_titles(self):
+        link = "https://github.com/acme/billing/pull/5"
+        v = view(inbox=session(sitem("x", title="Mine", link=link)), feeds={"github": gh([pr(5, ci="FAILURE")])}, cfg=TRACKER)
+        self.assertEqual(len(items(v)), 1)
+
+    def test_every_late_count_matches_the_late_rows(self):
+        data = {"projects": [proj("a", priority="P2", deadline="2026-01-01", progress_pct=40),
+                             proj("b", priority="P1", needs_me=[{"ask": "Sign it", "due": "2026-01-12"}])],
+                "waiting_on": [{"person": "Ana", "what": "the file", "project_id": "a", "since": "2026-01-02", "nudge_due": "2026-01-13"}]}
+        f = view(data=data)["focus"]
+        self.assertEqual(f["late"], len(f["late_items"]))
+        by = {t["id"]: t["late"] for t in f["tiles"]}
+        self.assertEqual(by, {"a": 2, "b": 1})
+        for t in f["tiles"]:
+            self.assertEqual(t["late"], sum(1 for x in f["late_items"] if x["project_id"] == t["id"]))
+        self.assertEqual(sum(by.values()), f["late"])
+
+    def test_tiles_sorted_by_priority_with_refs(self):
+        data = {"projects": [
+            proj("c", links=[{"label": "Docs", "url": "https://docs.example.com/x"}]),
+            proj("b", priority="P2", epic="ENG-1", links=[
+                {"label": "ENG-2 fix", "url": "https://tracker.example.com/browse/ENG-2"},
+                {"label": "ENG-1 epic", "url": "https://tracker.example.com/browse/ENG-1"},
+                {"label": "Thread", "url": "https://acme.slack.example.com/x"},
+                {"label": "Ana's answer", "url": "https://acme.slack.com/archives/C01ABCDEF/p1768000000123456"},
+                {"label": "Team channel #eng-b", "url": "https://acme.slack.com/archives/C01ABCDEF"}]),
+            proj("a", priority="P1")]}
+        tiles = view(data=data, cfg=TRACKER)["focus"]["tiles"]
+        self.assertEqual([t["id"] for t in tiles], ["a", "b", "c"])
+        b = tiles[1]
+        self.assertEqual([(t["key"], t["url"]) for t in b["tickets"]],
+                         [("ENG-1", "https://tracker.example.com/browse/ENG-1"), ("ENG-2", "https://tracker.example.com/browse/ENG-2")])
+        self.assertEqual([(x["label"], x["kind"]) for x in b["slack"]], [("#eng-b", "channel"), ("Ana's answer", "thread")])
+        self.assertTrue(b["has_channel"])
+        self.assertEqual((tiles[0]["tickets"], tiles[0]["slack"], tiles[0]["has_channel"]), ([], [], False))
+
+    def test_running_rows_carry_their_project(self):
+        data = {"projects": [proj("a", next_milestone="Chunk 1 of 3 copying.", next_milestone_date="2026-01-14",
+                                  jobs=[job()])],
+                "waiting_on": [{"person": "Ana", "what": "the file", "project_id": "a", "since": "2026-01-10"}]}
+        run = view(data=data)["focus"]["running"]
+        self.assertEqual({(r["kind"], r["project_id"]) for r in run}, {("today", "a"), ("job", "a"), ("wait", "a")})
+
+    def test_shelf_items(self):
+        data = {"projects": [], "shelf": ["Read the dbt book", {"title": "Try ENG-4 idea", "link": "https://example.com/s",
+                                                               "added": "2026-01-02T10:00:00Z"}, {"note": "no title"}]}
+        shelf = view(data=data, cfg=TRACKER)["focus"]["shelf"]
+        self.assertEqual([s["title"] for s in shelf], ["Read the dbt book", "Try ENG-4 idea"])
+        self.assertEqual((shelf[1]["link"], shelf[1]["added"]), ("https://example.com/s", "2026-01-02"))
+        self.assertTrue(any(p.get("url") for p in shelf[1]["title_parts"]))
+        self.assertEqual(view()["focus"]["shelf"], [])
+
+    def test_one_off_done_today_is_a_win(self):
+        data = {"projects": [], "one_offs": [
+            {"title": "Approved the fix ENG-9", "state": "done", "done_on": "2026-01-14", "ref": "https://example.com/pr"},
+            {"title": "Old thing", "state": "done", "done_on": "2026-01-10"},
+            {"title": "Done, no date", "state": "done"}]}
+        wins = view(data=data)["focus"]["wins"]
+        self.assertEqual([(w["title"], w["link"]) for w in wins], [("Approved the fix ENG-9", "https://example.com/pr")])
+        run = [r["title"] for r in view(data=data)["focus"]["running"]]
+        self.assertNotIn("Approved the fix ENG-9", run)
 
 
 if __name__ == "__main__":

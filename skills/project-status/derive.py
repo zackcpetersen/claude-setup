@@ -350,7 +350,7 @@ def dedupe(items):
     """Items with the same ref become one. Words come from the highest source, live state from a script source."""
     groups, order = {}, []
     for it in items:
-        k = it["ref"] or ("\0" + it["id"] + "\0" + str(len(order)))
+        k = it.get("_merge") or it["ref"] or ("\0" + it["id"] + "\0" + str(len(order)))
         if k not in groups:
             groups[k] = []
             order.append(k)
@@ -358,6 +358,8 @@ def dedupe(items):
     out = []
     for k in order:
         g = sorted(groups[k], key=lambda i: SOURCE_RANK.get(i["source"], 9))
+        for i in g:
+            i.pop("_merge", None)
         if len(g) == 1:
             g[0]["sources"] = [g[0]["source"]]
             out.append(g[0])
@@ -378,11 +380,33 @@ def dedupe(items):
         top["since"] = min(sinces, key=lambda v: parse_time(v) or datetime.max.replace(tzinfo=timezone.utc)) if sinces else None
         dues = [i["due"] for i in g if parse_day(i.get("due"))]
         top["due"] = min(dues, key=parse_day) if dues else None
-        top["id"] = top["ref"]
+        top["id"] = k if k.startswith("url:") else top["ref"]
         if any(i.get("snooze_until") for i in g):
             top["snooze_until"] = max(i["snooze_until"] for i in g if i.get("snooze_until"))
         out.append(top)
     return out
+
+
+def tracker_keys(items, conf):
+    """Items whose link is a tracker ticket merge only when their titles match too.
+
+    A ticket link is shared by many asks (a question list and an owner pick on the same ticket), so the link alone
+    would fold two different asks into one row with one title and the other's due date. PR and Slack links still
+    merge on the link alone. The item's id gets the title part as well, so two asks on one ticket never share an id.
+    """
+    base = _tracker(conf)
+    if not base:
+        return items
+    for it in items:
+        ref = it.get("ref") or ""
+        if ref.startswith("url:" + base):
+            it["_merge"] = it["id"] = ref + "#" + sha(norm_title(it.get("title")), 8)
+    return items
+
+
+def _tracker(conf):
+    t = str(conf.get("tracker_url") or "")
+    return t if t.startswith("https://") and "FILL-IN" not in t else ""
 
 
 def age_label(since, now, tz):
@@ -1029,6 +1053,7 @@ def _need_row(it, today, old_sources):
     when, late = when_label(it.get("due"), today)
     return {"hid": it.get("hid"), "title": it.get("title") or "", "title_parts": it.get("title_parts"),
             "link": it.get("link") or "", "when": when, "late": late, "minutes": _int(it.get("effort_min"), 5),
+            "due": str(it.get("due") or "")[:10],
             "source": it.get("source") or "", "project_id": it.get("project_id") or "", "kind": it.get("kind") or "",
             "why": it.get("why") or "", "feed_old": bool(set(it.get("sources") or [it.get("source")]) & old_sources)}
 
@@ -1104,7 +1129,8 @@ def focus_view(view, feeds, conf, now, tz):
             if late:
                 step = (step + ", " if step != "today" else "") + "was due " + md.isoformat()[5:]
             running.append({"kind": "today", "title": text, "title_parts": link_mentions(text, conf), "link": "",
-                            "step": step, "done": done, "total": total, "pct": pct, "late": late})
+                            "step": step, "done": done, "total": total, "pct": pct, "late": late,
+                            "project_id": p.get("id", ""), "date": md.isoformat()})
     for pid, js in (view.get("jobs") or {}).items():
         for j in js:
             if j.get("finished"):
@@ -1113,8 +1139,10 @@ def focus_view(view, feeds, conf, now, tz):
             running.append({"kind": "job", "title": f"{names.get(pid, pid)}: {j.get('label')}",
                             "title_parts": link_mentions(f"{names.get(pid, pid)}: {j.get('label')}", conf), "link": "",
                             "step": step + (f", done {j['eta'][5:]}" if j.get("eta") else ""), "pct": j.get("pct"),
-                            "late": bool(j.get("late")), "done": None, "total": None})
+                            "late": bool(j.get("late")), "done": None, "total": None, "project_id": pid,
+                            "date": j.get("eta") or ""})
     delivered_titles, need_hids = set(), {n["hid"] for n in needs}
+    pid_of = {i.get("hid"): i.get("project_id") or "" for i in list(view["inbox"]["items"]) + list(view["inbox"].get("snoozed") or [])}
     for d in view.get("delivered") or []:
         delivered_titles.add(d.get("title"))
         if d.get("late") or d.get("hid") in need_hids:
@@ -1122,13 +1150,13 @@ def focus_view(view, feeds, conf, now, tz):
         running.append({"kind": "delivered", "title": d.get("title") or "", "title_parts": d.get("title_parts"),
                         "link": d.get("link") or "", "step": f"day {d['elapsed']} of {d['total']}",
                         "pct": round(100 * d["elapsed"] / d["total"]) if d.get("total") else 0, "late": bool(d.get("late")),
-                        "done": None, "total": None})
+                        "done": None, "total": None, "project_id": pid_of.get(d.get("hid"), ""), "date": d.get("due") or ""})
     for it in confirms:
         if it.get("title") in delivered_titles:
             continue
         running.append({"kind": "confirm", "title": it.get("title") or "", "title_parts": it.get("title_parts"),
                         "link": it.get("link") or "", "step": "to confirm", "pct": None, "late": False,
-                        "done": None, "total": None})
+                        "done": None, "total": None, "project_id": it.get("project_id") or ""})
     for o in view.get("one_offs") or []:
         state = str(o.get("state") or "").strip()
         if o.get("needs_me") or state.lower() == "done" or not o.get("title"):
@@ -1136,7 +1164,7 @@ def focus_view(view, feeds, conf, now, tz):
         ref = o.get("ref") or ""
         running.append({"kind": "oneoff", "title": o["title"], "title_parts": o.get("title_parts"),
                         "link": ref if _http(ref) else "", "step": state or "open", "pct": None, "late": False,
-                        "done": None, "total": None})
+                        "done": None, "total": None, "project_id": ""})
     waits = []
     scale = (view.get("waiting") or {}).get("scale_days") or 1
     for w, r in zip(view.get("waiting_on") or [], (view.get("waiting") or {}).get("rows") or []):
@@ -1148,7 +1176,8 @@ def focus_view(view, feeds, conf, now, tz):
             "kind": "wait", "person": w.get("person") or "someone", "title": w.get("what") or "",
             "title_parts": w.get("what_parts"), "link": w.get("link") or "",
             "step": (f"waiting {days}d" if days is not None else "waiting") + nudge,
-            "pct": round(100 * days / scale) if days is not None else None, "late": False, "done": None, "total": None}))
+            "pct": round(100 * days / scale) if days is not None else None, "late": False, "done": None, "total": None,
+            "project_id": w.get("project_id") or ""}))
     waits.sort(key=lambda x: -x[1])  # longest wait first, so the oldest waits stay in view
     running += [w for _, _, w in waits]
 
@@ -1159,25 +1188,103 @@ def focus_view(view, feeds, conf, now, tz):
             if rp.get("date") == view["today"] and text and not NOT_WIN_RE.search(first_sentence(text)):
                 short = first_sentence(text)
                 wins.append({"title": short, "title_parts": link_mentions(short, conf), "link": "", "full": text})
+    for o in view.get("one_offs") or []:
+        if str(o.get("state") or "").lower() == "done" and str(o.get("done_on") or "")[:10] == view["today"] and o.get("title"):
+            ref = o.get("ref") or ""
+            wins.append({"title": o["title"], "title_parts": o.get("title_parts") or link_mentions(o["title"], conf),
+                         "link": ref if _http(ref) else "", "full": o.get("note") or o["title"]})
     for d in view["inbox"].get("done_today") or []:
         link = ref_url(d.get("ref"), conf)
         wins.append({"title": d.get("title") or "", "title_parts": link_mentions(d.get("title") or "", conf), "link": link,
                      "full": d.get("title") or ""})
 
-    tiles = []
+    # Every late thing, once: late asks and nudges, late running rows, passed project deadlines. The header's late
+    # count, each project's late badge and the late lists on the pages all read this one list.
+    late = []
+    for n in needs:
+        if n["late"]:
+            late.append({"kind": "need", "hid": n["hid"], "title": n["title"], "title_parts": n["title_parts"],
+                         "link": n["link"], "when": n["when"], "project_id": n["project_id"], "minutes": n["minutes"],
+                         "date": n["due"]})
+    for r in running:
+        if r.get("late"):
+            late.append({"kind": r["kind"], "title": r["title"], "title_parts": r.get("title_parts"), "link": r.get("link") or "",
+                         "when": r.get("step") or "late", "project_id": r.get("project_id") or "", "date": r.get("date") or ""})
     for p in view.get("projects") or []:
-        items = [i for g in p.get("breakdown") or [] for i in g.get("items") or []]
-        mine = [n for n in needs if n["project_id"] == p.get("id")]
         dl = parse_day(p.get("deadline"))
-        past_deadline = 1 if dl and dl < today and (p.get("progress_pct") or 0) < 100 else 0
-        tiles.append({"id": p.get("id", ""), "pct": p.get("progress_pct"), "steps_done": sum(1 for i in items if i.get("state") == "done"),
-                      "steps_total": len(items), "needs": len(mine), "late": sum(1 for n in mine if n["late"]) + past_deadline})
+        if dl and dl < today and (p.get("progress_pct") or 0) < 100:
+            late.append({"kind": "deadline", "title": f"Deadline {dl.isoformat()} passed", "title_parts": None,
+                         "link": "", "when": when_label(p.get("deadline"), today)[0], "project_id": p.get("id", ""),
+                         "date": dl.isoformat()})
+
+    tiles = []
+    order = sorted(enumerate(view.get("projects") or []), key=lambda x: (_rank(x[1].get("priority")), x[0]))
+    for _, p in order:
+        pid = p.get("id", "")
+        items = [i for g in p.get("breakdown") or [] for i in g.get("items") or []]
+        nm = first_sentence(p.get("next_milestone") or "")
+        tiles.append({"id": pid, "pct": p.get("progress_pct"), "steps_done": sum(1 for i in items if i.get("state") == "done"),
+                      "steps_total": len(items), "needs": sum(1 for n in needs if n["project_id"] == pid),
+                      "late": sum(1 for x in late if x["project_id"] == pid), "next": nm,
+                      "next_parts": link_mentions(nm, conf) if nm else [], **project_refs(p, conf)})
 
     merged = next((s["n"] for s in ((view.get("pipeline") or {}).get("stages") or []) if s["key"] == "merged"), 0)
     return {"hero": hero, "up_next": needs[1:], "up_next_shown": _int(fc.get("up_next"), 3), "cap": _int(fc.get("cap"), 5),
             "running": running, "wins": wins, "parked": parked, "tiles": tiles, "feed_note": feed_note,
-            "needs": len(needs), "late": sum(1 for n in needs if n["late"]), "minutes": sum(n["minutes"] for n in needs),
-            "merged_this_week": merged}
+            "needs": len(needs), "late": len(late), "late_items": late, "minutes": sum(n["minutes"] for n in needs),
+            "merged_this_week": merged, "shelf": shelf_view(view.get("shelf"), conf)}
+
+
+SLACK_ANY = re.compile(r"^https://[^/\s]+\.slack\.com/archives/([A-Z0-9]+)(/p\d+)?")
+CHANNEL_NAME = re.compile(r"#[\w-]+")
+
+
+def project_refs(p, conf):
+    """A project's tickets and Slack links, from its epic and links[] only (nothing is made up).
+
+    tickets: the epic first, then each links[] entry that points at the tracker. slack: channel links first, then
+    thread links, each with a short label ("#name" when the link's label names the channel).
+    """
+    base = _tracker(conf)
+    tickets, seen = [], set()
+
+    def add_ticket(key, url, label):
+        if key and key not in seen:
+            seen.add(key)
+            tickets.append({"key": key, "url": url, "label": label})
+
+    epic = str(p.get("epic") or "").strip()
+    if epic and re.fullmatch(r"[A-Z][A-Z0-9]+-\d+", epic):
+        add_ticket(epic, base + epic if base else "", "epic")
+    channels, threads = [], []
+    for ln in p.get("links") or []:
+        url, label = str(ln.get("url") or ""), str(ln.get("label") or "")
+        if base and url.startswith(base):
+            add_ticket(url[len(base):].split("/")[0].split("?")[0].split("#")[0], url, label)
+            continue
+        m = SLACK_ANY.match(url)
+        if m:
+            name = CHANNEL_NAME.search(label)
+            if m.group(2):
+                threads.append({"label": label or "Slack thread", "url": url, "kind": "thread"})
+            else:
+                channels.append({"label": name.group(0) if name else (label or "Slack channel"), "url": url, "kind": "channel"})
+    return {"tickets": tickets, "slack": channels + threads, "has_channel": bool(channels)}
+
+
+def shelf_view(shelf, conf):
+    """Shelf items: kept for some day, not on any list. Each is {title, note, link, added}; only the title is needed."""
+    out = []
+    for s in shelf or []:
+        if isinstance(s, str):
+            s = {"title": s}
+        if not isinstance(s, dict) or not s.get("title"):
+            continue
+        link = s.get("link") or ""
+        out.append({"title": s["title"], "title_parts": link_mentions(s["title"], conf), "note": s.get("note") or "",
+                    "link": link if _http(link) else "", "added": str(s.get("added") or "")[:10],
+                    "project_id": s.get("project_id") or ""})
+    return out
 
 
 # ---------- the whole view ----------
@@ -1215,6 +1322,7 @@ def build_view(data, cfg, inbox, feeds, prev_state, now, errors=None):
     raw = shown + snoozed + project_items(data, today)
     raw += github_items(feeds.get("github"), overrides, ib.get("no_ci_repos") or [])
     raw += slack_items(feeds.get("slack"), ib.get("slack_url") or "", overrides)
+    tracker_keys(raw, conf)
     merged = drop_done_today(dedupe(raw), inbox, today, tz)
 
     prev_open = prev_state.get("open") or {}
@@ -1289,5 +1397,7 @@ def build_view(data, cfg, inbox, feeds, prev_state, now, errors=None):
     view["delivered"] = delivered_view(items, later, today, tz)
     view["projects"], view["waiting_on"], view["one_offs"] = linked_data(data, conf)
     view["unlinked"] = unlinked_mentions(view, data, inbox, conf)
+    view["shelf"] = data.get("shelf") or []
     view["focus"] = focus_view(view, feeds, conf, now, tz)
+    view.pop("shelf", None)
     return view, state

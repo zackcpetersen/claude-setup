@@ -2,11 +2,12 @@
 """Add or finish a one-off item in a project status data file.
 
   add_oneoff.py projects.json "Sign the two bank forms" --needs-me --due 2026-11-21 --note "HR portal"
-  add_oneoff.py projects.json --done "bank forms"      (marks the first open item whose title contains the text)
+  add_oneoff.py projects.json --done "bank forms"      (marks the first open item whose title contains the text,
+                                                       and sets done_on to today so it shows under Wins today)
 
 Then rebuild the page with build.py.
 """
-import argparse, json, pathlib, sys
+import argparse, datetime, json, pathlib, sys
 
 ap = argparse.ArgumentParser()
 ap.add_argument("data"); ap.add_argument("title", nargs="?")
@@ -18,7 +19,7 @@ f = pathlib.Path(a.data); d = json.loads(f.read_text()); items = d.setdefault("o
 if a.done:
     hit = next((o for o in items if a.done.lower() in o["title"].lower() and o.get("state") != "done"), None)
     if not hit: sys.exit(f"no open one-off matches {a.done!r}")
-    hit["state"] = "done"; print("done:", hit["title"])
+    hit["state"] = "done"; hit["done_on"] = datetime.date.today().isoformat(); print("done:", hit["title"])
 elif a.title:
     o = {"title": a.title, "state": a.state, "needs_me": a.needs_me}
     for k, v in (("due", a.due), ("note", a.note), ("ref", a.ref), ("progress_pct", a.pct)):
