@@ -106,6 +106,12 @@ The manual equivalent, and what `update.sh` does under the hood:
 Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
 
+- 2026-11-23: New `~/bin/board-event`, an append-only event log. The
+  board and the status page now update at checkpoints (a sync, the wrap,
+  a status ask, or an urgent event) from the log, not on every landed
+  fact. Per machine: run ./update.sh (it links the new script), then add
+  `"Bash(~/bin/board-event *)"` to `permissions.allow` in
+  `~/.claude/settings.json` so sub-agents can append without a prompt.
 - 2026-11-23: Board wrap now ends by asking for `/clear` every day, and
   wrap.md has a pickup check for the new session (waits, Slack poll).
   Per machine: run ./update.sh; reinstall model-discipline (version

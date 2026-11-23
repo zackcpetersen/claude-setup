@@ -95,7 +95,7 @@ If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the 
 1. **Gather** the data into `~/.claude/project-status/projects.json`, in the format from `build.py`'s docstring. Dispatch one read-only agent for this (pass `model`); it writes only that file. Sources, in order: the user's project notes (for the `board` skill, the `Projects data source` line in `~/.claude/config/board.md` (older installs: `### Work board` in `~/.claude/CLAUDE.md`), plus today's board row), then the tracker and GitHub only for gaps. Rules for the agent:
    - `needs_me` holds only what the user must do or decide by hand. What waits on someone else goes in `waiting_on`. What an agent can do alone goes in neither.
    - `progress_pct` comes from real milestones or tickets, and `progress_basis` says how in one sentence. Never invent precision.
-   - Keep `one_offs` and every project's `jobs` already in the file. They are the user's own list and `job.py`'s.
+   - Keep `one_offs`, every project's `jobs` and the top-level `events_cursor` already in the file. They are the user's own list, `job.py`'s and the event log's cursor.
    - Set `next_milestone_date` (`YYYY-MM-DD`) when the next milestone has a date, so it shows under Running without you on that day. Start its first sentence with the position when the work is staged ("chunk 1 of 4").
    - Each project lists its tickets and Slack channel in `links[]` (`{"label": "#channel-name", "url": "<channel link>"}`), plus its `epic`. The page shows them on the project's row and page; a project without them shows "none in the data".
    - Fill `shelf` from the loose-ends source named by `shelf.source` in `config.json` (for the `tidy` skill, the Projects row named by the `Loose ends` line in `~/.claude/config/tidy.md`): one `{title, added, link, done}` per checklist line (`- [ ] item (added YYYY-MM-DD) link`; a ticked line is `done: true`). Copy the lines as they are; never add or drop one. Without `shelf.source`, keep `shelf` as it is.
@@ -109,15 +109,15 @@ If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the 
 4. **Publish** in a one-shot sonnet agent (general-purpose): it builds (step 3), publishes the file with the Artifact tool to `artifact_url` from config (it reads the artifact first when its session needs that), and returns only the link and the version. The main session never reads the artifact, the built HTML or `projects.json`. Without an `artifact_url`, the agent publishes new and saves the link to config. The page is private to the user.
 5. Tell the user the link, what changed since the last build, and the unsure list. Percentages are estimates; say so once.
 
-## Small updates (keep it in sync)
+## Small updates (at checkpoints)
 
-The page should never lag the work. When one fact changes (a PR merged, a run finished, the user decided something, a reply arrived, a wait cleared), do not gather again:
+The page should never lag the work, but it is rebuilt at checkpoints, not per fact. Facts (a PR merged, a run finished, the user decided something, a reply arrived, a wait cleared) are appended to the event log as they land (`~/bin/board-event add`, see the `board` skill's "Event log"). At a checkpoint, do not gather again:
 
-1. Hand the change, in one line (what changed, which project or one-off), to a one-shot sonnet publisher agent. It edits `~/.claude/project-status/projects.json` in place, in the "Writing style" wording, by the rules below (the item's `state`, the project's `needs_me`, the matching `waiting_on` row, one new `recent_progress` line, `progress_pct` when a milestone or ticket closed (keep `progress_basis` true), `as_of` set to now UTC; a staged milestone or job keeps its position, "chunk 2 of 4"), builds and publishes as in Refresh step 4, and returns the link and one line on what changed.
+1. Dispatch one one-shot sonnet publisher agent for everything since the last checkpoint. It runs `~/bin/board-event since <events_cursor>` (the top-level `events_cursor` in `projects.json`; `~/bin/board-event today` when it is missing), and edits `~/.claude/project-status/projects.json` in place, in the "Writing style" wording, by the rules below (the item's `state`, the project's `needs_me`, the matching `waiting_on` row, one new `recent_progress` line per landed fact, `progress_pct` when a milestone or ticket closed (keep `progress_basis` true), `as_of` set to now UTC; a staged milestone or job keeps its position, "chunk 2 of 4"; `job-progress` and `job-done` events through `job.py`), sets `events_cursor` to the last event id it read in the same file write, builds and publishes as in Refresh step 4, and returns the link and one line on what changed.
 2. The main session never opens the data file.
 3. Say what changed in one line. Do not ask first.
 
-Do this without being asked, every time such a fact lands in the session. The `board` skill does it on every sync and every landed event, and writes the page link as the first line of each daily row's `## Your TODOs`.
+Do this without being asked at every checkpoint: a sync, the wrap, when the user turns to the board, and right away for an event `add` printed as `URGENT`. No publish for a single non-urgent event. Without `~/bin/board-event`, hand the publisher the change in one line, as before. The `board` skill runs it at its checkpoints, and writes the page link as the first line of each daily row's `## Your TODOs`.
 
 ## Inbox
 
@@ -135,7 +135,7 @@ The inbox is worked out at build time from these sources. Feed items clear thems
 The session writes `inbox.json` only through `inbox.py` (`python3 ~/.claude/skills/project-status/inbox.py --help`):
 
 - `add --kind K --title T [--link URL] [--id ID] ...`: an agent is held on an approval, a draft is waiting to be sent, a delivery passes its confirm-by date, or the user asks for a TODO.
-- `done <id or title text>`: when the fact lands, the same moment as "Small updates".
+- `done <id or title text>`: at the checkpoint after the fact lands, the same moment as "Small updates".
 - `snooze <id> --until YYYY-MM-DD`: the user says "later" with a date. Only `inbox.json` items can be snoozed.
 - `meeting --title T --at ISO`: at rollover, only when the session knows the next meeting.
 - `sync --origin board --file F`: the `board` skill's mirror on every sync.
@@ -150,6 +150,7 @@ A job that runs for days (a backfill, a big export) shows under Running without 
 - After each progress report: `python3 ~/.claude/skills/project-status/job.py ~/.claude/project-status/projects.json set <project_id> "<label>" --done N --total N [--unit files] [--per-day N] [--eta YYYY-MM-DD]`. Only the fields given change.
 - When it finishes: `... job.py ~/.claude/project-status/projects.json done <project_id> "<label>"`. The job goes and a "Finished <label>" line lands in recent progress.
 - Then hand the publish to the one-shot publisher (Refresh step 4).
+- In a board session, append a `job-progress` or `job-done` event instead; the checkpoint's publisher runs `job.py`.
 
 ## Links
 

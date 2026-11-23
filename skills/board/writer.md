@@ -64,6 +64,8 @@ Read the three files in `poll_files` (none when `none`), each only for lines sin
 
 Every sync and rollover reply ends with this block, under 25 lines. The main session keeps it as its working copy of the scratchpad.
 
+`writer_inputs` may hold event lines (`<id> <kind> <key>: <text>`, from `~/bin/board-event since`). Merge them like any other finding, and store the last id among them in the scratchpad as `Events through: <id>` (keep the previous value when there are none). Write the row first and the scratchpad last, so a failed run re-sends the events rather than losing them.
+
     Session state
     Open questions: <the queue lines, or none>
     Work registry: <one line per row: key, stage, worktree, branch, plan file, PR>
@@ -72,3 +74,4 @@ Every sync and rollover reply ends with this block, under 25 lines. The main ses
     Standup on row: <yes|no>
     Drafts pending: <one line per Drafts today row still pending, or none>
     Row last edited after sync: <ts>
+    Events through: <id>
