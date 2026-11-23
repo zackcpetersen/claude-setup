@@ -87,6 +87,12 @@ if [[ -n "$moved" ]]; then
   echo
 fi
 
+if ! grep -q '"advisorModel"' "$HOME/.claude/settings.json" 2>/dev/null; then
+  echo "== Advisor model is not set =="
+  echo "  -> add \"advisorModel\": \"fable\" to ~/.claude/settings.json, or run /advisor fable once (see SETUP.md, Advisor model)"
+  echo
+fi
+
 baks="$(find "$HOME/.claude/commands" "$HOME/.claude/skills" "$HOME/.claude/output-styles" "$HOME/bin" -maxdepth 1 -name '*.bak' 2>/dev/null || true)"
 if [[ -n "$baks" ]]; then
   echo "== Leftover .bak files (diff each against the repo file, port anything missing, then delete) =="
