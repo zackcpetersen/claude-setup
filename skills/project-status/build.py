@@ -16,7 +16,7 @@ projects.json:
                needs_me[] {ask, ticket, due, link, effort ("5m"), who_waits}, summary,
                breakdown[] {group, items[] {text, state (done | in progress | waiting | blocked | not started), owner, ref, date}},
                decisions[] {date, decision}, recent_progress[] {date, text}, links[] {label, url},
-               next_milestone_date (YYYY-MM-DD, puts the milestone on the timeline),
+               next_milestone_date (YYYY-MM-DD, puts the milestone under Running on that day; lead with its position, "chunk 1 of 4"),
                jobs[] {label, done, total, unit, per_day, eta, updated}: long jobs such as a backfill.
                Written by job.py, not by hand; the page works out percent, finish date and lateness.
   waiting_on[] person, what, project_id, since, nudge_due, where, link
@@ -34,7 +34,7 @@ config.json (optional, keeps anything specific to one person or company out of t
   inbox        cap, home_count, stale_days, slack_url, effort_defaults and the feed settings (see derive.DEFAULTS)
   feeds        every_minutes, hours, days: the status-feeds schedule, used to tell when a feed is stale
   links        {"patterns": [{"match": "<regex with one group>", "url": "<base>{1}"}]}: link bases for other keys
-  stats        settings for ~/bin/eng-stats (it writes feeds/stats.json, which the #stats page reads)
+  stats        settings for ~/bin/eng-stats (it writes feeds/stats.json; the focus page does not show it yet)
   theme        {"light": {"--token": "value"}} overriding the page's color and font tokens (page.css :root).
                The page keeps one look in light and dark; add "dark" only if you want a separate dark palette.
   brand        {"logo": "logo.svg", "logo_dark": "logo-white.svg", "name": "Example Co"}: an optional logo, paths

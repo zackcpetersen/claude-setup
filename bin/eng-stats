@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""eng-stats: pull-request stats for the status page's #stats view. No model in the loop.
+"""eng-stats: pull-request stats for the status page (feeds/stats.json). No model in the loop.
 
   eng-stats refresh [--since 90d] [--full] [--max-pages N] [--home DIR] [--config PATH] [--now ISO]
   eng-stats report  [--home DIR] [--config PATH] [--now ISO]

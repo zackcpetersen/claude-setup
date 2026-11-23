@@ -12,7 +12,7 @@ What the page shows, top to bottom:
 - **Header**: the date, build time and four chips (need you with total minutes, late, running, wins today).
 - **Do this first** (the hero): the single most important open item, with its one next action, a rough time in minutes and an Open button to its link. When nothing needs the user it says "Nothing needs you" and points at what is running.
 - **Up next**: the next 3 items that need the user, one line each with the action and minutes. The rest fold behind "Show N more".
-- **Running without you**: things in flight that need nothing from the user: today's dated milestones (with "chunk X of Y" when the text says so), long jobs, deliveries counting down to their confirm-by date ("day X of Y"), and the people we wait on (aging bars). 5 shown, the rest folded.
+- **Running without you**: things in flight that need nothing from the user: today's dated milestones (with their position, "chunk 2 of 4" or "3 of 10 files", when the text says so, else "today"), long jobs, deliveries counting down to their confirm-by date ("day X of Y"), and the people we wait on (aging bars). 5 shown, the rest folded.
 - **Wins today**: today's progress lines and the items cleared today, 5 shown, the rest folded.
 - **Parked**: ideas and later items, collapsed. An open item lands here when its title starts with "Idea" or "After", says "Parked", or is due more than 14 days out (config `focus`).
 - **Projects**: a strip of rings (percent) with "X of Y steps" and "for you" and "late" badges. Each opens in place for the detail: next milestone, how the percent was worked out, asks, waits, the breakdown, recent progress and links. `#p-<id>` opens one.
@@ -54,7 +54,7 @@ Every line the page shows is written by an agent into `projects.json` or `inbox.
 - Lead with the outcome or the next action: "Nudge Ana: the export file", "DE-12 shipped to prod".
 - Short, plain sentences. One fact per line. No jargon where a plain word works.
 - A line that needs the user names one action and a rough time (`effort`, `effort_min`): "Approve the agent" with "2m".
-- Staged work says its position: "chunk 1 of 4", "step 2 of 3". The page draws segments from it.
+- Staged work says its position: "chunk 1 of 4", "step 2 of 3", "3 of 10 files". The page draws segments or a bar from it; without one the Running row only says "today".
 - Wins are concrete: what shipped, merged or was confirmed, with its key. Not "made progress on X".
 - Status lines that are not wins ("no new chunk yet", "still waiting") belong in `next_milestone` or `waiting_on`, not `recent_progress`.
 - Lists hold at most 5 shown rows; the page folds the rest. Never drop an item to make a list fit.
@@ -81,7 +81,7 @@ If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the 
    - `needs_me` holds only what the user must do or decide by hand. What waits on someone else goes in `waiting_on`. What an agent can do alone goes in neither.
    - `progress_pct` comes from real milestones or tickets, and `progress_basis` says how in one sentence. Never invent precision.
    - Keep `one_offs` and every project's `jobs` already in the file. They are the user's own list and `job.py`'s.
-   - Set `next_milestone_date` (`YYYY-MM-DD`) when the next milestone has a date, so it shows on the timeline.
+   - Set `next_milestone_date` (`YYYY-MM-DD`) when the next milestone has a date, so it shows under Running without you on that day. Start its first sentence with the position when the work is staged ("chunk 1 of 4").
    - Every item carries a link to its source when it names one: `link` on asks and waits, `ref` or `links[]` for tickets, PRs, Notion pages, Slack threads, runs and docs.
    - Keep `link`, `effort` and `who_waits` fields when present, and set `needs_me[].link` and `waiting_on[].link` whenever the source line has a URL (a Slack thread, a PR), so items merge with the feeds instead of showing twice.
    - Follow "Writing style" above for every line (outcome or action first, one fact per line, "chunk X of Y" for staged work, concrete wins, plain hyphens). Leave out finished projects.
@@ -96,7 +96,7 @@ If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the 
 
 The page should never lag the work. When one fact changes (a PR merged, a run finished, the user decided something, a reply arrived, a wait cleared), do not gather again:
 
-1. Hand the change, in one line (what changed, which project or one-off), to a one-shot sonnet publisher agent. It edits `~/.claude/project-status/projects.json` in place, in the "Writing style" wording, by the rules below (the item's `state`, the project's `needs_me`, the matching `waiting_on` row, one new `recent_progress` line, `progress_pct` when a milestone or ticket closed (keep `progress_basis` true), `as_of` set to now UTC), builds and publishes as in Refresh step 4, and returns the link and one line on what changed.
+1. Hand the change, in one line (what changed, which project or one-off), to a one-shot sonnet publisher agent. It edits `~/.claude/project-status/projects.json` in place, in the "Writing style" wording, by the rules below (the item's `state`, the project's `needs_me`, the matching `waiting_on` row, one new `recent_progress` line, `progress_pct` when a milestone or ticket closed (keep `progress_basis` true), `as_of` set to now UTC; a staged milestone or job keeps its position, "chunk 2 of 4"), builds and publishes as in Refresh step 4, and returns the link and one line on what changed.
 2. The main session never opens the data file.
 3. Say what changed in one line. Do not ask first.
 
@@ -127,8 +127,9 @@ Items with the same link merge into one (the session's words, the feed's live st
 
 ## Long jobs
 
-A job that runs for days (a backfill, a big export) shows as a bar with a finish date on its project page, on the project row and on the timeline. The page works out the percent, the finish date (from `per_day`, counted from the last report, so a job that stops reporting goes late) and whether it is stale.
+A job that runs for days (a backfill, a big export) shows under Running without you as "done of total" with a bar and its finish date. The page works out the percent, the finish date (from `per_day`, counted from the last report, so a job that stops reporting goes late) and whether it is stale.
 
+- Give `--total` whenever the size is known, so the row reads "3 of 10 files" and not just a label. When a milestone line names the same work, it carries the same position ("chunk 2 of 4").
 - After each progress report: `python3 ~/.claude/skills/project-status/job.py ~/.claude/project-status/projects.json set <project_id> "<label>" --done N --total N [--unit files] [--per-day N] [--eta YYYY-MM-DD]`. Only the fields given change.
 - When it finishes: `... job.py ~/.claude/project-status/projects.json done <project_id> "<label>"`. The job goes and a "Finished <label>" line lands in recent progress.
 - Then hand the publish to the one-shot publisher (Refresh step 4).

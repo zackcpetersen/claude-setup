@@ -16,7 +16,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `skills/review-pr/` | `review-pr` skill - review a teammate's PR, approve or comment with per-comment approval | `~/.claude/skills/` (symlink) |
 | `skills/daily-auth/` | `daily-auth` skill - check and fix every login the day needs, from `~/.claude/auth-checks.json` | `~/.claude/skills/` (symlink) |
 | `skills/sync-repos/` | `sync-repos` skill - fast-forward every repo in `~/.claude/sync-repos.json` to `origin/main` | `~/.claude/skills/` (symlink) |
-| `skills/project-status/` | `project-status` skill - a visual project status dashboard (nav rail, today strip, KPI tiles, inbox, project bars, timeline, PR pipeline, stats) built from a data file and published as a private Artifact | `~/.claude/skills/` (symlink) |
+| `skills/project-status/` | `project-status` skill - a one-screen project status page (one "Do this first" card, up next, running without you, wins today, parked, project rings) built from a data file and published as a private Artifact | `~/.claude/skills/` (symlink) |
 | `skills/watch/` | `watch` skill - background waits on PRs, deploys and Dagster runs that wake the session once, plus a cheap 5-minute Slack poll that wakes the session only when you are messaged | `~/.claude/skills/` (symlink) |
 | `output-styles/direct.md` | "Direct" output style - answer first, plain english, no hedging | `~/.claude/output-styles/` (symlink) |
 | `output-styles/momentum.md` | "Momentum" output style - Direct plus progress tracking and one next action | `~/.claude/output-styles/` (symlink) |
@@ -26,7 +26,7 @@ Everything in this repo is generic - nothing references a specific company, repo
 | `bin/wait-for` | Background wait the `watch` skill starts: PR, deploy, Dagster run or Slack poll, one event line then exit (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
 | `bin/pr-precheck` | Lints changed files with autocorrect and runs only their tests, once before the first push; also a read-only `report` and a pre-push `hook` mode (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
 | `bin/status-feeds` | Refreshes the status page's GitHub and Slack inbox data on a schedule, no model in the loop (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
-| `bin/eng-stats` | Caches the org's pull requests and writes the status page's `#stats` numbers (aggregates for you and your team) once a day, no model in the loop (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
+| `bin/eng-stats` | Caches the org's pull requests and writes `feeds/stats.json` for the status page (aggregates for you and your team; the focus page does not show them yet) once a day, no model in the loop (Python 3 standard library; tests in `bin/tests/`) | `~/bin/` (symlink) |
 | `bin/worktree-config.example.json` | Starter config for `worktree` | copy + edit, see below |
 | `config/*.example.*` | Per-skill config examples (board, watch, tidy, writing voice, optional self-review and pr-precheck) | the four `.md` files are copied to `~/.claude/config/` when absent, see below |
 | `plugins/model-discipline/` | `model-discipline` plugin - the agent-model-guard hook, a SessionStart rules block, and the `playbook` skill | `/plugin install`, see section 4 |
@@ -105,6 +105,17 @@ The manual equivalent, and what `update.sh` does under the hood:
 
 Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
+
+- 2026-11-23: The `project-status` page becomes one screen: a "Do this
+  first" card, up next, running without you, wins today, a folded
+  Parked list and project rings. The nav rail, KPI tiles, timeline and
+  separate pages are gone; old page links open the same page. Nothing
+  breaks: old data and config files build. Per machine: if
+  `config.json` sets only `brand.logo_dark`, also set `brand.logo`, or
+  the logo stays hidden in the light theme (the header is no longer a
+  dark rail). Optional: a `focus` block in `config.json` (`up_next`,
+  `cap`, `parked_patterns`, `parked_after_days`, `feed_note_hours`). The
+  `eng-stats` schedule can stay; the page does not show its numbers yet.
 
 - 2026-11-<merge day>: Workflow and self-review changes. Per machine: run
   ./update.sh; reinstall model-discipline (version 1.2.0, the update.sh
@@ -267,7 +278,7 @@ Work through these once per machine:
 - No file edits. Per-machine files live in `~/.claude/project-status/`: `mkdir -p ~/.claude/project-status`, copy `skills/project-status/config.example.json` there as `config.json` and fill in the title, the tracker link prefix, the GitHub org and (optional) your colors under `theme.light`. Brand colors stay in that local file, never in the repo.
 - Try it: `python3 ~/.claude/skills/project-status/build.py ~/.claude/skills/project-status/sample-data.json /tmp/project-status.html --config ~/.claude/project-status/config.json --home ~/.claude/skills/project-status/sample-home --no-state --now 2026-01-12T18:00:00Z`, then ask Claude to publish that file as an Artifact.
 - Feeds (optional, fills the inbox from GitHub and the Slack poll): set `tz` in `config.json`, run `~/bin/status-feeds doctor`, then `~/bin/status-feeds run --force`, then install the schedule printed by `~/bin/status-feeds schedule --print launchd` (Linux: `--print cron`, add it with `crontab -e`).
-- Stats (optional, fills the `#stats` page and the home KPI tiles): add a `stats` block to `config.json` with at least `team_slug` (your GitHub team), run `~/bin/eng-stats doctor`, then `~/bin/eng-stats run`, then install the schedule printed by `~/bin/eng-stats schedule --print launchd` (Linux: `--print cron`).
+- Stats (optional; the one-screen page does not show them yet, so skip this unless you want the cache): add a `stats` block to `config.json` with at least `team_slug` (your GitHub team), run `~/bin/eng-stats doctor`, then `~/bin/eng-stats run`, then install the schedule printed by `~/bin/eng-stats schedule --print launchd` (Linux: `--print cron`).
 - Then ask Claude for "my project status page". It gathers your projects into `~/.claude/project-status/projects.json`, builds, publishes, and saves the Artifact link in `config.json` so every refresh updates the same page. "Add a one-off: ..." adds a standalone item.
 - Needs Python 3 and the Artifact tool. Reads the board's `Projects data source` when you use the `board` skill; without it, tell Claude where your project notes live.
 
