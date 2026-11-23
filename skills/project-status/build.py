@@ -119,7 +119,7 @@ def brand_view(brand, base):
     """The page's brand block: logo data URIs and alt text, or None when no logo loads.
 
     A missing variant stays missing (no fallback to the other one): a light-background logo on a dark background
-    is near invisible, so the page keeps the letter tile there instead.
+    is near invisible, so the page hides the logo in that theme instead.
     """
     if not isinstance(brand, dict):
         return None

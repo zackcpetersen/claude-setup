@@ -202,7 +202,8 @@ function render(){
 function show(){
   const m = /^#p-(.+)$/.exec(location.hash || '');
   if (!m) return;
-  const el = document.getElementById('p-' + decodeURIComponent(m[1]));
+  let id; try { id = decodeURIComponent(m[1]); } catch (e) { return; }  // a malformed hash opens nothing
+  const el = document.getElementById('p-' + id);
   if (el) { el.open = true; el.scrollIntoView({block: 'nearest'}); }
 }
 

@@ -113,7 +113,9 @@ than 6 months.
   breaks: old data and config files build. Per machine: if
   `config.json` sets only `brand.logo_dark`, also set `brand.logo`, or
   the logo stays hidden in the light theme (the header is no longer a
-  dark rail). Optional: a `focus` block in `config.json` (`up_next`,
+  dark rail). A `theme` that overrides `--rail` (now the hero card) should
+  also set `--on-rail` (its headline) and, in `theme.dark`, `--hero` (the
+  hero's dark mix). Optional: a `focus` block in `config.json` (`up_next`,
   `cap`, `parked_patterns`, `parked_after_days`, `feed_note_hours`). The
   `eng-stats` schedule can stay; the page does not show its numbers yet.
 

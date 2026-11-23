@@ -783,6 +783,54 @@ class Focus(unittest.TestCase):
         steps = [r["step"] for r in view(data=data)["focus"]["running"] if r["kind"] == "job"]
         self.assertTrue(steps[0].startswith("3 of 10 files"), steps)
 
+    def test_done_today_with_no_shared_key_falls_back_to_title(self):
+        data = {"projects": [{"id": "a", "name": "A", "needs_me": [{"ask": "Approve the agent"}]}]}
+        inbox = {"items": [{"id": "t", "kind": "todo", "title": "Approve the agent", "link": "https://example.com/x",
+                            "done_at": "2026-01-14T15:00:00Z"}]}
+        self.assertEqual(view(data=data, inbox=inbox)["inbox"]["items"], [])
+
+    def test_passed_milestone_runs_late_and_passed_deadline_counts_late(self):
+        data = {"projects": [{"id": "a", "name": "A", "next_milestone": "Ship chunk 2 of 4.", "next_milestone_date": "2026-01-12",
+                              "deadline": "2026-01-13", "progress_pct": 60}]}
+        f = view(data=data)["focus"]
+        row = [r for r in f["running"] if r["kind"] == "today"][0]
+        self.assertTrue(row["late"])
+        self.assertEqual(row["step"], "chunk 2 of 4, was due 01-12")
+        self.assertEqual(f["tiles"][0]["late"], 1)
+
+    def test_far_confirm_runs_and_is_not_parked(self):
+        inbox = {"items": [{"id": "c", "kind": "confirm", "title": "Confirm Ana got it", "since": "2026-01-10", "due": "2026-03-01"}]}
+        f = view(inbox=inbox)["focus"]
+        self.assertEqual(f["parked"], [])
+        self.assertEqual([r["kind"] for r in f["running"]].count("delivered"), 1)
+
+    def test_confirm_due_today_needs_you(self):
+        inbox = {"items": [{"id": "c", "kind": "confirm", "title": "Confirm Ana got it", "since": "2026-01-10", "due": "2026-01-14"}]}
+        f = view(inbox=inbox)["focus"]
+        self.assertEqual(f["hero"]["title"], "Confirm Ana got it")
+        self.assertNotIn("delivered", [r["kind"] for r in f["running"]])
+
+    def test_waits_longest_wait_first(self):
+        data = {"projects": [], "waiting_on": [{"person": "Ana", "what": "short", "since": "2026-01-13"},
+                                               {"person": "Bo", "what": "long", "since": "2026-01-02", "nudge_due": "2026-01-20"}]}
+        waits = [r["title"] for r in view(data=data)["focus"]["running"] if r["kind"] == "wait"]
+        self.assertEqual(waits, ["long", "short"])
+
+    def test_win_links_rebuilt_from_refs(self):
+        cfg = {"tz": "America/Chicago", "inbox": {"slack_url": "https://acme.slack.com/archives/"}}
+        self.assertEqual(D.ref_url("gh:acme/billing#7", cfg), "https://github.com/acme/billing/pull/7")
+        self.assertEqual(D.ref_url("slack:C0123ABC:1768000000.123456", D.settings(cfg)),
+                         "https://acme.slack.com/archives/C0123ABC/p1768000000123456")
+        self.assertEqual(D.ref_url("https://example.com/a?b=1", cfg), "https://example.com/a")
+        inbox = {"items": [{"id": "t", "kind": "todo", "title": "Reply to Ana", "ref": "C0123ABC:1768000000.123456",
+                            "done_at": "2026-01-14T15:00:00Z"}]}
+        wins = view(inbox=inbox, cfg=cfg)["focus"]["wins"]
+        self.assertEqual(wins[0]["link"], "https://acme.slack.com/archives/C0123ABC/p1768000000123456")
+
+    def test_big_totals_draw_a_bar_and_zero_chunk_clamps(self):
+        self.assertEqual(D.position("batch 37 of 400 copying"), ("batch 37 of 400", None, None, 9))
+        self.assertEqual(D.position("chunk 0 of 4 starting"), ("chunk 0 of 4", 0, 4, None))
+
     def test_job_without_done_reads_zero(self):
         data = {"projects": [{"id": "p", "name": "P", "jobs": [{"label": "Backfill", "total": 100, "unit": "rows"}]}]}
         steps = [r["step"] for r in view(data=data)["focus"]["running"] if r["kind"] == "job"]

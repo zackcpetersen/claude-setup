@@ -533,7 +533,8 @@ def drop_done_today(items, inbox, today, tz):
         mine = _ids(i.get("ref"), i.get("project_id"))
         for theirs in done.get(norm_title(i.get("title")), []):
             shared = mine.keys() & theirs.keys()
-            if not mine or not theirs or (shared and all(mine[k] == theirs[k] for k in shared)):
+            # No key on one side, or no key in common: the title alone decides.
+            if not shared or all(mine[k] == theirs[k] for k in shared):
                 return True
         return False
 
@@ -927,6 +928,7 @@ def linked_data(data, conf):
 
 STEP_RE = re.compile(r"\b(chunk|step|part|batch|phase|stage|wave|round) (\d+) of (\d+)\b", re.I)
 COUNT_RE = re.compile(r"\b(\d[\d,]*) of (\d[\d,]*)((?: [a-z]+)?)\b", re.I)
+MAX_SEGS = 12  # more steps than this draw a percent bar, not one segment each
 STAGE_RE = re.compile(r"\b(chunk|step|part|batch|phase|stage|wave|round) (\d+)\b", re.I)
 
 
@@ -938,7 +940,10 @@ def position(text):
     """
     m = STEP_RE.search(text or "")
     if m:
-        return m.group(0), int(m.group(2)) - 1, int(m.group(3)), None
+        done, total = max(0, int(m.group(2)) - 1), int(m.group(3))
+        if total <= MAX_SEGS:
+            return m.group(0), done, total, None
+        return m.group(0), None, None, round(100 * min(done, total) / total) if total else None
     m = COUNT_RE.search(text or "")
     if m:
         done, total = int(m.group(1).replace(",", "")), int(m.group(2).replace(",", ""))
@@ -949,6 +954,21 @@ def position(text):
         return m.group(0), None, None, None
     return "today", None, None, None
 NOT_WIN_RE = re.compile(r"\b(no new|not yet|still|overdue|waiting on|is due|to be confirmed|confirming|ends today)\b", re.I)
+
+
+def ref_url(ref, conf):
+    """A clickable URL for a canonical ref (url:, gh:owner/repo#N, slack:C:ts), or "" when none can be built."""
+    ref = canonical_ref(ref)
+    if ref.startswith("url:https://"):
+        return ref[4:]
+    m = re.match(r"^gh:([^/\s]+)/([^#\s]+)#(\d+)$", ref)
+    if m:
+        return f"https://github.com/{m.group(1)}/{m.group(2)}/pull/{m.group(3)}"
+    m = re.match(r"^slack:([A-Z0-9]+):(\d{10})\.(\d{6})$", ref)
+    base = str((conf.get("inbox") or {}).get("slack_url") or "")
+    if m and base:
+        return base.rstrip("/") + f"/{m.group(1)}/p{m.group(2)}{m.group(3)}"
+    return ""
 
 
 def first_sentence(text):
@@ -1044,9 +1064,11 @@ def focus_view(view, feeds, conf, now, tz):
     for it in view["inbox"]["items"]:
         due = parse_day(it.get("due"))
         pinned = due is not None and due <= today  # late or due today: never hidden under Parked
-        if not pinned and (any(p.search(it.get("title") or "") for p in pats) or (due and (due - today).days > later_days)):
+        is_confirm = it.get("kind") == "confirm"  # confirms count down under Running, never under Parked
+        if not pinned and not is_confirm and (any(p.search(it.get("title") or "") for p in pats)
+                                              or (due and (due - today).days > later_days)):
             parked.append(_need_row(it, today, old_sources))
-        elif it.get("kind") == "confirm" and not it.get("late"):
+        elif is_confirm and not pinned:
             confirms.append(it)
         else:
             needs.append(_need_row(it, today, old_sources))
@@ -1074,11 +1096,15 @@ def focus_view(view, feeds, conf, now, tz):
 
     running = []
     for p in view.get("projects") or []:
-        if p.get("next_milestone_date") == view["today"] and p.get("next_milestone"):
+        md = parse_day(p.get("next_milestone_date"))
+        if md and md <= today and p.get("next_milestone"):
             text = first_sentence(p["next_milestone"])
             step, done, total, pct = position(text)
+            late = md < today  # a milestone whose date passed stays on screen, in coral
+            if late:
+                step = (step + ", " if step != "today" else "") + "was due " + md.isoformat()[5:]
             running.append({"kind": "today", "title": text, "title_parts": link_mentions(text, conf), "link": "",
-                            "step": step, "done": done, "total": total, "pct": pct, "late": False})
+                            "step": step, "done": done, "total": total, "pct": pct, "late": late})
     for pid, js in (view.get("jobs") or {}).items():
         for j in js:
             if j.get("finished"):
@@ -1123,7 +1149,7 @@ def focus_view(view, feeds, conf, now, tz):
             "title_parts": w.get("what_parts"), "link": w.get("link") or "",
             "step": (f"waiting {days}d" if days is not None else "waiting") + nudge,
             "pct": round(100 * days / scale) if days is not None else None, "late": False, "done": None, "total": None}))
-    waits.sort(key=lambda x: (x[0], x[1]))
+    waits.sort(key=lambda x: -x[1])  # longest wait first, so the oldest waits stay in view
     running += [w for _, _, w in waits]
 
     wins = []
@@ -1134,8 +1160,7 @@ def focus_view(view, feeds, conf, now, tz):
                 short = first_sentence(text)
                 wins.append({"title": short, "title_parts": link_mentions(short, conf), "link": "", "full": text})
     for d in view["inbox"].get("done_today") or []:
-        ref = str(d.get("ref") or "")
-        link = ref[4:] if ref.startswith("url:https://") else ""
+        link = ref_url(d.get("ref"), conf)
         wins.append({"title": d.get("title") or "", "title_parts": link_mentions(d.get("title") or "", conf), "link": link,
                      "full": d.get("title") or ""})
 
@@ -1143,8 +1168,10 @@ def focus_view(view, feeds, conf, now, tz):
     for p in view.get("projects") or []:
         items = [i for g in p.get("breakdown") or [] for i in g.get("items") or []]
         mine = [n for n in needs if n["project_id"] == p.get("id")]
+        dl = parse_day(p.get("deadline"))
+        past_deadline = 1 if dl and dl < today and (p.get("progress_pct") or 0) < 100 else 0
         tiles.append({"id": p.get("id", ""), "pct": p.get("progress_pct"), "steps_done": sum(1 for i in items if i.get("state") == "done"),
-                      "steps_total": len(items), "needs": len(mine), "late": sum(1 for n in mine if n["late"])})
+                      "steps_total": len(items), "needs": len(mine), "late": sum(1 for n in mine if n["late"]) + past_deadline})
 
     merged = next((s["n"] for s in ((view.get("pipeline") or {}).get("stages") or []) if s["key"] == "merged"), 0)
     return {"hero": hero, "up_next": needs[1:], "up_next_shown": _int(fc.get("up_next"), 3), "cap": _int(fc.get("cap"), 5),
