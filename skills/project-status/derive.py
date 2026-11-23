@@ -37,6 +37,14 @@ DEFAULTS = {
     # links.ticket_keys: tracker project keys ("ENG"); empty links any KEY-123 except standards like UTF-8.
     # links.repos: repo names a "repo #123" mention may name, on top of the repos in the GitHub feed.
     "links": {"patterns": [], "ticket_keys": [], "repos": []},
+    # focus: the home layout. parked_patterns move matching open items to Parked; items due more than
+    # parked_after_days out go there too. feed_note_hours: a GitHub or Slack feed older than this gets a note.
+    "focus": {"up_next": 3, "cap": 5, "parked_patterns": [r"^Idea\b", r"\bParked\b", r"^After\b"],
+              "parked_after_days": 14, "feed_note_hours": 24},
+    # shelf: the loose-ends list the gather step copies into projects.json shelf[]. source names where it lives
+    # (for the gather agent; the page never reads it), cap is its size limit (shown as "N of cap"), and an item
+    # older than stale_days gets a quiet "old" flag.
+    "shelf": {"source": "", "cap": None, "stale_days": 14},
 }
 
 EFFORT = {"merge": 2, "send-draft": 2, "approve-agent": 2, "slack": 5, "nudge": 5, "confirm": 5, "todo": 5,
@@ -346,7 +354,7 @@ def dedupe(items):
     """Items with the same ref become one. Words come from the highest source, live state from a script source."""
     groups, order = {}, []
     for it in items:
-        k = it["ref"] or ("\0" + it["id"] + "\0" + str(len(order)))
+        k = it.get("_merge") or it["ref"] or ("\0" + it["id"] + "\0" + str(len(order)))
         if k not in groups:
             groups[k] = []
             order.append(k)
@@ -354,6 +362,8 @@ def dedupe(items):
     out = []
     for k in order:
         g = sorted(groups[k], key=lambda i: SOURCE_RANK.get(i["source"], 9))
+        for i in g:
+            i.pop("_merge", None)
         if len(g) == 1:
             g[0]["sources"] = [g[0]["source"]]
             out.append(g[0])
@@ -374,11 +384,33 @@ def dedupe(items):
         top["since"] = min(sinces, key=lambda v: parse_time(v) or datetime.max.replace(tzinfo=timezone.utc)) if sinces else None
         dues = [i["due"] for i in g if parse_day(i.get("due"))]
         top["due"] = min(dues, key=parse_day) if dues else None
-        top["id"] = top["ref"]
+        top["id"] = k if k.startswith("url:") else top["ref"]
         if any(i.get("snooze_until") for i in g):
             top["snooze_until"] = max(i["snooze_until"] for i in g if i.get("snooze_until"))
         out.append(top)
     return out
+
+
+def tracker_keys(items, conf):
+    """Items whose link is a tracker ticket merge only when their titles match too.
+
+    A ticket link is shared by many asks (a question list and an owner pick on the same ticket), so the link alone
+    would fold two different asks into one row with one title and the other's due date. PR and Slack links still
+    merge on the link alone. The item's id gets the title part as well, so two asks on one ticket never share an id.
+    """
+    base = _tracker(conf)
+    if not base:
+        return items
+    for it in items:
+        ref = it.get("ref") or ""
+        if ref.startswith("url:" + base):
+            it["_merge"] = it["id"] = ref + "#" + sha(norm_title(it.get("title")), 8)
+    return items
+
+
+def _tracker(conf):
+    t = str(conf.get("tracker_url") or "")
+    return t if t.startswith("https://") and "FILL-IN" not in t else ""
 
 
 def age_label(since, now, tz):
@@ -504,6 +536,43 @@ def source_state(name, feed, err, cfg, now, tz):
 
 
 # ---------- done today ----------
+
+def norm_title(text):
+    return re.sub(r"\W+", " ", str(text or "").lower()).strip()
+
+
+def drop_done_today(items, inbox, today, tz):
+    """Open items whose title matches an inbox.json item marked done today are left out.
+
+    The board mirror marks a TODO done in inbox.json while the same line can linger in projects.json (a one-off or an
+    ask). A link alone never clears one (a shared ticket link can cover several asks), so the whole title must match.
+    When both items carry a ref or a project_id, those must agree too, so a done "Reply to Ana" in one thread does
+    not hide an unrelated open "Reply to Ana" elsewhere. Either side with neither falls back to the title alone.
+    """
+    done = {}
+    for s in (inbox or {}).get("items") or []:
+        if s.get("done_at") and _local_day(s["done_at"], tz) == today and s.get("title"):
+            ref = canonical_ref(s["ref"]) if s.get("ref") else make_ref(s.get("link"))
+            done.setdefault(norm_title(s.get("title")), []).append(_ids(ref, s.get("project_id")))
+    if not done:
+        return items
+
+    def cleared(i):
+        mine = _ids(i.get("ref"), i.get("project_id"))
+        for theirs in done.get(norm_title(i.get("title")), []):
+            shared = mine.keys() & theirs.keys()
+            # No key on one side, or no key in common: the title alone decides.
+            if not shared or all(mine[k] == theirs[k] for k in shared):
+                return True
+        return False
+
+    return [i for i in items if i.get("source") == "session" or not cleared(i)]
+
+
+def _ids(ref, project_id):
+    """The identity fields an item carries (ref, project_id), empty ones left out."""
+    return {k: v for k, v in (("ref", ref or ""), ("project_id", project_id or "")) if v}
+
 
 def _local_day(value, tz):
     d = parse_time(value, tz)
@@ -883,6 +952,364 @@ def linked_data(data, conf):
     return projects, waits, offs
 
 
+# ---------- focus: the home layout ----------
+
+STEP_RE = re.compile(r"\b(chunk|step|part|batch|phase|stage|wave|round) (\d+) of (\d+)\b", re.I)
+COUNT_RE = re.compile(r"\b(\d[\d,]*) of (\d[\d,]*)((?: [a-z]+)?)\b", re.I)
+MAX_SEGS = 12  # more steps than this draw a percent bar, not one segment each
+STAGE_RE = re.compile(r"\b(chunk|step|part|batch|phase|stage|wave|round) (\d+)\b", re.I)
+
+
+def position(text):
+    """The position a staged line states, for a Running row: (step label, done, total, pct).
+
+    "chunk 2 of 4" gives segments (1 done of 4), "3 of 10 files" a bar at 30 percent, and a bare "chunk 1" just the
+    label. A line with no position returns ("today", None, None, None).
+    """
+    m = STEP_RE.search(text or "")
+    if m:
+        done, total = max(0, int(m.group(2)) - 1), int(m.group(3))
+        if total <= MAX_SEGS:
+            return m.group(0), done, total, None
+        return m.group(0), None, None, round(100 * min(done, total) / total) if total else None
+    m = COUNT_RE.search(text or "")
+    if m:
+        done, total = int(m.group(1).replace(",", "")), int(m.group(2).replace(",", ""))
+        if total > 0 and done <= total:
+            return m.group(0).strip(), None, None, round(100 * done / total)
+    m = STAGE_RE.search(text or "")
+    if m:
+        return m.group(0), None, None, None
+    return "today", None, None, None
+NOT_WIN_RE = re.compile(r"\b(no new|not yet|still|overdue|waiting on|is due|to be confirmed|confirming|ends today)\b", re.I)
+
+
+def ref_url(ref, conf):
+    """A clickable URL for a canonical ref (url:, gh:owner/repo#N, slack:C:ts), or "" when none can be built."""
+    ref = canonical_ref(ref)
+    if ref.startswith("url:https://"):
+        return ref[4:]
+    m = re.match(r"^gh:([^/\s]+)/([^#\s]+)#(\d+)$", ref)
+    if m:
+        return f"https://github.com/{m.group(1)}/{m.group(2)}/pull/{m.group(3)}"
+    m = re.match(r"^slack:([A-Z0-9]+):(\d{10})\.(\d{6})$", ref)
+    base = str((conf.get("inbox") or {}).get("slack_url") or "")
+    if m and base:
+        return base.rstrip("/") + f"/{m.group(1)}/p{m.group(2)}{m.group(3)}"
+    return ""
+
+
+def first_sentence(text):
+    text = " ".join(str(text or "").split())
+    m = re.search(r"\.\s+[A-Z0-9]", text)
+    return text[:m.start() + 1] if m else text
+
+
+def open_label(url, conf):
+    """Button text for a link: the ticket key, repo#N, "thread", else "link"."""
+    url = str(url or "")
+    tracker = str(conf.get("tracker_url") or "")
+    if tracker and "FILL-IN" not in tracker and url.startswith(tracker):
+        key = url[len(tracker):].split("/")[0].split("?")[0]
+        if key:
+            return "Open " + key
+    m = GH_PR.match(url)
+    if m:
+        return f"Open {m.group(2)}#{m.group(3)}"
+    if SLACK_URL.match(url):
+        return "Open thread"
+    return "Open link"
+
+
+def when_label(due, today):
+    d = parse_day(due)
+    if not d:
+        return "", False
+    n = (d - today).days
+    if n < 0:
+        return (f"{-n} day late" if n == -1 else f"{-n} days late"), True
+    if n == 0:
+        return "due today", False
+    if n == 1:
+        return "due tomorrow", False
+    return "due " + d.strftime("%a %m-%d"), False
+
+
+def split_action(title):
+    """("Nudge Ana", "the export file") from "Nudge Ana: the export file"; the whole title when there is no short lead."""
+    t = str(title or "")
+    if ": " in t:
+        head, rest = t.split(": ", 1)
+        if 0 < len(head) <= 64:
+            return head, rest
+    return t, ""
+
+
+def _int(v, default):
+    """An int from config or data; only a missing value (None) takes the default, so an explicit 0 stays 0."""
+    try:
+        return int(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _need_row(it, today, old_sources):
+    when, late = when_label(it.get("due"), today)
+    return {"hid": it.get("hid"), "title": it.get("title") or "", "title_parts": it.get("title_parts"),
+            "link": it.get("link") or "", "when": when, "late": late, "minutes": _int(it.get("effort_min"), 5),
+            "due": str(it.get("due") or "")[:10],
+            "source": it.get("source") or "", "project_id": it.get("project_id") or "", "kind": it.get("kind") or "",
+            "why": it.get("why") or "", "feed_old": bool(set(it.get("sources") or [it.get("source")]) & old_sources)}
+
+
+def focus_view(view, feeds, conf, now, tz):
+    """Everything the one-screen home shows: the hero, up next, running, wins, the shelf, project tiles, feed note.
+
+    The shelf holds parked open items (ideas, later, snoozed) and the loose ends from data shelf[], each with a tag.
+    """
+    fc = conf.get("focus") or {}
+    today = date.fromisoformat(view["today"])
+    pats = []
+    for p in fc.get("parked_patterns") or []:
+        try:
+            pats.append(re.compile(p, re.I))
+        except re.error:
+            continue
+    later_days = _int(fc.get("parked_after_days"), 14)
+
+    # Feeds older than feed_note_hours get one note near the rows they fed.
+    old, old_sources = [], set()
+    for name in SCRIPT_SOURCES:
+        feed = (feeds or {}).get(name)
+        gen = parse_time((feed or {}).get("generated_at") or (feed or {}).get("updated_at"))
+        if gen and now - gen > timedelta(hours=_int(fc.get("feed_note_hours"), 24)):
+            old.append((SOURCE_LABELS.get(name, name), gen.astimezone(tz).strftime("%m-%d %H:%M")))
+            old_sources.add(name)
+    feed_note = None
+    if old:
+        same = len({w for _, w in old}) == 1
+        feed_note = {"sources": sorted(old_sources),
+                     "text": (" and ".join(n for n, _ in old) + (" feed" if len(old) == 1 else " feeds") + f" last refreshed {old[0][1]}"
+                              if same else "; ".join(f"{n} feed last refreshed {w}" for n, w in old))}
+
+    needs, parked, confirms = [], [], []
+    for it in view["inbox"]["items"]:
+        due = parse_day(it.get("due"))
+        pinned = due is not None and due <= today  # late or due today: never hidden under Parked
+        is_confirm = it.get("kind") == "confirm"  # confirms count down under Running, never under Parked
+        if not pinned and not is_confirm and (any(p.search(it.get("title") or "") for p in pats)
+                                              or (due and (due - today).days > later_days)):
+            row = _need_row(it, today, old_sources)
+            row["tag"] = "idea" if re.match(r"\s*idea\b", row["title"], re.I) else "later"
+            parked.append(row)
+        elif is_confirm and not pinned:
+            confirms.append(it)
+        else:
+            needs.append(_need_row(it, today, old_sources))
+
+    # Snoozed items wait under Parked with their wake date; a snoozed confirm already counts down under Running.
+    delivered_hids = {d.get("hid") for d in view.get("delivered") or []}
+    for it in view["inbox"].get("snoozed") or []:
+        if it.get("hid") in delivered_hids:
+            continue
+        row = _need_row(it, today, old_sources)
+        row.update({"when": "back " + str(it.get("snooze_until") or "")[5:10], "late": False, "snoozed": True, "tag": "snoozed"})
+        parked.append(row)
+
+    names = {p.get("id", ""): p.get("name") or "" for p in view.get("projects") or []}
+    hero = None
+    if needs:
+        h = dict(needs[0])
+        head, rest = split_action(h["title"])
+        h["action"] = head
+        h["detail"] = rest
+        h["detail_parts"] = link_mentions(rest, conf) if rest else []
+        h["open_label"] = open_label(h["link"], conf) if h["link"] else ""
+        h["project"] = names.get(h["project_id"], "")
+        hero = h
+
+    running = []
+    for p in view.get("projects") or []:
+        md = parse_day(p.get("next_milestone_date"))
+        if md and md <= today and p.get("next_milestone"):
+            text = first_sentence(p["next_milestone"])
+            step, done, total, pct = position(text)
+            late = md < today  # a milestone whose date passed stays on screen, in coral
+            if late:
+                step = (step + ", " if step != "today" else "") + "was due " + md.isoformat()[5:]
+            running.append({"kind": "today", "title": text, "title_parts": link_mentions(text, conf), "link": "",
+                            "step": step, "done": done, "total": total, "pct": pct, "late": late,
+                            "project_id": p.get("id", ""), "date": md.isoformat()})
+    for pid, js in (view.get("jobs") or {}).items():
+        for j in js:
+            if j.get("finished"):
+                continue
+            step = f"{j.get('done') or 0} of {j.get('total')}" + (f" {j['unit']}" if j.get("unit") else "") if j.get("total") else ""
+            running.append({"kind": "job", "title": f"{names.get(pid, pid)}: {j.get('label')}",
+                            "title_parts": link_mentions(f"{names.get(pid, pid)}: {j.get('label')}", conf), "link": "",
+                            "step": step + (f", done {j['eta'][5:]}" if j.get("eta") else ""), "pct": j.get("pct"),
+                            "late": bool(j.get("late")), "done": None, "total": None, "project_id": pid,
+                            "date": j.get("eta") or ""})
+    delivered_titles, need_hids = set(), {n["hid"] for n in needs}
+    pid_of = {i.get("hid"): i.get("project_id") or "" for i in list(view["inbox"]["items"]) + list(view["inbox"].get("snoozed") or [])}
+    for d in view.get("delivered") or []:
+        delivered_titles.add(d.get("title"))
+        if d.get("late") or d.get("hid") in need_hids:
+            continue  # a late confirm is under needs you, not also here
+        running.append({"kind": "delivered", "title": d.get("title") or "", "title_parts": d.get("title_parts"),
+                        "link": d.get("link") or "", "step": f"day {d['elapsed']} of {d['total']}",
+                        "pct": round(100 * d["elapsed"] / d["total"]) if d.get("total") else 0, "late": bool(d.get("late")),
+                        "done": None, "total": None, "project_id": pid_of.get(d.get("hid"), ""), "date": d.get("due") or ""})
+    for it in confirms:
+        if it.get("title") in delivered_titles:
+            continue
+        running.append({"kind": "confirm", "title": it.get("title") or "", "title_parts": it.get("title_parts"),
+                        "link": it.get("link") or "", "step": "to confirm", "pct": None, "late": False,
+                        "done": None, "total": None, "project_id": it.get("project_id") or ""})
+    for o in view.get("one_offs") or []:
+        state = str(o.get("state") or "").strip()
+        if o.get("needs_me") or state.lower() == "done" or not o.get("title"):
+            continue
+        ref = o.get("ref") or ""
+        running.append({"kind": "oneoff", "title": o["title"], "title_parts": o.get("title_parts"),
+                        "link": ref if _http(ref) else "", "step": state or "open", "pct": None, "late": False,
+                        "done": None, "total": None, "project_id": ""})
+    waits = []
+    scale = (view.get("waiting") or {}).get("scale_days") or 1
+    for w, r in zip(view.get("waiting_on") or [], (view.get("waiting") or {}).get("rows") or []):
+        if r.get("late") or r.get("due_today"):
+            continue  # a nudge that is due is under needs you
+        days = r.get("days")
+        nudge = f", nudge {w['nudge_due'][5:10]}" if w.get("nudge_due") else ""
+        waits.append(((w.get("nudge_due") is None), days or 0, {
+            "kind": "wait", "person": w.get("person") or "someone", "title": w.get("what") or "",
+            "title_parts": w.get("what_parts"), "link": w.get("link") or "",
+            "step": (f"waiting {days}d" if days is not None else "waiting") + nudge,
+            "pct": round(100 * days / scale) if days is not None else None, "late": False, "done": None, "total": None,
+            "project_id": w.get("project_id") or ""}))
+    waits.sort(key=lambda x: -x[1])  # longest wait first, so the oldest waits stay in view
+    running += [w for _, _, w in waits]
+
+    wins = []
+    for p in view.get("projects") or []:
+        for rp in p.get("recent_progress") or []:
+            text = rp.get("text") or ""
+            if rp.get("date") == view["today"] and text and not NOT_WIN_RE.search(first_sentence(text)):
+                short = first_sentence(text)
+                wins.append({"title": short, "title_parts": link_mentions(short, conf), "link": "", "full": text})
+    for o in view.get("one_offs") or []:
+        if str(o.get("state") or "").lower() == "done" and str(o.get("done_on") or "")[:10] == view["today"] and o.get("title"):
+            ref = o.get("ref") or ""
+            wins.append({"title": o["title"], "title_parts": o.get("title_parts") or link_mentions(o["title"], conf),
+                         "link": ref if _http(ref) else "", "full": o.get("note") or o["title"]})
+    for d in view["inbox"].get("done_today") or []:
+        link = ref_url(d.get("ref"), conf)
+        wins.append({"title": d.get("title") or "", "title_parts": link_mentions(d.get("title") or "", conf), "link": link,
+                     "full": d.get("title") or ""})
+
+    # Every late thing, once: late asks and nudges, late running rows, passed project deadlines. The header's late
+    # count, each project's late badge and the late lists on the pages all read this one list.
+    late = []
+    for n in needs:
+        if n["late"]:
+            late.append({"kind": "need", "hid": n["hid"], "title": n["title"], "title_parts": n["title_parts"],
+                         "link": n["link"], "when": n["when"], "project_id": n["project_id"], "minutes": n["minutes"],
+                         "date": n["due"]})
+    for r in running:
+        if r.get("late"):
+            late.append({"kind": r["kind"], "title": r["title"], "title_parts": r.get("title_parts"), "link": r.get("link") or "",
+                         "when": r.get("step") or "late", "project_id": r.get("project_id") or "", "date": r.get("date") or ""})
+    for p in view.get("projects") or []:
+        dl = parse_day(p.get("deadline"))
+        if dl and dl < today and (p.get("progress_pct") or 0) < 100:
+            late.append({"kind": "deadline", "title": f"Deadline {dl.isoformat()} passed", "title_parts": None,
+                         "link": "", "when": when_label(p.get("deadline"), today)[0], "project_id": p.get("id", ""),
+                         "date": dl.isoformat()})
+
+    tiles = []
+    order = sorted(enumerate(view.get("projects") or []), key=lambda x: (_rank(x[1].get("priority")), x[0]))
+    for _, p in order:
+        pid = p.get("id", "")
+        items = [i for g in p.get("breakdown") or [] for i in g.get("items") or []]
+        nm = first_sentence(p.get("next_milestone") or "")
+        tiles.append({"id": pid, "pct": p.get("progress_pct"), "steps_done": sum(1 for i in items if i.get("state") == "done"),
+                      "steps_total": len(items), "needs": sum(1 for n in needs if n["project_id"] == pid),
+                      "late": sum(1 for x in late if x["project_id"] == pid), "next": nm,
+                      "next_parts": link_mentions(nm, conf) if nm else [], **project_refs(p, conf)})
+
+    merged = next((s["n"] for s in ((view.get("pipeline") or {}).get("stages") or []) if s["key"] == "merged"), 0)
+    return {"hero": hero, "up_next": needs[1:], "up_next_shown": _int(fc.get("up_next"), 3), "cap": _int(fc.get("cap"), 5),
+            "running": running, "wins": wins, "tiles": tiles, "feed_note": feed_note,
+            "needs": len(needs), "late": len(late), "late_items": late, "minutes": sum(n["minutes"] for n in needs),
+            "merged_this_week": merged, **shelf_view(parked, view.get("shelf"), conf, today)}
+
+
+SLACK_ANY = re.compile(r"^https://[^/\s]+\.slack\.com/archives/([A-Z0-9]+)(/p\d+)?")
+CHANNEL_NAME = re.compile(r"#[\w-]+")
+
+
+def project_refs(p, conf):
+    """A project's tickets and Slack links, from its epic and links[] only (nothing is made up).
+
+    tickets: the epic first, then each links[] entry that points at the tracker. slack: channel links first, then
+    thread links, each with a short label ("#name" when the link's label names the channel).
+    """
+    base = _tracker(conf)
+    tickets, seen = [], set()
+
+    def add_ticket(key, url, label):
+        if key and key not in seen:
+            seen.add(key)
+            tickets.append({"key": key, "url": url, "label": label})
+
+    epic = str(p.get("epic") or "").strip()
+    if epic and re.fullmatch(r"[A-Z][A-Z0-9]+-\d+", epic):
+        add_ticket(epic, base + epic if base else "", "epic")
+    channels, threads = [], []
+    for ln in p.get("links") or []:
+        url, label = str(ln.get("url") or ""), str(ln.get("label") or "")
+        if base and url.startswith(base):
+            add_ticket(url[len(base):].split("/")[0].split("?")[0].split("#")[0], url, label)
+            continue
+        m = SLACK_ANY.match(url)
+        if m:
+            name = CHANNEL_NAME.search(label)
+            if m.group(2):
+                threads.append({"label": label or "Slack thread", "url": url, "kind": "thread"})
+            else:
+                channels.append({"label": name.group(0) if name else (label or "Slack channel"), "url": url, "kind": "channel"})
+    return {"tickets": tickets, "slack": channels + threads, "has_channel": bool(channels)}
+
+
+def shelf_view(parked, loose, conf, today):
+    """One Shelf: parked open items (tag idea, later or snoozed) then loose ends from data shelf[] (tag loose end).
+
+    A loose end is {title, added, link, done} (a plain string is a title); done ones are left out. Each loose end
+    gets its age in days and "stale" when older than shelf.stale_days. shelf_meta says how full the loose-ends list
+    is against shelf.cap (None when no cap is set).
+    """
+    sc = conf.get("shelf") or {}
+    stale_days = _int(sc.get("stale_days"), 14)
+    ends = []
+    for s in loose or []:
+        if isinstance(s, str):
+            s = {"title": s}
+        if not isinstance(s, dict) or not s.get("title") or s.get("done"):
+            continue
+        link = s.get("link") or ""
+        added = parse_day(str(s.get("added") or "")[:10])
+        age = (today - added).days if added else None
+        ends.append({"tag": "loose end", "title": s["title"], "title_parts": link_mentions(s["title"], conf),
+                     "note": s.get("note") or "", "link": link if _http(link) else "",
+                     "added": added.isoformat() if added else "", "age": age,
+                     "stale": bool(age is not None and age > stale_days), "project_id": s.get("project_id") or ""})
+    cap = sc.get("cap")
+    cap = _int(cap, None) if cap not in (None, "") else None
+    return {"shelf": list(parked) + ends,
+            "shelf_meta": {"loose": len(ends), "cap": cap, "stale_days": stale_days,
+                           "stale": sum(1 for e in ends if e["stale"])}}
+
+
 # ---------- the whole view ----------
 
 def next_meeting(inbox, now, tz):
@@ -918,7 +1345,8 @@ def build_view(data, cfg, inbox, feeds, prev_state, now, errors=None):
     raw = shown + snoozed + project_items(data, today)
     raw += github_items(feeds.get("github"), overrides, ib.get("no_ci_repos") or [])
     raw += slack_items(feeds.get("slack"), ib.get("slack_url") or "", overrides)
-    merged = dedupe(raw)
+    tracker_keys(raw, conf)
+    merged = drop_done_today(dedupe(raw), inbox, today, tz)
 
     prev_open = prev_state.get("open") or {}
     for it in merged:
@@ -992,4 +1420,7 @@ def build_view(data, cfg, inbox, feeds, prev_state, now, errors=None):
     view["delivered"] = delivered_view(items, later, today, tz)
     view["projects"], view["waiting_on"], view["one_offs"] = linked_data(data, conf)
     view["unlinked"] = unlinked_mentions(view, data, inbox, conf)
+    view["shelf"] = data.get("shelf") or []
+    view["focus"] = focus_view(view, feeds, conf, now, tz)
+    view.pop("shelf", None)
     return view, state

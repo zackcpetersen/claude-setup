@@ -41,11 +41,12 @@
     "schedule": "06:30"
   },
   "brand": {
-    "_note": "logo is for light backgrounds, logo_dark for dark ones; the default rail is dark, so it needs logo_dark",
+    "_note": "logo shows in the light theme, logo_dark in the dark theme; a missing variant hides the logo there",
     "logo": "",
     "logo_dark": "",
     "name": "Example Co"
   },
+  "shelf": {"source": "", "cap": 12, "stale_days": 14},
   "theme": {
     "light": {
       "--canvas": "#F3F5F7",

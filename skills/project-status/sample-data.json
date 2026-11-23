@@ -55,6 +55,10 @@
  ],
  "one_offs": [
   {"title": "Renew the staging certificate", "state": "not started", "needs_me": true, "due": "2026-01-16"},
-  {"title": "Expense report", "state": "done"}
+  {"title": "Expense report", "state": "done", "done_on": "2026-01-12"}
+ ],
+ "shelf": [
+  {"title": "Try a weekly summary email for the billing team", "added": "2026-01-05"},
+  {"title": "Read the incident review guide", "note": "Someday, not this quarter."}
  ]
 }

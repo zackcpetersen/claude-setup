@@ -162,6 +162,7 @@ How to fill it:
 9. Oncall: only lines of PREVIOUS DONE TODAY whose text after the checkbox starts with `oncall:` (drop the prefix). Nothing else goes here: not alert channels, monitors, error trackers or dependency alerts. No such lines, no Oncall heading.
 10. Say this: write it last, from the finished By project block. One sentence per project, same order, naming the people from the Done and Waiting on lines by first name, and saying what went live when a project has a Live line. Plain English a non-engineer follows.
 11. Plain English, short sentences, no em-dashes or en-dashes, no tables, no links, and no PR numbers in any section. Keep acronyms as the inputs write them; never guess what one stands for. Avoid the characters < > [ ] | in text.
+12. Writing style for every line: lead with the outcome or the next action; short plain sentences, one fact per line; staged work says its position ("chunk 1 of 4"); wins are concrete (what shipped, merged or was confirmed), never "made progress on X"; plain hyphens only.
 
 PROJECTS (name, priority, ticket keys; may be empty):
 {{projects}}
@@ -202,6 +203,7 @@ Pages: row {{row_url}}, scratchpad {{scratchpad_url}}, board page {{board_page}}
    rollover: create or reuse today's row and scratchpad and carry lines as ~/.claude/skills/board/rollover.md says; close the previous row.
    edit: apply exactly the edits listed below and nothing else.
 3. Every write passes allow_async: false. Never trash a page, a data source or a property.
+4. Write every new line in the "Writing style" of writer.md: lead with the outcome or next action; short plain sentences, one fact per line; at most 5 lines per section with the rest under an "N more" toggle, never dropped; a Needs-you or TODO line names the one action and a rough time ("approve, 2 min"); staged work says its position ("chunk 1 of 4"); concrete wins; plain hyphens only. The Standup and Today's goal are not rewritten after rollover; the style applies when they are first written.
 Return under 60 lines: Your view as written (sync), or the carried Needs-you, unmet outcomes with reasons, deadlines and meetings (rollover), or one line per edit (edit); then for sync and rollover the Session state block from writer.md; then "Proposed goal swaps" and "Could not place", each possibly empty.
 
 INPUTS:

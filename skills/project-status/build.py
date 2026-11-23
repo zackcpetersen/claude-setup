@@ -15,13 +15,18 @@ projects.json:
                progress_pct (0-100), progress_basis, next_milestone, deadline,
                needs_me[] {ask, ticket, due, link, effort ("5m"), who_waits}, summary,
                breakdown[] {group, items[] {text, state (done | in progress | waiting | blocked | not started), owner, ref, date}},
-               decisions[] {date, decision}, recent_progress[] {date, text}, links[] {label, url},
-               next_milestone_date (YYYY-MM-DD, puts the milestone on the timeline),
+               decisions[] {date, decision}, recent_progress[] {date, text},
+               links[] {label, url}: tracker links count as the project's tickets (with epic) and Slack channel or
+               thread links as its Slack links; label a channel "#name" so the page shows the name,
+               next_milestone_date (YYYY-MM-DD, puts the milestone under Running on that day; lead with its position, "chunk 1 of 4"),
                jobs[] {label, done, total, unit, per_day, eta, updated}: long jobs such as a backfill.
                Written by job.py, not by hand; the page works out percent, finish date and lateness.
   waiting_on[] person, what, project_id, since, nudge_due, where, link
-  one_offs[]   title (the only required field), state, needs_me (true/false), due, note, ref, progress_pct
-               Small standalone items that belong to no project. Add one with add_oneoff.py.
+  one_offs[]   title (the only required field), state, needs_me (true/false), due, note, ref, progress_pct,
+               done_on (YYYY-MM-DD; a done one-off shows under Wins today on that day)
+               Small standalone items that belong to no project. Add or finish one with add_oneoff.py.
+  shelf[]      {title, added (YYYY-MM-DD), link, done} or a plain string: the loose-ends list, copied by the gather
+               step from config shelf.source. Shown with the parked items in the collapsed Shelf and on #shelf.
 Every field except a project's id and name is optional; the page skips what is missing.
 `link` on a needs_me or waiting_on row (a PR or Slack thread URL) lets the inbox merge it with the feeds.
 
@@ -34,14 +39,17 @@ config.json (optional, keeps anything specific to one person or company out of t
   inbox        cap, home_count, stale_days, slack_url, effort_defaults and the feed settings (see derive.DEFAULTS)
   feeds        every_minutes, hours, days: the status-feeds schedule, used to tell when a feed is stale
   links        {"patterns": [{"match": "<regex with one group>", "url": "<base>{1}"}]}: link bases for other keys
-  stats        settings for ~/bin/eng-stats (it writes feeds/stats.json, which the #stats page reads)
+  stats        settings for ~/bin/eng-stats (it writes feeds/stats.json, shown on the #github page)
   theme        {"light": {"--token": "value"}} overriding the page's color and font tokens (page.css :root).
                The page keeps one look in light and dark; add "dark" only if you want a separate dark palette.
   brand        {"logo": "logo.svg", "logo_dark": "logo-white.svg", "name": "Example Co"}: an optional logo, paths
-               relative to the config file's folder. "logo" is drawn on light backgrounds, "logo_dark" on dark
-               ones (the default rail is dark, so set "logo_dark" to replace the rail's letter tile). A spot whose
-               variant is missing keeps the letter tile. SVG, PNG, JPEG or WebP, at most 60 KB each.
-               The page shows it at the top of the rail, and above the header on phones.
+               relative to the config file's folder. "logo" is drawn in the light theme, "logo_dark" in the dark
+               one; a missing variant hides the logo in that theme. SVG, PNG, JPEG or WebP, at most 60 KB each.
+               The page shows it at the left of the header.
+  shelf        {"source": "<loose-ends page>", "cap": 12, "stale_days": 14}: where the gather step reads loose ends,
+               the list's size limit ("N of 12") and the age past which a loose end is flagged.
+  focus        {"up_next": 3, "cap": 5, "parked_patterns": ["^Idea\\b"], "parked_after_days": 14, "feed_note_hours": 24}:
+               the one-screen layout (see derive.DEFAULTS).
 """
 import argparse
 import base64
@@ -117,8 +125,8 @@ def logo_uri(value, base):
 def brand_view(brand, base):
     """The page's brand block: logo data URIs and alt text, or None when no logo loads.
 
-    A missing variant stays missing (no fallback to the other one): a light-background logo on a dark rail
-    is near invisible, so the page keeps the letter tile there instead.
+    A missing variant stays missing (no fallback to the other one): a light-background logo on a dark background
+    is near invisible, so the page hides the logo in that theme instead.
     """
     if not isinstance(brand, dict):
         return None

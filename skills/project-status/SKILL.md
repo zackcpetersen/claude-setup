@@ -5,21 +5,34 @@ description: Use when the user asks for a visual status of their projects, a pro
 
 # Project status
 
-A visual status page, published as a private Artifact. It reads as a dashboard: a left nav rail (a bottom tab bar on phones), a light grid of tiles, bars and sparklines instead of paragraphs. Detail lives on each page.
+A visual status page, published as a private Artifact. The home view is one laptop screen (about 1440x800) with no scrolling, built for a quick glance: one thing to do first, a short list after it, and everything else folded. Shapes before text: rings, bars, step segments and badges. Every count on the page opens the rows it counts in one click.
 
-Pages. The rail holds Home, Inbox, Projects, PRs, Stats and More; More opens a sheet with the rest:
+Home, in three columns:
 
-- **Home** (`#home`): a header (date, Me/Team and 30d/90d toggles, Focus), the today strip (need you, due today, late, done today, next meeting), four KPI tiles with sparklines and a throughput tile (when stats exist), project rows with progress bars, a "Next 3 weeks" timeline, and side panels: Needs you (with an effort bar), the PR pipeline and Waiting on. Focus (button or the `f` key) shows only the header, the strip and Needs you.
-- **Inbox** (`#inbox`, `#inbox/<hid>` highlights one row): every open item in bands (late or today, waiting on you, quick wins, your PR fixes, everything else), the first `inbox.cap` shown and the rest folded, then snoozed and done today. Rows new since you last looked get a small dot.
-- **Projects** (`#projects`): every project row, then the one-offs.
-- **PRs** (`#prs`): the PR pipeline (draft, in review, approved, merged this week) and the reviews asked of you. Needs the GitHub feed.
-- **Stats** (`#stats`, also `#stats/<me|team>/<30|90>`): KPI tiles, throughput, turnaround (median with a p90 tick) and the split by repo group. Needs `~/bin/eng-stats`.
-- **One page per project** (`#p-<id>`): the hero, long jobs with progress bars and finish dates, the project's dates, what is needed from the user, where it stands, the full breakdown, people it waits on (aging bars), recent decisions and progress, links.
-- **Waiting on others** (`#waiting`): everything owed by someone else, grouped by person, each with an aging bar and a tick at the nudge date.
-- **Delivered, not confirmed** (`#delivered`): a countdown bar per delivery until its confirm-by date.
-- **Other items** (`#other`): small standalone items that belong to no project.
+- **Header**: the date, build time and count chips, each a link: "need you" with total minutes (`#need`), "late" (`#late`), "running" (`#running`), "wins today" (`#wins`), and "GitHub stats" (`#github`).
+- **Do this first** (the hero): the single most important open item, with its one next action, a rough time in minutes, an Open button to its link and its project. When nothing needs the user it says "Nothing needs you" and points at what is running.
+- **Up next**: the next 3 items that need the user, one row each with the action, the date and minutes. The rest fold behind "Show N more". Rows from a GitHub or Slack feed older than 24 hours carry an "old feed" badge, explained once in a note at the end of this card.
+- **Shelf** (the user also says "parked" or "loose ends"): one collapsed section with one total count, capped at 5 when open. It holds the open items the page parks (tag "idea" or "later": a title that starts with "Idea" or "After", says "Parked", or is due more than 14 days out, config `focus`; tag "snoozed" with its "back MM-DD" date) and the loose ends from `shelf[]` in `projects.json` (tag "loose end", with its age in days and a quiet "over 14d" flag past `shelf.stale_days`). The summary shows "N of 12 loose ends" when `shelf.cap` is set. When empty it still shows, with "Shelf is empty".
+- **Projects in progress**: one row per project, sorted by priority (P1 first): a ring (percent), name, priority and status, a step bar with "X of Y steps", the next milestone, its ticket and Slack channel links, and "late" and "for you" badges. The name opens the project's own page.
+- **Running without you**: things in flight that need nothing from the user: today's dated milestones (with their position, "chunk 2 of 4" or "3 of 10 files", when the text says so, else "today"), long jobs, deliveries counting down to their confirm-by date ("day X of Y"), and the people we wait on (aging bars). 5 shown, the rest folded.
+- **Wins today**: today's progress lines, one-offs finished today and the items cleared today, 5 shown, the rest folded. "N PRs merged this week" opens the GitHub page.
+- **Footer**: minutes are rough, source problems, unlinked mentions, the config `source_note`.
 
-Old links keep working: `#overview` opens Home, `#people` opens Waiting on others, `#oneoffs` opens Other items. Color rule: the accent is for progress and done; coral only for something late; counts are neutral; no color stands for a person. Every ticket key, PR, thread or page the page names is a link to its source (see "Links").
+Other pages (hash routes; each has a "Today" link back, and Esc goes home):
+
+| Route | What it shows |
+|---|---|
+| `#need` | Every item that needs the user, in order, with its project |
+| `#late` | Every late item (late asks and nudges, late milestones and jobs, passed project deadlines) with its date, link and project |
+| `#running`, `#wins`, `#shelf` (also `#parked`) | The full list behind each home card |
+| `#p-<id>` | One project: header (ring, priority, status, deadline, steps, all tickets and Slack links, summary), then Late (first, in coral, each with its date and link), Needs you, Next (with how the percent was worked out), Running, Breakdown, Recent progress, Decisions and Links |
+| `#github` (also `#github-<me or team>-<30 or 90>`) | PR pipeline by stage (with CI failed and conflict flags), reviews asked of the user, and the stats: PRs merged, reviews given, time to first review and to merge (with sparklines), merged per week (chart and table), review load, turnaround (median and p90), PRs by repo group and the data range. Me or team, 30 or 90 days |
+
+Older links (`#inbox`, `#stats`, `#prs`, `#waiting` and so on) open the nearest page.
+
+Counts and lists: every list shows at most 5 rows by default (Up next shows 3). "Show N more" grows the same list in place (same rows, no inner scroll box) and turns into "Show less" at the end of the list; the page may scroll while a list is open. Nothing is dropped. The header's late count, each project's late badge and the late lists all come from one list (`focus.late_items`), so a count always matches rows one click away. Long titles clamp to two lines on home with the full text on hover, and wrap in full on the list pages and on phones.
+
+Color rule: one accent means "needs you" (the hero, its button and the row dots); coral only for something late; progress and everything else stay calm; no color stands for a person. Every ticket key, PR, thread or page the page names is a link to its source (see "Links").
 
 Nothing in this skill names a company, person or project. Those come from the data and config files.
 
@@ -28,13 +41,13 @@ Nothing in this skill names a company, person or project. Those come from the da
 | File | What it is |
 |---|---|
 | `template.html` | The page shell. `build.py` inlines `page.css`, `page.js`, the theme and the data into it, so the published page is one file |
-| `page.css`, `page.js` | All styles and all page code. Neutral colors, no names or links baked in |
+| `page.css`, `page.js` | All styles and all page code: a few reusable parts (`row`, `list`, `section`, `subpage`) and a hash router (`ROUTES`). Neutral colors, no names or links baked in |
 | `build.py` | Turns a data file (and optional config and home folder) into the page. The data format is in its docstring |
-| `derive.py` | Every rule the page shows: inbox items, dedupe, bands, freshness, plus job finish dates, the timeline, the PR pipeline, waiting and delivery bars, and mention links |
+| `derive.py` | Every rule the page shows: inbox items, dedupe, bands, freshness, done today, job finish dates, waiting and delivery bars, mention links, and `focus_view` (hero, up next, running, wins, the shelf, the late list, project tiles with their tickets and Slack links, feed note) |
 | `inbox.py` | The only way the session writes `inbox.json` |
 | `add_oneoff.py` | Adds or finishes a one-off in the data file |
 | `job.py` | Records progress on a long job (a backfill, a big export) in the data file |
-| `config.example.json` | Starter config: title, tracker and GitHub link bases, footer note, time zone, inbox and feed settings, logo, color overrides |
+| `config.example.json` | Starter config: title, tracker and GitHub link bases, footer note, time zone, inbox and feed settings, shelf source and cap, logo, color overrides |
 | `sample-data.json`, `sample-home/` | Made-up data, inbox and feeds to try the page with |
 | `tests/` | `unittest` tests: `python3 -m unittest discover -s skills/project-status/tests` |
 | `~/bin/status-feeds` | From `bin/` in this repo. Writes the GitHub and Slack feed files on a schedule, no model in the loop |
@@ -48,12 +61,28 @@ Per-machine files live outside the repo, in `~/.claude/project-status/`:
 - `feeds/github.json`, `feeds/slack.json`: written only by `status-feeds`. `feeds/stats.json` and `cache/`: written only by `eng-stats`.
 - `state/build.json`: written only by `build.py` (first-seen times and what cleared today).
 
+## Writing style
+
+Every line the page shows is written by an agent into `projects.json` or `inbox.json`. Write it so it reads at a glance:
+
+- Lead with the outcome or the next action: "Nudge Ana: the export file", "DE-12 shipped to prod".
+- Short, plain sentences. One fact per line. No jargon where a plain word works.
+- A line that needs the user names one action and a rough time (`effort`, `effort_min`): "Approve the agent" with "2m".
+- Staged work says its position: "chunk 1 of 4", "step 2 of 3", "3 of 10 files". The page draws segments or a bar from it; without one the Running row only says "today".
+- Wins are concrete: what shipped, merged or was confirmed, with its key. Not "made progress on X".
+- Work that belongs to no project (a review for another team, an admin task) is a one-off, never a line under some project. A finished one-off with `done_on` set to today shows under Wins today (`add_oneoff.py --done` sets it).
+- Status lines that are not wins ("no new chunk yet", "still waiting") belong in `next_milestone` or `waiting_on`, not `recent_progress`.
+- Lists hold at most 5 shown rows; the page folds the rest. Never drop an item to make a list fit.
+- Plain hyphens only, never em-dashes or en-dashes.
+
+Pass these rules, word for word, to every gather and publisher agent.
+
 ## Setup (once per machine)
 
 1. `mkdir -p ~/.claude/project-status`
 2. `cp ~/.claude/skills/project-status/config.example.json ~/.claude/project-status/config.json` and fill in `title`, `tracker_url` (the prefix a ticket key is added to), `github_org` and `source_note`. Delete a line you do not need.
-3. Colors: `theme.light` and `theme.dark` override the page's tokens (the full list is the `:root` block at the top of `page.css`). The groups: surfaces (`--canvas`, `--card`, `--line`, `--track`), ink (`--text`, `--strong`, `--muted`), the rail (`--rail`, `--rail-ink`, `--rail-on`), progress (`--accent`, `--accent-ink`), charts (`--chart-1`, `--chart-2`, `--chart-grid`, `--prog`), late (`--alert`, `--alert-ink`, `--alert-bg`), `--link` and `--font`. The repo ships a neutral palette in light and dark. A brand palette (from the user's design system) goes only in this local config, in both `theme.light` and `theme.dark`, never in the repo. Keep text pairs at 4.5:1 contrast.
-4. Logo (optional): put the logo files next to `config.json` (never in the repo) and set `brand.logo` (the version for light backgrounds), `brand.logo_dark` (for dark backgrounds) and `brand.name` (alt text). The default rail is dark, so the rail needs `logo_dark`; a spot whose variant is missing keeps the letter tile. Paths are relative to the config folder. SVG, PNG, JPEG or WebP, at most 60 KB each. The build inlines them and does a light tidy of SVG (not a full clean-up); the page only ever shows the logo as an image, which is what keeps it safe. The logo replaces the letter tile at the top of the rail, and sits above the header on phones; each spot picks the variant that suits the color behind it. Leave `brand` out to keep the letter tile.
+3. Colors: `theme.light` and `theme.dark` override the page's tokens (the full list is the `:root` block at the top of `page.css`). The groups: surfaces (`--canvas`, `--card`, `--line`, `--track`), ink (`--text`, `--strong`, `--muted`), needs you (`--rail` is the hero card, `--rail-ink` its small text, `--rail-on` its button and eyebrow, `--on-rail` its headline, `--accent` the row dots), done (`--accent-ink`), charts (`--chart-1`, `--chart-2`, `--chart-grid`, `--prog`), late (`--alert`, `--alert-ink`, `--alert-bg`), `--link` and `--font`. The repo ships a neutral palette in light and dark. A brand palette (from the user's design system) goes only in this local config, in both `theme.light` and `theme.dark`, never in the repo. Keep text pairs at 4.5:1 contrast.
+4. Logo (optional): put the logo files next to `config.json` (never in the repo) and set `brand.logo` (the version for light backgrounds), `brand.logo_dark` (for dark backgrounds) and `brand.name` (alt text). Paths are relative to the config folder. SVG, PNG, JPEG or WebP, at most 60 KB each. The build inlines them and does a light tidy of SVG (not a full clean-up); the page only ever shows the logo as an image, which is what keeps it safe. The logo sits at the left of the header and switches variant with the theme. Leave `brand` out for a text-only header.
 5. Try it with the sample: `python3 ~/.claude/skills/project-status/build.py ~/.claude/skills/project-status/sample-data.json <scratchpad>/project-status.html --config ~/.claude/project-status/config.json --home ~/.claude/skills/project-status/sample-home --no-state --now 2026-01-12T18:00:00Z`, then publish that file with the Artifact tool to see the look.
 6. Feeds (optional): set `tz` in `config.json` (an IANA name), then `~/bin/status-feeds doctor`, then `~/bin/status-feeds run --force`, then install the schedule with the commands `~/bin/status-feeds schedule --print launchd` prints (Linux: `--print cron`, add it with `crontab -e`). Install it only with the user's yes. Set `inbox.github_orgs` when your PRs live in more than one org, and `inbox.slack_url` (for example `https://<workspace>.slack.com/archives/`) so Slack items link to their thread. A PR only shows as "Merge" once its checks have passed; list repos that have no checks at all in `inbox.no_ci_repos` (`owner/repo`) so their approved PRs can show as ready too.
 7. Stats (optional): set `stats.org` (or rely on `github_org`) and `stats.team_slug` (the GitHub team that is "my team"; `stats.team_members` is the fallback list), then `~/bin/eng-stats doctor`, then `~/bin/eng-stats run` (the first fill takes about 25 minutes and about 150 of the 5,000 hourly GraphQL points), then install the daily schedule `~/bin/eng-stats schedule --print launchd` prints (Linux: `--print cron`). Install it only with the user's yes. Optional keys: `repos_include`, `repos_skip`, `repo_groups`, `bots`, `business_hours_clock`.
@@ -67,11 +96,13 @@ If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the 
    - `needs_me` holds only what the user must do or decide by hand. What waits on someone else goes in `waiting_on`. What an agent can do alone goes in neither.
    - `progress_pct` comes from real milestones or tickets, and `progress_basis` says how in one sentence. Never invent precision.
    - Keep `one_offs` and every project's `jobs` already in the file. They are the user's own list and `job.py`'s.
-   - Set `next_milestone_date` (`YYYY-MM-DD`) when the next milestone has a date, so it shows on the timeline.
+   - Set `next_milestone_date` (`YYYY-MM-DD`) when the next milestone has a date, so it shows under Running without you on that day. Start its first sentence with the position when the work is staged ("chunk 1 of 4").
+   - Each project lists its tickets and Slack channel in `links[]` (`{"label": "#channel-name", "url": "<channel link>"}`), plus its `epic`. The page shows them on the project's row and page; a project without them shows "none in the data".
+   - Fill `shelf` from the loose-ends source named by `shelf.source` in `config.json` (for the `tidy` skill, the Projects row named by the `Loose ends` line in `~/.claude/config/tidy.md`): one `{title, added, link, done}` per checklist line (`- [ ] item (added YYYY-MM-DD) link`; a ticked line is `done: true`). Copy the lines as they are; never add or drop one. Without `shelf.source`, keep `shelf` as it is.
    - Every item carries a link to its source when it names one: `link` on asks and waits, `ref` or `links[]` for tickets, PRs, Notion pages, Slack threads, runs and docs.
    - Keep `link`, `effort` and `who_waits` fields when present, and set `needs_me[].link` and `waiting_on[].link` whenever the source line has a URL (a Slack thread, a PR), so items merge with the feeds instead of showing twice.
-   - Plain English, short sentences. Leave out finished projects.
-   - Skip the Projects row named by the `Loose ends` line in `~/.claude/config/tidy.md` (older installs: `### Tidy` in `~/.claude/CLAUDE.md`) (the `tidy` skill's catch-all list).
+   - Follow "Writing style" above for every line (outcome or action first, one fact per line, "chunk X of Y" for staged work, concrete wins, plain hyphens). Leave out finished projects.
+   - Do not show the loose-ends row as a project: skip the Projects row named by the `Loose ends` line in `~/.claude/config/tidy.md` (older installs: `### Tidy` in `~/.claude/CLAUDE.md`) (the `tidy` skill's catch-all list).
    - Return a short list of anything unsure or stale. Relay it.
 2. **Check** the data before building: drop asks the user already answered in this session, and links that are not `https://`.
 3. **Build**: `python3 ~/.claude/skills/project-status/build.py ~/.claude/project-status/projects.json <scratchpad>/project-status.html --config ~/.claude/project-status/config.json --home ~/.claude/project-status`. Relay any `warning: unlinked mention` lines it prints and fix them (see "Links").
@@ -82,7 +113,7 @@ If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the 
 
 The page should never lag the work. When one fact changes (a PR merged, a run finished, the user decided something, a reply arrived, a wait cleared), do not gather again:
 
-1. Hand the change, in one line (what changed, which project or one-off), to a one-shot sonnet publisher agent. It edits `~/.claude/project-status/projects.json` in place by the rules below (the item's `state`, the project's `needs_me`, the matching `waiting_on` row, one new `recent_progress` line, `progress_pct` when a milestone or ticket closed (keep `progress_basis` true), `as_of` set to now UTC), builds and publishes as in Refresh step 4, and returns the link and one line on what changed.
+1. Hand the change, in one line (what changed, which project or one-off), to a one-shot sonnet publisher agent. It edits `~/.claude/project-status/projects.json` in place, in the "Writing style" wording, by the rules below (the item's `state`, the project's `needs_me`, the matching `waiting_on` row, one new `recent_progress` line, `progress_pct` when a milestone or ticket closed (keep `progress_basis` true), `as_of` set to now UTC; a staged milestone or job keeps its position, "chunk 2 of 4"), builds and publishes as in Refresh step 4, and returns the link and one line on what changed.
 2. The main session never opens the data file.
 3. Say what changed in one line. Do not ask first.
 
@@ -109,12 +140,13 @@ The session writes `inbox.json` only through `inbox.py` (`python3 ~/.claude/skil
 - `meeting --title T --at ISO`: at rollover, only when the session knows the next meeting.
 - `sync --origin board --file F`: the `board` skill's mirror on every sync.
 
-Items with the same link merge into one (the session's words, the feed's live state). Ticket keys are never used to merge.
+Items with the same PR, Slack thread or other link merge into one (the session's words, the feed's live state). Ticket keys never merge, and neither does a tracker ticket link on its own: two asks that share a ticket link merge only when their titles match too, so each keeps its own words and date.
 
 ## Long jobs
 
-A job that runs for days (a backfill, a big export) shows as a bar with a finish date on its project page, on the project row and on the timeline. The page works out the percent, the finish date (from `per_day`, counted from the last report, so a job that stops reporting goes late) and whether it is stale.
+A job that runs for days (a backfill, a big export) shows under Running without you as "done of total" with a bar and its finish date. The page works out the percent, the finish date (from `per_day`, counted from the last report, so a job that stops reporting goes late) and whether it is stale.
 
+- Give `--total` whenever the size is known, so the row reads "3 of 10 files" and not just a label. When a milestone line names the same work, it carries the same position ("chunk 2 of 4").
 - After each progress report: `python3 ~/.claude/skills/project-status/job.py ~/.claude/project-status/projects.json set <project_id> "<label>" --done N --total N [--unit files] [--per-day N] [--eta YYYY-MM-DD]`. Only the fields given change.
 - When it finishes: `... job.py ~/.claude/project-status/projects.json done <project_id> "<label>"`. The job goes and a "Finished <label>" line lands in recent progress.
 - Then hand the publish to the one-shot publisher (Refresh step 4).
@@ -144,8 +176,9 @@ A one-off that grows (several steps, other people, a deadline) becomes a project
 ## Changing the page
 
 - Edit `page.css` and `page.js` for layout, `derive.py` for every number, date and rule the page shows, `build.py` for the data contract. `page.js` only lays out what `derive.py` worked out. Keep all of them generic: no names, links or brand colors.
-- The design brief, from the user: visual first (shapes before text), clean and minimal, home is glance-only and reads as a dashboard, navigation in the rail. Coral only for something late. New classes get a prefix (`.tl-`, `.pl-`, `.kp-`, `.th-`, `.ag-`, `.jb-`, `.sp-`, `.rl-`) so they never clash.
-- After a change, run `node --check skills/project-status/page.js` and the tests, then build with `sample-data.json` and `sample-home/` before publishing.
+- The design brief, from the user: ADHD-friendly. Visual first (shapes before text), one screen with no scrolling at 1440x800 by default, one hero that says what to do first, every list capped at 5 with the rest folded in place, every count a one-click path to exactly the rows it counts, each project on its own page. Low noise, one row anatomy (mark, text leading with the fact that matters, meta), no dead ellipsis. One accent for "needs you", coral only for something late, everything else calm. Works in light and dark and at phone width.
+- A new page: add a renderer to `ROUTES` in `page.js` built from `subpage`, `section`, `list` and `row`, and a link to it from the count or card that leads there.
+- After a change, run `node --check skills/project-status/page.js` and the tests, then build with `sample-data.json` and `sample-home/` and check it at 1440x800 (no scroll, hero on top) and 400px wide (no sideways scroll) before publishing.
 
 ## Common mistakes
 
@@ -153,11 +186,13 @@ A one-off that grows (several steps, other people, a deadline) becomes a project
 |---|---|
 | Putting company colors, names or links in `page.css`, `page.js` or `template.html` | They go in `~/.claude/project-status/config.json` |
 | Publishing a new Artifact on every refresh | Pass `artifact_url` as `url` so the link stays the same |
-| Details creeping onto home | Home is numbers, the top inbox rows and cards only. Detail goes on the inbox and project pages |
+| Details creeping onto the screen | The default view fits one screen. Detail goes on a project's page, a list page or a "Show N more" fold |
+| A count with no rows behind it | Every count links to the rows it counts; late counts come only from `focus.late_items` |
 | Hand-editing `inbox.json` | Use `inbox.py`, the file's only writer |
 | Adding a GitHub review or PR state by hand | The `status-feeds` GitHub feed does it |
 | Building without `--home` | The page then shows no inbox.json, GitHub or Slack items |
-| Coral for counts or needs-you badges | Coral only for something late; counts stay neutral |
+| Coral for counts or needs-you badges | Coral only for something late; needs-you uses the one accent; counts stay neutral |
+| Long, status-style lines in `recent_progress` or `needs_me` | Follow "Writing style": action or outcome first, one fact, a rough time |
 | Listing things the user is waiting on under `needs_me` | Those are `waiting_on` rows |
 | Overwriting `one_offs` during a gather | The gather agent keeps them as they are |
 | Gathering, editing the data file or publishing in the main session | Agents do all three; the main session passes one line and relays the link |

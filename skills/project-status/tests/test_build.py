@@ -161,12 +161,21 @@ class Build(unittest.TestCase):
         self.assertIn("ENG-142", [u["text"] for u in page_data(html)["unlinked"]])
         self.assertIn("warning: unlinked mention ENG-142", r.stderr)
 
-    def test_page_has_rail_and_sheet_not_drawer(self):
+    def test_page_is_one_focus_screen(self):
         _, html = self.fixture_build()
-        self.assertIn('id="rail"', html)
-        self.assertIn('id="sheet"', html)
-        self.assertNotIn('id="drawer"', html)
+        self.assertNotIn('id="rail"', html)
+        self.assertIn('id="page"', html)
         self.assertIn('<meta charset="utf-8">', html)
+        f = page_data(html)["focus"]
+        for k in ("hero", "up_next", "running", "wins", "shelf", "shelf_meta", "tiles", "feed_note", "cap", "up_next_shown",
+                  "late_items"):
+            self.assertIn(k, f)
+        self.assertIsNotNone(f["hero"])
+        self.assertTrue(f["hero"]["action"])
+        self.assertEqual(f["late"], len(f["late_items"]))
+        # The GitHub page reads the pipeline and stats the build already carries.
+        for k in ("pipeline", "stats", "feeds"):
+            self.assertIn(k, page_data(html))
 
     def test_no_hardcoded_workspace_hosts(self):
         files = [p for p in SKILL.rglob("*") if p.is_file() and p.suffix in (".py", ".js", ".css", ".html", ".json", ".md")

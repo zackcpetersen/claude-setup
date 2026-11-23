@@ -8,6 +8,20 @@ Merge into the template. Keep `## Your TODOs` at the top of the row: only steps 
 
 Every draft the session created (Slack, email, tracker comment held for approval; passed in the inputs) gets a row in the scratchpad's `## Drafts today` table the same turn: id, channel or mailbox, thread ts or message id, one-line gist, status (`pending`, then `sent`, `scheduled` or `discarded` once known); `wrap` verifies the table at the end of the day. The Slack poll's thread-replies trigger covers replies to sent drafts. The scratchpad rewrite rebuilds from the PREVIOUS scratchpad plus the new findings: Work registry rows persist until their stage is done, the Peer sessions table, the open outreach thread list and today's `## Reactions` lines carry forward. Set `Last sync`, then fetch the row's `Last edited` and store it in the scratchpad as `Row last edited after sync: <ts>`.
 
+## Writing style
+
+Every line written to the row and the scratchpad follows these rules, the same as the `project-status` skill's "Writing style" (the status page inbox mirrors these lines, so its titles stay in style too):
+
+- Lead each line with the outcome or the next action: "Nudge Ana: the export file", "DE-12 shipped to prod".
+- Short, plain sentences. One fact per line.
+- Each section shows at most 5 lines; put the rest under a toggle titled "N more" (a Notion toggle). Never drop a line to make a section fit.
+- A Needs-you or Your TODOs line names the one action and a rough time: "Approve the agent, 2 min".
+- Staged work says its position: "chunk 1 of 4", "step 2 of 3".
+- Wins are concrete: what shipped, merged or was confirmed, with its key. Not "made progress on X".
+- Plain hyphens only, never em-dashes or en-dashes.
+
+The style applies when a line is first written. The Standup and Today's goal are still never rewritten after rollover (see Merge rules and Notion write rules).
+
 ## Delivered, not confirmed
 
 Shipping is not the finish line: a delivery is done when the person who asked has what they need. The `## Delivered, not confirmed` section of Your view (after Your TODOs) lists each delivery still waiting on that confirmation, one line each: what, to whom, delivered date, confirm-by date (delivered + 5 business days), and how the confirmation will show up.
