@@ -724,6 +724,61 @@ class Focus(unittest.TestCase):
         f = view(data=data)["focus"]
         self.assertEqual([w["title"] for w in f["wins"]], ["ENG-1 shipped to prod."])
 
+    def test_hero_keeps_plain_detail_text(self):
+        inbox = {"items": [{"id": "a", "kind": "todo", "title": "Nudge Ana: the export file"}]}
+        hero = view(inbox=inbox)["focus"]["hero"]
+        self.assertEqual(hero["detail"], "the export file")
+
+    def test_late_or_due_today_never_parks(self):
+        inbox = {"items": [
+            {"id": "a", "kind": "todo", "title": "Idea: late one", "due": "2026-01-12"},
+            {"id": "b", "kind": "todo", "title": "Idea: due now", "due": "2026-01-14"},
+            {"id": "c", "kind": "todo", "title": "Idea: someday"},
+        ]}
+        cfg = {"tz": "America/Chicago", "focus": {"parked_patterns": ["^Idea\\b"]}}
+        f = view(inbox=inbox, cfg=cfg)["focus"]
+        self.assertEqual([r["title"] for r in f["parked"]], ["Idea: someday"])
+        self.assertEqual((f["needs"], f["late"]), (2, 1))
+
+    def test_snoozed_parks_with_wake_date(self):
+        inbox = {"items": [{"id": "s", "kind": "todo", "title": "Read the RFC", "snooze_until": "2026-01-20"}]}
+        f = view(inbox=inbox)["focus"]
+        self.assertEqual([(r["title"], r["when"], r["snoozed"]) for r in f["parked"]], [("Read the RFC", "back 01-20", True)])
+
+    def test_open_oneoff_not_for_you_runs(self):
+        data = {"projects": [], "one_offs": [{"title": "Vendor sends the file", "state": "in progress"},
+                                             {"title": "Old thing", "state": "done"}]}
+        f = view(data=data)["focus"]
+        self.assertEqual([(r["kind"], r["title"], r["step"]) for r in f["running"]],
+                         [("oneoff", "Vendor sends the file", "in progress")])
+
+    def test_done_today_needs_matching_ref_when_both_have_one(self):
+        data = {"projects": [], "one_offs": [
+            {"title": "Reply to Ana", "needs_me": True, "ref": "https://example.com/thread/2"}]}
+        other = {"items": [{"id": "t", "kind": "todo", "title": "Reply to Ana", "link": "https://example.com/thread/1",
+                            "done_at": "2026-01-14T15:00:00Z"}]}
+        self.assertEqual(len(view(data=data, inbox=other)["inbox"]["items"]), 1)
+        same = {"items": [{"id": "t", "kind": "todo", "title": "Reply to Ana", "link": "https://example.com/thread/2",
+                           "done_at": "2026-01-14T15:00:00Z"}]}
+        self.assertEqual(len(view(data=data, inbox=same)["inbox"]["items"]), 0)
+
+    def test_late_confirm_is_not_also_running(self):
+        inbox = {"items": [{"id": "c", "kind": "confirm", "title": "Confirm Ana got it", "since": "2026-01-05", "due": "2026-01-10"}]}
+        f = view(inbox=inbox)["focus"]
+        self.assertEqual(f["hero"]["title"], "Confirm Ana got it")
+        self.assertNotIn("delivered", [r["kind"] for r in f["running"]])
+
+    def test_job_without_done_reads_zero(self):
+        data = {"projects": [{"id": "p", "name": "P", "jobs": [{"label": "Backfill", "total": 100, "unit": "rows"}]}]}
+        steps = [r["step"] for r in view(data=data)["focus"]["running"] if r["kind"] == "job"]
+        self.assertTrue(steps and steps[0].startswith("0 of 100 rows"), steps)
+
+    def test_explicit_zero_settings_and_effort_stay_zero(self):
+        inbox = {"items": [{"id": "a", "kind": "todo", "title": "Tiny", "effort_min": 0}]}
+        f = view(inbox=inbox, cfg={"tz": "America/Chicago", "focus": {"cap": 0, "up_next": 0}})["focus"]
+        self.assertEqual((f["cap"], f["up_next_shown"]), (0, 0))
+        self.assertEqual(f["hero"]["minutes"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

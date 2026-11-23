@@ -517,13 +517,32 @@ def drop_done_today(items, inbox, today, tz):
     """Open items whose title matches an inbox.json item marked done today are left out.
 
     The board mirror marks a TODO done in inbox.json while the same line can linger in projects.json (a one-off or an
-    ask). Matching is on the whole title only: a shared ticket link can cover several asks, so links never clear one.
+    ask). A link alone never clears one (a shared ticket link can cover several asks), so the whole title must match.
+    When both items carry a ref or a project_id, those must agree too, so a done "Reply to Ana" in one thread does
+    not hide an unrelated open "Reply to Ana" elsewhere. Either side with neither falls back to the title alone.
     """
-    done = {norm_title(s.get("title")) for s in (inbox or {}).get("items") or []
-            if s.get("done_at") and _local_day(s["done_at"], tz) == today and s.get("title")}
+    done = {}
+    for s in (inbox or {}).get("items") or []:
+        if s.get("done_at") and _local_day(s["done_at"], tz) == today and s.get("title"):
+            ref = canonical_ref(s["ref"]) if s.get("ref") else make_ref(s.get("link"))
+            done.setdefault(norm_title(s.get("title")), []).append(_ids(ref, s.get("project_id")))
     if not done:
         return items
-    return [i for i in items if i.get("source") == "session" or norm_title(i.get("title")) not in done]
+
+    def cleared(i):
+        mine = _ids(i.get("ref"), i.get("project_id"))
+        for theirs in done.get(norm_title(i.get("title")), []):
+            shared = mine.keys() & theirs.keys()
+            if not mine or not theirs or (shared and all(mine[k] == theirs[k] for k in shared)):
+                return True
+        return False
+
+    return [i for i in items if i.get("source") == "session" or not cleared(i)]
+
+
+def _ids(ref, project_id):
+    """The identity fields an item carries (ref, project_id), empty ones left out."""
+    return {k: v for k, v in (("ref", ref or ""), ("project_id", project_id or "")) if v}
 
 
 def _local_day(value, tz):
@@ -956,10 +975,18 @@ def split_action(title):
     return t, ""
 
 
+def _int(v, default):
+    """An int from config or data; only a missing value (None) takes the default, so an explicit 0 stays 0."""
+    try:
+        return int(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
 def _need_row(it, today, old_sources):
     when, late = when_label(it.get("due"), today)
     return {"hid": it.get("hid"), "title": it.get("title") or "", "title_parts": it.get("title_parts"),
-            "link": it.get("link") or "", "when": when, "late": late, "minutes": int(it.get("effort_min") or 5),
+            "link": it.get("link") or "", "when": when, "late": late, "minutes": _int(it.get("effort_min"), 5),
             "source": it.get("source") or "", "project_id": it.get("project_id") or "", "kind": it.get("kind") or "",
             "why": it.get("why") or "", "feed_old": bool(set(it.get("sources") or [it.get("source")]) & old_sources)}
 
@@ -974,14 +1001,14 @@ def focus_view(view, feeds, conf, now, tz):
             pats.append(re.compile(p, re.I))
         except re.error:
             continue
-    later_days = int(fc.get("parked_after_days") or 14)
+    later_days = _int(fc.get("parked_after_days"), 14)
 
     # Feeds older than feed_note_hours get one note near the rows they fed.
     old, old_sources = [], set()
     for name in SCRIPT_SOURCES:
         feed = (feeds or {}).get(name)
         gen = parse_time((feed or {}).get("generated_at") or (feed or {}).get("updated_at"))
-        if gen and now - gen > timedelta(hours=float(fc.get("feed_note_hours") or 24)):
+        if gen and now - gen > timedelta(hours=_int(fc.get("feed_note_hours"), 24)):
             old.append((SOURCE_LABELS.get(name, name), gen.astimezone(tz).strftime("%m-%d %H:%M")))
             old_sources.add(name)
     feed_note = None
@@ -994,12 +1021,22 @@ def focus_view(view, feeds, conf, now, tz):
     needs, parked, confirms = [], [], []
     for it in view["inbox"]["items"]:
         due = parse_day(it.get("due"))
-        if any(p.search(it.get("title") or "") for p in pats) or (due and (due - today).days > later_days):
+        pinned = due is not None and due <= today  # late or due today: never hidden under Parked
+        if not pinned and (any(p.search(it.get("title") or "") for p in pats) or (due and (due - today).days > later_days)):
             parked.append(_need_row(it, today, old_sources))
         elif it.get("kind") == "confirm" and not it.get("late"):
             confirms.append(it)
         else:
             needs.append(_need_row(it, today, old_sources))
+
+    # Snoozed items wait under Parked with their wake date; a snoozed confirm already counts down under Running.
+    delivered_hids = {d.get("hid") for d in view.get("delivered") or []}
+    for it in view["inbox"].get("snoozed") or []:
+        if it.get("hid") in delivered_hids:
+            continue
+        row = _need_row(it, today, old_sources)
+        row.update({"when": "back " + str(it.get("snooze_until") or "")[5:10], "late": False, "snoozed": True})
+        parked.append(row)
 
     names = {p.get("id", ""): p.get("name") or "" for p in view.get("projects") or []}
     hero = None
@@ -1007,6 +1044,7 @@ def focus_view(view, feeds, conf, now, tz):
         h = dict(needs[0])
         head, rest = split_action(h["title"])
         h["action"] = head
+        h["detail"] = rest
         h["detail_parts"] = link_mentions(rest, conf) if rest else []
         h["open_label"] = open_label(h["link"], conf) if h["link"] else ""
         h["project"] = names.get(h["project_id"], "")
@@ -1024,14 +1062,16 @@ def focus_view(view, feeds, conf, now, tz):
         for j in js:
             if j.get("finished"):
                 continue
-            step = f"{j.get('done')} of {j.get('total')}" + (f" {j['unit']}" if j.get("unit") else "") if j.get("total") else ""
+            step = f"{j.get('done') or 0} of {j.get('total')}" + (f" {j['unit']}" if j.get("unit") else "") if j.get("total") else ""
             running.append({"kind": "job", "title": f"{names.get(pid, pid)}: {j.get('label')}",
                             "title_parts": link_mentions(f"{names.get(pid, pid)}: {j.get('label')}", conf), "link": "",
                             "step": step + (f", done {j['eta'][5:]}" if j.get("eta") else ""), "pct": j.get("pct"),
                             "late": bool(j.get("late")), "done": None, "total": None})
-    delivered_titles = set()
+    delivered_titles, need_hids = set(), {n["hid"] for n in needs}
     for d in view.get("delivered") or []:
         delivered_titles.add(d.get("title"))
+        if d.get("late") or d.get("hid") in need_hids:
+            continue  # a late confirm is under needs you, not also here
         running.append({"kind": "delivered", "title": d.get("title") or "", "title_parts": d.get("title_parts"),
                         "link": d.get("link") or "", "step": f"day {d['elapsed']} of {d['total']}",
                         "pct": round(100 * d["elapsed"] / d["total"]) if d.get("total") else 0, "late": bool(d.get("late")),
@@ -1041,6 +1081,14 @@ def focus_view(view, feeds, conf, now, tz):
             continue
         running.append({"kind": "confirm", "title": it.get("title") or "", "title_parts": it.get("title_parts"),
                         "link": it.get("link") or "", "step": "to confirm", "pct": None, "late": False,
+                        "done": None, "total": None})
+    for o in view.get("one_offs") or []:
+        state = str(o.get("state") or "").strip()
+        if o.get("needs_me") or state.lower() == "done" or not o.get("title"):
+            continue
+        ref = o.get("ref") or ""
+        running.append({"kind": "oneoff", "title": o["title"], "title_parts": o.get("title_parts"),
+                        "link": ref if _http(ref) else "", "step": state or "open", "pct": None, "late": False,
                         "done": None, "total": None})
     waits = []
     scale = (view.get("waiting") or {}).get("scale_days") or 1
@@ -1078,7 +1126,7 @@ def focus_view(view, feeds, conf, now, tz):
                       "steps_total": len(items), "needs": len(mine), "late": sum(1 for n in mine if n["late"])})
 
     merged = next((s["n"] for s in ((view.get("pipeline") or {}).get("stages") or []) if s["key"] == "merged"), 0)
-    return {"hero": hero, "up_next": needs[1:], "up_next_shown": int(fc.get("up_next") or 3), "cap": int(fc.get("cap") or 5),
+    return {"hero": hero, "up_next": needs[1:], "up_next_shown": _int(fc.get("up_next"), 3), "cap": _int(fc.get("cap"), 5),
             "running": running, "wins": wins, "parked": parked, "tiles": tiles, "feed_note": feed_note,
             "needs": len(needs), "late": sum(1 for n in needs if n["late"]), "minutes": sum(n["minutes"] for n in needs),
             "merged_this_week": merged}

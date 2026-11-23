@@ -6,7 +6,7 @@ const D = JSON.parse(document.getElementById('data').textContent);
 const C = D.config || {};
 const P = D.projects || [], W = D.waiting_on || [];
 const F = D.focus || {hero: null, up_next: [], running: [], wins: [], parked: [], tiles: [], cap: 5, up_next_shown: 3};
-const CAP = F.cap || 5, UP_N = F.up_next_shown || 3;
+const CAP = F.cap ?? 5, UP_N = F.up_next_shown ?? 3;
 const SVG = 'http://www.w3.org/2000/svg';
 const $ = id => document.getElementById(id);
 
@@ -38,7 +38,7 @@ function linked(segs, text, link){
   return safe(link) ? xa(link, {}, text || '') : (text || '');
 }
 function txt(obj, f){ return linked(obj && obj[f + '_parts'], obj ? obj[f] : '', null); }
-const mins = n => '~' + (n || 5) + ' min';
+const mins = n => '~' + (n == null ? 5 : n) + ' min';
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 function longDay(d){ if (!/^\d{4}-\d\d-\d\d/.test(d || '')) return d || ''; const t = new Date(d.slice(0, 10) + 'T12:00:00Z'); return DAYS[t.getUTCDay()] + ' ' + MON[t.getUTCMonth()] + ' ' + t.getUTCDate(); }
@@ -99,7 +99,7 @@ function hero(){
   if (!x) {
     return h('section', {class: 'hero', 'aria-labelledby': 'hero-h'}, h('div', {class: 'hero-top'}, h('span', {class: 'eyebrow'}, 'Right now')),
       h('h2', {id: 'hero-h'}, 'Nothing needs you'),
-      h('p', {class: 'hero-what'}, F.running.length ? F.running.length + ' things are running on their own. See "Running without you".' : 'Nothing is running either.'));
+      h('p', {class: 'hero-what'}, F.running.length ? F.running.length + (F.running.length === 1 ? ' thing is' : ' things are') + ' running on their own. See "Running without you".' : 'Nothing is running either.'));
   }
   const meta = [x.project, x.why].filter(Boolean).join(' - ');
   return h('section', {class: 'hero', 'aria-labelledby': 'hero-h'},
@@ -107,7 +107,7 @@ function hero(){
       x.late ? h('span', {class: 'badge late'}, x.when) : x.when ? h('span', {class: 'badge on-hero'}, x.when) : null,
       h('span', {class: 'badge on-hero'}, mins(x.minutes))),
     h('h2', {id: 'hero-h'}, x.action),
-    x.detail_parts && x.detail_parts.length ? h('p', {class: 'hero-what'}, linked(x.detail_parts, '', null)) : null,
+    x.detail ? h('p', {class: 'hero-what'}, linked(x.detail_parts, x.detail, null)) : null,
     x.feed_old && F.feed_note ? h('p', {class: 'hero-what small'}, F.feed_note.text + '. This may be done already.') : null,
     h('div', {class: 'hero-foot'}, safe(x.link) ? h('a', {class: 'go', href: safe(x.link), target: '_blank', rel: 'noopener'}, x.open_label || 'Open') : null,
       meta ? h('span', {class: 'hero-meta'}, meta) : null));
@@ -123,7 +123,7 @@ function projectTile(p, t){
     const gi = g.items || [], gd = gi.filter(i => i.state === 'done').length;
     return h('div', {class: 'bd-g'}, h('div', {class: 'bd-h'}, h('b', {}, g.group || ''), h('span', {class: 'step'}, gd + ' of ' + gi.length)),
       h('ul', {}, gi.map(i => h('li', {class: 'bd-i s-' + String(i.state || '').replace(/\s+/g, '-')}, h('span', {class: 'st'}, i.state || ''),
-        h('span', {}, txt(i, 'text'), i.ref ? [' ', linked(i.ref_parts, '', safe(i.ref) ? i.ref : null)] : null)))));
+        h('span', {}, txt(i, 'text'), i.ref ? [' ', linked(i.ref_parts, i.ref, safe(i.ref) ? i.ref : null)] : null)))));
   });
   const prog = (p.recent_progress || []).slice(0, 5).map(r => h('li', {}, h('span', {class: 'when'}, (r.date || '').slice(5) + ' '), txt(r, 'text')));
   const links = (p.links || []).filter(l => safe(l.url)).map(l => xa(l.url, {}, l.label || l.url));
