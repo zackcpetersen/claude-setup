@@ -662,7 +662,7 @@ class DashboardView(unittest.TestCase):
 
 
 class Focus(unittest.TestCase):
-    """focus_view: the one-screen home (hero, up next, running, wins, parked, feed note)."""
+    """focus_view: the one-screen home (hero, up next, running, wins, shelf, feed note)."""
 
     def test_done_today_in_inbox_hides_the_same_open_line(self):
         data = {"projects": [], "one_offs": [{"title": "Sign two forms", "needs_me": True}, {"title": "Book travel", "needs_me": True}]}
@@ -676,7 +676,7 @@ class Focus(unittest.TestCase):
         inbox = {"items": [{"id": "t1", "kind": "todo", "title": "Sign two forms", "done_at": "2026-01-10T15:00:00Z"}]}
         self.assertEqual(len(view(data=data, inbox=inbox)["inbox"]["items"]), 1)
 
-    def test_hero_up_next_and_parked(self):
+    def test_hero_up_next_and_shelf(self):
         inbox = {"items": [
             {"id": "a", "kind": "todo", "title": "Nudge Ana: the export file", "due": "2026-01-13",
              "link": "https://tracker.example.com/browse/ENG-9"},
@@ -690,7 +690,7 @@ class Focus(unittest.TestCase):
         self.assertTrue(f["hero"]["late"])
         self.assertEqual(f["hero"]["when"], "1 day late")
         self.assertEqual([r["title"] for r in f["up_next"]], ["Approve the agent"])
-        self.assertEqual(sorted(r["title"] for r in f["parked"]), ["Idea: a new report", "Plan the spring work"])
+        self.assertEqual(sorted((r["title"], r["tag"]) for r in f["shelf"]), [("Idea: a new report", "idea"), ("Plan the spring work", "later")])
         self.assertEqual((f["needs"], f["late"]), (2, 1))
 
     def test_nothing_needs_you(self):
@@ -737,13 +737,13 @@ class Focus(unittest.TestCase):
         ]}
         cfg = {"tz": "America/Chicago", "focus": {"parked_patterns": ["^Idea\\b"]}}
         f = view(inbox=inbox, cfg=cfg)["focus"]
-        self.assertEqual([r["title"] for r in f["parked"]], ["Idea: someday"])
+        self.assertEqual([r["title"] for r in f["shelf"]], ["Idea: someday"])
         self.assertEqual((f["needs"], f["late"]), (2, 1))
 
     def test_snoozed_parks_with_wake_date(self):
         inbox = {"items": [{"id": "s", "kind": "todo", "title": "Read the RFC", "snooze_until": "2026-01-20"}]}
         f = view(inbox=inbox)["focus"]
-        self.assertEqual([(r["title"], r["when"], r["snoozed"]) for r in f["parked"]], [("Read the RFC", "back 01-20", True)])
+        self.assertEqual([(r["title"], r["when"], r["snoozed"], r["tag"]) for r in f["shelf"]], [("Read the RFC", "back 01-20", True, "snoozed")])
 
     def test_open_oneoff_not_for_you_runs(self):
         data = {"projects": [], "one_offs": [{"title": "Vendor sends the file", "state": "in progress"},
@@ -802,10 +802,10 @@ class Focus(unittest.TestCase):
         self.assertEqual(sorted(x["kind"] for x in f["late_items"]), ["deadline", "today"])
         self.assertEqual({x["project_id"] for x in f["late_items"]}, {"a"})
 
-    def test_far_confirm_runs_and_is_not_parked(self):
+    def test_far_confirm_runs_and_is_not_on_the_shelf(self):
         inbox = {"items": [{"id": "c", "kind": "confirm", "title": "Confirm Ana got it", "since": "2026-01-10", "due": "2026-03-01"}]}
         f = view(inbox=inbox)["focus"]
-        self.assertEqual(f["parked"], [])
+        self.assertEqual(f["shelf"], [])
         self.assertEqual([r["kind"] for r in f["running"]].count("delivered"), 1)
 
     def test_confirm_due_today_needs_you(self):
@@ -918,14 +918,31 @@ class LateAndProjects(unittest.TestCase):
         run = view(data=data)["focus"]["running"]
         self.assertEqual({(r["kind"], r["project_id"]) for r in run}, {("today", "a"), ("job", "a"), ("wait", "a")})
 
-    def test_shelf_items(self):
-        data = {"projects": [], "shelf": ["Read the dbt book", {"title": "Try ENG-4 idea", "link": "https://example.com/s",
-                                                               "added": "2026-01-02T10:00:00Z"}, {"note": "no title"}]}
-        shelf = view(data=data, cfg=TRACKER)["focus"]["shelf"]
-        self.assertEqual([s["title"] for s in shelf], ["Read the dbt book", "Try ENG-4 idea"])
-        self.assertEqual((shelf[1]["link"], shelf[1]["added"]), ("https://example.com/s", "2026-01-02"))
-        self.assertTrue(any(p.get("url") for p in shelf[1]["title_parts"]))
-        self.assertEqual(view()["focus"]["shelf"], [])
+    def test_shelf_holds_loose_ends_with_age_and_stale_flag(self):
+        data = {"projects": [], "shelf": [
+            "Read the dbt book",
+            {"title": "Retire the ENG-4 cron", "link": "https://example.com/s", "added": "2026-01-10"},
+            {"title": "Old leftover", "added": "2025-12-20"},
+            {"title": "Gone", "added": "2026-01-01", "done": True},
+            {"note": "no title"}]}
+        cfg = dict(TRACKER, shelf={"cap": 12})
+        f = view(data=data, cfg=cfg)["focus"]
+        ends = [r for r in f["shelf"] if r["tag"] == "loose end"]
+        self.assertEqual([r["title"] for r in ends], ["Read the dbt book", "Retire the ENG-4 cron", "Old leftover"])
+        self.assertEqual([(r["age"], r["stale"]) for r in ends], [(None, False), (4, False), (25, True)])
+        self.assertEqual(ends[1]["link"], "https://example.com/s")
+        self.assertTrue(any(p.get("url") for p in ends[1]["title_parts"]))
+        self.assertEqual(f["shelf_meta"], {"loose": 3, "cap": 12, "stale_days": 14, "stale": 1})
+
+    def test_shelf_puts_parked_items_before_loose_ends(self):
+        inbox = {"items": [{"id": "b", "kind": "todo", "title": "Idea: a new report"}]}
+        f = view(data={"projects": [], "shelf": ["Leftover"]}, inbox=inbox)["focus"]
+        self.assertEqual([(r["title"], r["tag"]) for r in f["shelf"]], [("Idea: a new report", "idea"), ("Leftover", "loose end")])
+        self.assertNotIn("parked", f)
+
+    def test_empty_shelf_without_cap(self):
+        f = view()["focus"]
+        self.assertEqual((f["shelf"], f["shelf_meta"]["cap"], f["shelf_meta"]["loose"]), ([], None, 0))
 
     def test_one_off_done_today_is_a_win(self):
         data = {"projects": [], "one_offs": [

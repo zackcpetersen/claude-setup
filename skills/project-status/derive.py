@@ -41,6 +41,10 @@ DEFAULTS = {
     # parked_after_days out go there too. feed_note_hours: a GitHub or Slack feed older than this gets a note.
     "focus": {"up_next": 3, "cap": 5, "parked_patterns": [r"^Idea\b", r"\bParked\b", r"^After\b"],
               "parked_after_days": 14, "feed_note_hours": 24},
+    # shelf: the loose-ends list the gather step copies into projects.json shelf[]. source names where it lives
+    # (for the gather agent; the page never reads it), cap is its size limit (shown as "N of cap"), and an item
+    # older than stale_days gets a quiet "old" flag.
+    "shelf": {"source": "", "cap": None, "stale_days": 14},
 }
 
 EFFORT = {"merge": 2, "send-draft": 2, "approve-agent": 2, "slack": 5, "nudge": 5, "confirm": 5, "todo": 5,
@@ -1059,7 +1063,10 @@ def _need_row(it, today, old_sources):
 
 
 def focus_view(view, feeds, conf, now, tz):
-    """Everything the one-screen home shows: the hero, up next, running, wins, parked, project tiles, feed note."""
+    """Everything the one-screen home shows: the hero, up next, running, wins, the shelf, project tiles, feed note.
+
+    The shelf holds parked open items (ideas, later, snoozed) and the loose ends from data shelf[], each with a tag.
+    """
     fc = conf.get("focus") or {}
     today = date.fromisoformat(view["today"])
     pats = []
@@ -1092,7 +1099,9 @@ def focus_view(view, feeds, conf, now, tz):
         is_confirm = it.get("kind") == "confirm"  # confirms count down under Running, never under Parked
         if not pinned and not is_confirm and (any(p.search(it.get("title") or "") for p in pats)
                                               or (due and (due - today).days > later_days)):
-            parked.append(_need_row(it, today, old_sources))
+            row = _need_row(it, today, old_sources)
+            row["tag"] = "idea" if re.match(r"\s*idea\b", row["title"], re.I) else "later"
+            parked.append(row)
         elif is_confirm and not pinned:
             confirms.append(it)
         else:
@@ -1104,7 +1113,7 @@ def focus_view(view, feeds, conf, now, tz):
         if it.get("hid") in delivered_hids:
             continue
         row = _need_row(it, today, old_sources)
-        row.update({"when": "back " + str(it.get("snooze_until") or "")[5:10], "late": False, "snoozed": True})
+        row.update({"when": "back " + str(it.get("snooze_until") or "")[5:10], "late": False, "snoozed": True, "tag": "snoozed"})
         parked.append(row)
 
     names = {p.get("id", ""): p.get("name") or "" for p in view.get("projects") or []}
@@ -1230,9 +1239,9 @@ def focus_view(view, feeds, conf, now, tz):
 
     merged = next((s["n"] for s in ((view.get("pipeline") or {}).get("stages") or []) if s["key"] == "merged"), 0)
     return {"hero": hero, "up_next": needs[1:], "up_next_shown": _int(fc.get("up_next"), 3), "cap": _int(fc.get("cap"), 5),
-            "running": running, "wins": wins, "parked": parked, "tiles": tiles, "feed_note": feed_note,
+            "running": running, "wins": wins, "tiles": tiles, "feed_note": feed_note,
             "needs": len(needs), "late": len(late), "late_items": late, "minutes": sum(n["minutes"] for n in needs),
-            "merged_this_week": merged, "shelf": shelf_view(view.get("shelf"), conf)}
+            "merged_this_week": merged, **shelf_view(parked, view.get("shelf"), conf, today)}
 
 
 SLACK_ANY = re.compile(r"^https://[^/\s]+\.slack\.com/archives/([A-Z0-9]+)(/p\d+)?")
@@ -1272,19 +1281,33 @@ def project_refs(p, conf):
     return {"tickets": tickets, "slack": channels + threads, "has_channel": bool(channels)}
 
 
-def shelf_view(shelf, conf):
-    """Shelf items: kept for some day, not on any list. Each is {title, note, link, added}; only the title is needed."""
-    out = []
-    for s in shelf or []:
+def shelf_view(parked, loose, conf, today):
+    """One Shelf: parked open items (tag idea, later or snoozed) then loose ends from data shelf[] (tag loose end).
+
+    A loose end is {title, added, link, done} (a plain string is a title); done ones are left out. Each loose end
+    gets its age in days and "stale" when older than shelf.stale_days. shelf_meta says how full the loose-ends list
+    is against shelf.cap (None when no cap is set).
+    """
+    sc = conf.get("shelf") or {}
+    stale_days = _int(sc.get("stale_days"), 14)
+    ends = []
+    for s in loose or []:
         if isinstance(s, str):
             s = {"title": s}
-        if not isinstance(s, dict) or not s.get("title"):
+        if not isinstance(s, dict) or not s.get("title") or s.get("done"):
             continue
         link = s.get("link") or ""
-        out.append({"title": s["title"], "title_parts": link_mentions(s["title"], conf), "note": s.get("note") or "",
-                    "link": link if _http(link) else "", "added": str(s.get("added") or "")[:10],
-                    "project_id": s.get("project_id") or ""})
-    return out
+        added = parse_day(str(s.get("added") or "")[:10])
+        age = (today - added).days if added else None
+        ends.append({"tag": "loose end", "title": s["title"], "title_parts": link_mentions(s["title"], conf),
+                     "note": s.get("note") or "", "link": link if _http(link) else "",
+                     "added": added.isoformat() if added else "", "age": age,
+                     "stale": bool(age is not None and age > stale_days), "project_id": s.get("project_id") or ""})
+    cap = sc.get("cap")
+    cap = _int(cap, None) if cap not in (None, "") else None
+    return {"shelf": list(parked) + ends,
+            "shelf_meta": {"loose": len(ends), "cap": cap, "stale_days": stale_days,
+                           "stale": sum(1 for e in ends if e["stale"])}}
 
 
 # ---------- the whole view ----------

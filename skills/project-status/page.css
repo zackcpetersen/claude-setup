@@ -1,5 +1,5 @@
 /* Layout ("Focus board"): home is one laptop screen, no scrolling until the user expands a list. Three columns:
-   the "Do this first" hero with Up next, Parked and Shelf under it; Projects in progress (one row per project, by
+   the "Do this first" hero with Up next and the folded Shelf under it; Projects in progress (one row per project, by
    priority); Running without you and Wins today. Every count opens its own page (#need, #late, #running, #wins,
    #p-<id>, #github), which scrolls like a normal page. Phones get one column.
    Color rule: one accent means "needs you" (the hero on --rail, a --rail-on button, --accent dots); --alert (coral)
@@ -135,7 +135,7 @@ a.pj-ref{color:var(--link)}
 .more-btn[aria-expanded="true"]{color:var(--muted)}
 .more-btn:hover{text-decoration:underline}
 
-/* folded sections: Parked and Shelf */
+/* the folded Shelf: parked items and loose ends, one count, collapsed by default */
 details.fold-sec{background:var(--card);border:1px dashed var(--line);border-radius:14px;padding:7px 14px}
 details.fold-sec[open]{padding-bottom:10px}
 details.fold-sec>summary{cursor:pointer;list-style:none;color:var(--muted);font-size:12.5px}
@@ -145,6 +145,10 @@ details.fold-sec[open]>summary::before{content:"\2212"}
 details.fold-sec>summary b{color:var(--strong)}
 details.fold-sec>summary .n{color:var(--strong);font-variant-numeric:tabular-nums}
 details.fold-sec>ul{margin-top:4px}
+details.fold-sec>.empty{margin-top:4px}
+.fold-sub{font-weight:400}
+.fold-all{display:inline-block;font-size:12px;margin:4px 0 0 17px}
+.badge.tag{background:transparent;border:1px solid var(--line);color:var(--muted);font-size:11px;padding:1px 7px}
 
 /* project cards: one row per project; the name opens the project's page */
 .ring{flex:none}

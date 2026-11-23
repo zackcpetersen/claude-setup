@@ -46,6 +46,7 @@
     "logo_dark": "",
     "name": "Example Co"
   },
+  "shelf": {"source": "", "cap": 12, "stale_days": 14},
   "theme": {
     "light": {
       "--canvas": "#F3F5F7",

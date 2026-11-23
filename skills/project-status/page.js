@@ -1,5 +1,5 @@
 // Status page script. build.py inlines this file, page.css and the data into template.html.
-// Pages (hash routes): home (empty hash), #need, #late, #running, #wins, #parked, #shelf, #p-<id> (one project),
+// Pages (hash routes): home (empty hash), #need, #late, #running, #wins, #shelf (also #parked), #p-<id> (one project),
 // #github (also #github-<me|team>-<30|90>). Older hashes (#inbox, #stats, #prs, #waiting...) map to the nearest page.
 // Every number, label and grouping is worked out in derive.py (focus_view); this file only lays the data out.
 // Building blocks: row() for every list row, list() for a capped list that grows in place, section() for a titled
@@ -10,7 +10,8 @@ const P = D.projects || [], W = D.waiting_on || [];
 const F = D.focus || {};
 const CAP = F.cap ?? 5, UP_N = F.up_next_shown ?? 3;
 const NEEDS = [F.hero, ...(F.up_next || [])].filter(Boolean);
-const RUN = F.running || [], WINS = F.wins || [], PARKED = F.parked || [], SHELF = F.shelf || [], LATE = F.late_items || [];
+const RUN = F.running || [], WINS = F.wins || [], SHELF = F.shelf || [], LATE = F.late_items || [];
+const SM = F.shelf_meta || {loose: 0, cap: null, stale_days: 14, stale: 0};
 const TILES = F.tiles || [];
 const ST = D.stats || null, GROUPS = (ST && ST.groups) || {}, HAS_STATS = !!ST && Object.keys(GROUPS).length > 0;
 const PIPE = D.pipeline || null, GHF = (D.feeds || {}).github || {};
@@ -148,9 +149,24 @@ function lateRow(x, opts){
     under: opts.project ? projLink(x.project_id) : null,
     meta: [badge(x.when || 'late', 'late'), x.date ? h('span', {class: 'when'}, 'due ' + md(x.date)) : null]});
 }
-function shelfRow(x){
+// A shelf row: a parked item (idea, later, snoozed) or a loose end, with a quiet tag saying which.
+function shelfRow(x, opts){
+  opts = opts || {};
+  const tag = badge(x.tag || 'later', 'tag');
+  if (x.tag !== 'loose end') {
+    return row({mark: 'shelf', title: linked(x.title_parts, x.title, x.link), tip: x.title, under: opts.project ? projLink(x.project_id) : null,
+      meta: [tag, x.when ? h('span', {class: 'when'}, x.when) : null, h('span', {class: 'min'}, mins(x.minutes))]});
+  }
   return row({mark: 'shelf', title: linked(x.title_parts, x.title, x.link), tip: x.note ? x.title + '\n' + x.note : x.title,
-    under: x.note ? h('span', {class: 'sub'}, x.note) : null, meta: [x.added ? h('span', {class: 'when'}, 'added ' + md(x.added)) : null]});
+    under: x.note ? h('span', {class: 'sub'}, x.note) : null,
+    meta: [tag, x.age != null ? h('span', {class: 'when', title: 'added ' + x.added}, x.age + 'd') : null,
+      x.stale ? badge('over ' + SM.stale_days + 'd', 'soft', {title: 'Older than the ' + SM.stale_days + '-day rule'}) : null]});
+}
+function shelfSub(){
+  const parts = [];
+  if (SM.cap) parts.push(SM.loose + ' of ' + SM.cap + ' loose ends');
+  if (SM.stale) parts.push(SM.stale + ' over ' + SM.stale_days + 'd');
+  return SHELF.length ? 'ideas, later and loose ends' + (parts.length ? ' · ' + parts.join(' · ') : '') : 'Shelf is empty' + (SM.cap ? ' · 0 of ' + SM.cap + ' loose ends' : '');
 }
 function refLinks(t, max){
   const tk = t.tickets || [], sl = t.slack || [];
@@ -233,14 +249,14 @@ function homePage(){
   const up = F.up_next || [];
   const upTile = section({id: 'up', title: 'Up next', n: up.length, href: '#need', aside: up.length ? h('a', {href: '#need'}, 'All ' + NEEDS.length) : null},
     up.length ? list(up.map(i => needRow(i)), UP_N) : empty('Nothing else needs you.'), feedNote(NEEDS));
-  const park = fold({id: 'parked', title: 'Parked', n: PARKED.length, sub: 'ideas and later items'}, PARKED.length ? list(PARKED.map(i => needRow(i)), CAP) : empty('Nothing parked.'));
-  const shelf = fold({id: 'shelf', title: 'Shelf', n: SHELF.length, sub: 'kept for some day', hideEmpty: true}, list(SHELF.map(shelfRow), CAP));
+  const shelf = fold({id: 'shelf', title: 'Shelf', n: SHELF.length, sub: shelfSub()},
+    SHELF.length ? [list(SHELF.map(x => shelfRow(x)), CAP), h('a', {href: '#shelf', class: 'fold-all'}, 'Open the shelf page')] : empty('Shelf is empty.'));
   const pj = section({id: 'pj', title: 'Projects in progress', n: TILES.length, cls: 'projects', aside: 'by priority'},
     TILES.length ? list(TILES.map(projectCard), CAP) : empty('No projects yet.'));
   const runTile = section({id: 'run', title: 'Running without you', n: RUN.length, href: '#running'}, RUN.length ? list(RUN.map(r => runRow(r)), CAP) : empty('Nothing is running.'));
   const merged = F.merged_this_week ? h('a', {href: '#github'}, F.merged_this_week + ' PRs merged this week') : null;
   const winTile = section({id: 'win', title: 'Wins today', n: WINS.length, href: '#wins', aside: merged}, WINS.length ? list(WINS.map(winRow), CAP) : empty('Nothing done yet today.'));
-  return [h('div', {class: 'grid'}, h('div', {class: 'col'}, hero(), upTile, park, shelf), h('div', {class: 'col'}, pj), h('div', {class: 'col'}, runTile, winTile))];
+  return [h('div', {class: 'grid'}, h('div', {class: 'col'}, hero(), upTile, shelf), h('div', {class: 'col'}, pj), h('div', {class: 'col'}, runTile, winTile))];
 }
 
 // ---------- list pages (every header count opens one) ----------
@@ -250,7 +266,7 @@ function subpage(title, sub, ...kids){
 function needPage(){
   return subpage('Needs you', plural(NEEDS.length, 'item') + ', about ' + (F.minutes || 0) + ' min',
     section({title: 'In order: do the top one first', n: NEEDS.length}, NEEDS.length ? list(NEEDS.map(i => needRow(i, {project: true}))) : empty('Nothing needs you right now.'), feedNote(NEEDS)),
-    PARKED.length ? h('p', {class: 'muted'}, 'Not counted here: ', h('a', {href: '#parked'}, plural(PARKED.length, 'parked item')), '.') : null);
+    SHELF.length ? h('p', {class: 'muted'}, 'Not counted here: ', h('a', {href: '#shelf'}, plural(SHELF.length, 'item') + ' on the shelf'), '.') : null);
 }
 function latePage(){
   return subpage('Late', plural(LATE.length, 'item') + ' past their date',
@@ -268,8 +284,10 @@ function winsPage(){
     section({title: 'Done today', n: WINS.length, aside: F.merged_this_week ? h('a', {href: '#github'}, F.merged_this_week + ' PRs merged this week') : null},
       WINS.length ? list(WINS.map(winRow)) : empty('Nothing done yet today.')));
 }
-function parkedPage(){ return subpage('Parked', plural(PARKED.length, 'item'), section({title: 'Ideas and later items', n: PARKED.length}, PARKED.length ? list(PARKED.map(i => needRow(i, {project: true}))) : empty('Nothing parked.'))); }
-function shelfPage(){ return subpage('Shelf', plural(SHELF.length, 'item'), section({title: 'Kept for some day', n: SHELF.length}, SHELF.length ? list(SHELF.map(shelfRow)) : empty('The shelf is empty.'))); }
+function shelfPage(){
+  return subpage('Shelf', shelfSub(), section({title: 'Ideas, later, snoozed and loose ends', n: SHELF.length},
+    SHELF.length ? list(SHELF.map(x => shelfRow(x, {project: true}))) : empty('Shelf is empty.')));
+}
 
 // ---------- project page ----------
 const STATE_CLASS = st => 's-' + String(st || 'not started').toLowerCase().replace(/\s+/g, '-');
@@ -279,7 +297,7 @@ function projectPage(id){
   const t = TILES.find(x => x.id === id) || {tickets: [], slack: [], steps_done: 0, steps_total: 0};
   const late = LATE.filter(x => x.project_id === id);
   const needs = NEEDS.filter(x => x.project_id === id);
-  const parked = PARKED.filter(x => x.project_id === id);
+  const parked = SHELF.filter(x => x.project_id === id);
   const run = RUN.filter(x => x.project_id === id);
   const head = h('section', {class: 'tile pj-head'}, ring(p.progress_pct, 76),
     h('div', {class: 'pj-hb'},
@@ -293,7 +311,7 @@ function projectPage(id){
   const left = [
     late.length ? section({title: 'Late', n: late.length, cls: 'is-late'}, list(late.map(x => lateRow(x)))) : null,
     section({title: 'Needs you', n: needs.length}, needs.length ? list(needs.map(i => needRow(i))) : empty('Nothing. This one moves without you.'),
-      parked.length ? h('p', {class: 'muted small'}, 'Also parked for later: ') : null, parked.length ? list(parked.map(i => needRow(i))) : null),
+      parked.length ? h('p', {class: 'muted small'}, 'Also on the shelf: ') : null, parked.length ? list(parked.map(i => shelfRow(i))) : null),
     p.next_milestone || p.progress_basis ? section({title: 'Next'}, p.next_milestone ? h('p', {class: 'pj-line'}, txt(p, 'next_milestone'), p.next_milestone_date ? h('span', {class: 'when'}, ' (' + md(p.next_milestone_date) + ')') : null) : null,
       p.progress_basis ? h('p', {class: 'pj-line muted'}, 'How the ' + (p.progress_pct || 0) + '% was worked out: ' + p.progress_basis) : null) : null,
     run.length ? section({title: 'Running without you', n: run.length}, list(run.map(r => runRow(r)), CAP)) : null];
@@ -459,8 +477,8 @@ function githubPage(arg){
 }
 
 // ---------- router ----------
-const ROUTES = {need: needPage, late: latePage, running: runningPage, wins: winsPage, parked: parkedPage, shelf: shelfPage, github: githubPage};
-const OLD = {inbox: 'need', stats: 'github', prs: 'github', waiting: 'running', people: 'running', delivered: 'running', home: '', overview: ''};
+const ROUTES = {need: needPage, late: latePage, running: runningPage, wins: winsPage, shelf: shelfPage, github: githubPage};
+const OLD = {parked: 'shelf', inbox: 'need', stats: 'github', prs: 'github', waiting: 'running', people: 'running', delivered: 'running', home: '', overview: ''};
 function route(){
   let hash = '';
   try { hash = decodeURIComponent((location.hash || '').slice(1)); } catch (e) { hash = ''; }  // a malformed hash opens home

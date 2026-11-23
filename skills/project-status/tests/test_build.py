@@ -167,8 +167,8 @@ class Build(unittest.TestCase):
         self.assertIn('id="page"', html)
         self.assertIn('<meta charset="utf-8">', html)
         f = page_data(html)["focus"]
-        for k in ("hero", "up_next", "running", "wins", "parked", "tiles", "feed_note", "cap", "up_next_shown",
-                  "late_items", "shelf"):
+        for k in ("hero", "up_next", "running", "wins", "shelf", "shelf_meta", "tiles", "feed_note", "cap", "up_next_shown",
+                  "late_items"):
             self.assertIn(k, f)
         self.assertIsNotNone(f["hero"])
         self.assertTrue(f["hero"]["action"])
