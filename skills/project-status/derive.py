@@ -926,6 +926,28 @@ def linked_data(data, conf):
 # ---------- focus: the home layout ----------
 
 STEP_RE = re.compile(r"\b(chunk|step|part|batch|phase|stage|wave|round) (\d+) of (\d+)\b", re.I)
+COUNT_RE = re.compile(r"\b(\d[\d,]*) of (\d[\d,]*)((?: [a-z]+)?)\b", re.I)
+STAGE_RE = re.compile(r"\b(chunk|step|part|batch|phase|stage|wave|round) (\d+)\b", re.I)
+
+
+def position(text):
+    """The position a staged line states, for a Running row: (step label, done, total, pct).
+
+    "chunk 2 of 4" gives segments (1 done of 4), "3 of 10 files" a bar at 30 percent, and a bare "chunk 1" just the
+    label. A line with no position returns ("today", None, None, None).
+    """
+    m = STEP_RE.search(text or "")
+    if m:
+        return m.group(0), int(m.group(2)) - 1, int(m.group(3)), None
+    m = COUNT_RE.search(text or "")
+    if m:
+        done, total = int(m.group(1).replace(",", "")), int(m.group(2).replace(",", ""))
+        if total > 0 and done <= total:
+            return m.group(0).strip(), None, None, round(100 * done / total)
+    m = STAGE_RE.search(text or "")
+    if m:
+        return m.group(0), None, None, None
+    return "today", None, None, None
 NOT_WIN_RE = re.compile(r"\b(no new|not yet|still|overdue|waiting on|is due|to be confirmed|confirming|ends today)\b", re.I)
 
 
@@ -1054,10 +1076,9 @@ def focus_view(view, feeds, conf, now, tz):
     for p in view.get("projects") or []:
         if p.get("next_milestone_date") == view["today"] and p.get("next_milestone"):
             text = first_sentence(p["next_milestone"])
-            m = STEP_RE.search(text)
+            step, done, total, pct = position(text)
             running.append({"kind": "today", "title": text, "title_parts": link_mentions(text, conf), "link": "",
-                            "step": m.group(0) if m else "today", "done": int(m.group(2)) - 1 if m else None,
-                            "total": int(m.group(3)) if m else None, "pct": None, "late": False})
+                            "step": step, "done": done, "total": total, "pct": pct, "late": False})
     for pid, js in (view.get("jobs") or {}).items():
         for j in js:
             if j.get("finished"):

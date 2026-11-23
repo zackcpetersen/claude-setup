@@ -768,6 +768,21 @@ class Focus(unittest.TestCase):
         self.assertEqual(f["hero"]["title"], "Confirm Ana got it")
         self.assertNotIn("delivered", [r["kind"] for r in f["running"]])
 
+    def test_running_milestone_shows_its_position(self):
+        def step_of(text):
+            data = {"projects": [{"id": "a", "name": "A", "next_milestone": text, "next_milestone_date": "2026-01-14"}]}
+            r = [r for r in view(data=data)["focus"]["running"] if r["kind"] == "today"][0]
+            return r["step"], r["done"], r["total"], r["pct"]
+        self.assertEqual(step_of("Backfill chunk 2 of 4 copying."), ("chunk 2 of 4", 1, 4, None))
+        self.assertEqual(step_of("Copy 3 of 10 files to the bucket."), ("3 of 10 files", None, None, 30))
+        self.assertEqual(step_of("May chunk 1 copying, due 19:50Z."), ("chunk 1", None, None, None))
+        self.assertEqual(step_of("Ship the release."), ("today", None, None, None))
+
+    def test_running_job_shows_done_of_total(self):
+        data = {"projects": [{"id": "p", "name": "P", "jobs": [{"label": "Backfill", "done": 3, "total": 10, "unit": "files"}]}]}
+        steps = [r["step"] for r in view(data=data)["focus"]["running"] if r["kind"] == "job"]
+        self.assertTrue(steps[0].startswith("3 of 10 files"), steps)
+
     def test_job_without_done_reads_zero(self):
         data = {"projects": [{"id": "p", "name": "P", "jobs": [{"label": "Backfill", "total": 100, "unit": "rows"}]}]}
         steps = [r["step"] for r in view(data=data)["focus"]["running"] if r["kind"] == "job"]
