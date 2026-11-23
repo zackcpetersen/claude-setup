@@ -74,7 +74,7 @@ Symlinked into `~/bin`, so keep `~/bin` on your `PATH`.
 
 ## A note on settings
 
-`~/.claude/settings.json` is deliberately not in this repo. It can hold secrets in its `env` block, and values like the session model are machine-local. The model-discipline and plan-gate hooks come from plugins, so nothing needs pasting for those. [SETUP.md](SETUP.md) lists the pieces worth recreating by hand.
+`~/.claude/settings.json` is deliberately not in this repo. It can hold secrets in its `env` block, and values like the session model are machine-local. The model-discipline and plan-gate hooks come from plugins, so nothing needs pasting for those. One value is worth setting on every machine: `"advisorModel": "fable"` (Fable as the advisor model); see "Advisor model" in SETUP.md. [SETUP.md](SETUP.md) lists the pieces worth recreating by hand.
 
 ## License
 

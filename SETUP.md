@@ -106,6 +106,10 @@ The manual equivalent, and what `update.sh` does under the hood:
 Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
 
+- 2026-11-23: Fable is now the advisor model by default. Per machine:
+  add `"advisorModel": "fable"` to `~/.claude/settings.json`, or run
+  `/advisor fable` once (see "Advisor model" in section 4). update.sh
+  prints a hint when the key is missing.
 - 2026-11-23: New `~/bin/board-event`, an append-only event log. The
   board and the status page now update at checkpoints (a sync, the wrap,
   a status ask, or an urgent event) from the log, not on every landed
@@ -336,6 +340,23 @@ Work through these once per machine:
   "permissions": { "defaultMode": "auto" }
 }
 ```
+
+### Advisor model (Fable, on by default)
+
+The advisor is a stronger model your session can ask for a second opinion. Sub-agents get it too. Turn it on by adding this to `~/.claude/settings.json` (or run `/advisor fable` once, which writes the same key):
+
+```json
+{
+  "advisorModel": "fable"
+}
+```
+
+Things to know:
+
+- **Fable may need a one-time consent.** On plans where Fable bills to usage credits, run `/model fable` once first. Without that, the advisor is silently not applied.
+- **Needs Claude Code v2.1.321 or later** and Fable access. It is not available on Bedrock, Vertex or Foundry.
+- **To turn it off:** `/advisor off`, remove the key, or set `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`. `--advisor <model>` overrides it for one session.
+- Setting `DISABLE_TELEMETRY` breaks it, because the advisor needs feature flags that come over the network.
 
 ### model-discipline plugin (the agent-model-guard hook)
 
