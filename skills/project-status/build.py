@@ -38,10 +38,11 @@ config.json (optional, keeps anything specific to one person or company out of t
   theme        {"light": {"--token": "value"}} overriding the page's color and font tokens (page.css :root).
                The page keeps one look in light and dark; add "dark" only if you want a separate dark palette.
   brand        {"logo": "logo.svg", "logo_dark": "logo-white.svg", "name": "Example Co"}: an optional logo, paths
-               relative to the config file's folder. "logo" is drawn on light backgrounds, "logo_dark" on dark
-               ones (the default rail is dark, so set "logo_dark" to replace the rail's letter tile). A spot whose
-               variant is missing keeps the letter tile. SVG, PNG, JPEG or WebP, at most 60 KB each.
-               The page shows it at the top of the rail, and above the header on phones.
+               relative to the config file's folder. "logo" is drawn in the light theme, "logo_dark" in the dark
+               one; a missing variant hides the logo in that theme. SVG, PNG, JPEG or WebP, at most 60 KB each.
+               The page shows it at the left of the header.
+  focus        {"up_next": 3, "cap": 5, "parked_patterns": ["^Idea\\b"], "parked_after_days": 14, "feed_note_hours": 24}:
+               the one-screen layout (see derive.DEFAULTS).
 """
 import argparse
 import base64
@@ -117,7 +118,7 @@ def logo_uri(value, base):
 def brand_view(brand, base):
     """The page's brand block: logo data URIs and alt text, or None when no logo loads.
 
-    A missing variant stays missing (no fallback to the other one): a light-background logo on a dark rail
+    A missing variant stays missing (no fallback to the other one): a light-background logo on a dark background
     is near invisible, so the page keeps the letter tile there instead.
     """
     if not isinstance(brand, dict):

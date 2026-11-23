@@ -661,5 +661,69 @@ class DashboardView(unittest.TestCase):
         self.assertEqual(list(v["project_timelines"]), ["a"])
 
 
+class Focus(unittest.TestCase):
+    """focus_view: the one-screen home (hero, up next, running, wins, parked, feed note)."""
+
+    def test_done_today_in_inbox_hides_the_same_open_line(self):
+        data = {"projects": [], "one_offs": [{"title": "Sign two forms", "needs_me": True}, {"title": "Book travel", "needs_me": True}]}
+        inbox = {"items": [{"id": "t1", "kind": "todo", "title": "Sign two forms", "done_at": "2026-01-14T15:00:00Z"}]}
+        v = view(data=data, inbox=inbox)
+        self.assertEqual([i["title"] for i in v["inbox"]["items"]], ["Book travel"])
+        self.assertIn("Sign two forms", [d["title"] for d in v["inbox"]["done_today"]])
+
+    def test_done_on_an_earlier_day_does_not_hide(self):
+        data = {"projects": [], "one_offs": [{"title": "Sign two forms", "needs_me": True}]}
+        inbox = {"items": [{"id": "t1", "kind": "todo", "title": "Sign two forms", "done_at": "2026-01-10T15:00:00Z"}]}
+        self.assertEqual(len(view(data=data, inbox=inbox)["inbox"]["items"]), 1)
+
+    def test_hero_up_next_and_parked(self):
+        inbox = {"items": [
+            {"id": "a", "kind": "todo", "title": "Nudge Ana: the export file", "due": "2026-01-13",
+             "link": "https://tracker.example.com/browse/ENG-9"},
+            {"id": "b", "kind": "todo", "title": "Idea: a new report"},
+            {"id": "c", "kind": "todo", "title": "Plan the spring work", "due": "2026-03-01"},
+            {"id": "d", "kind": "todo", "title": "Approve the agent"},
+        ]}
+        f = view(inbox=inbox, cfg={"tz": "America/Chicago", "tracker_url": "https://tracker.example.com/browse/"})["focus"]
+        self.assertEqual(f["hero"]["action"], "Nudge Ana")
+        self.assertEqual(f["hero"]["open_label"], "Open ENG-9")
+        self.assertTrue(f["hero"]["late"])
+        self.assertEqual(f["hero"]["when"], "1 day late")
+        self.assertEqual([r["title"] for r in f["up_next"]], ["Approve the agent"])
+        self.assertEqual(sorted(r["title"] for r in f["parked"]), ["Idea: a new report", "Plan the spring work"])
+        self.assertEqual((f["needs"], f["late"]), (2, 1))
+
+    def test_nothing_needs_you(self):
+        self.assertIsNone(view()["focus"]["hero"])
+
+    def test_confirm_runs_and_staged_milestone_shows_its_position(self):
+        data = {"projects": [{"id": "a", "name": "A", "next_milestone": "Backfill chunk 2 of 4 copying. More later.",
+                              "next_milestone_date": "2026-01-14"}]}
+        inbox = {"items": [{"id": "c", "kind": "confirm", "title": "Confirm Ana got it", "since": "2026-01-10", "due": "2026-01-17"}]}
+        f = view(data=data, inbox=inbox)["focus"]
+        self.assertIsNone(f["hero"])
+        kinds = [(r["kind"], r["step"]) for r in f["running"]]
+        self.assertIn(("today", "chunk 2 of 4"), kinds)
+        self.assertIn(("delivered", "day 4 of 7"), kinds)
+
+    def test_old_feed_gets_a_note_and_marks_its_rows(self):
+        old = gh(my_prs=[pr(5, review_decision="CHANGES_REQUESTED")], gen="2026-01-12T17:00:00Z")
+        f = view(feeds={"github": old})["focus"]
+        self.assertEqual(f["feed_note"]["sources"], ["github"])
+        self.assertIn("GitHub feed last refreshed 01-12", f["feed_note"]["text"])
+        self.assertTrue(f["hero"]["feed_old"])
+        fresh = view(feeds={"github": gh(my_prs=[pr(5, review_decision="CHANGES_REQUESTED")])})["focus"]
+        self.assertIsNone(fresh["feed_note"])
+        self.assertFalse(fresh["hero"]["feed_old"])
+
+    def test_wins_take_todays_progress_and_skip_status_lines(self):
+        data = {"projects": [{"id": "a", "name": "A", "recent_progress": [
+            {"date": "2026-01-14", "text": "ENG-1 shipped to prod. Notes follow."},
+            {"date": "2026-01-14", "text": "No new chunk has landed yet."},
+            {"date": "2026-01-13", "text": "Old win."}]}]}
+        f = view(data=data)["focus"]
+        self.assertEqual([w["title"] for w in f["wins"]], ["ENG-1 shipped to prod."])
+
+
 if __name__ == "__main__":
     unittest.main()

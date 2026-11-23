@@ -161,12 +161,16 @@ class Build(unittest.TestCase):
         self.assertIn("ENG-142", [u["text"] for u in page_data(html)["unlinked"]])
         self.assertIn("warning: unlinked mention ENG-142", r.stderr)
 
-    def test_page_has_rail_and_sheet_not_drawer(self):
+    def test_page_is_one_focus_screen(self):
         _, html = self.fixture_build()
-        self.assertIn('id="rail"', html)
-        self.assertIn('id="sheet"', html)
-        self.assertNotIn('id="drawer"', html)
+        self.assertNotIn('id="rail"', html)
+        self.assertIn('id="page"', html)
         self.assertIn('<meta charset="utf-8">', html)
+        f = page_data(html)["focus"]
+        for k in ("hero", "up_next", "running", "wins", "parked", "tiles", "feed_note", "cap", "up_next_shown"):
+            self.assertIn(k, f)
+        self.assertIsNotNone(f["hero"])
+        self.assertTrue(f["hero"]["action"])
 
     def test_no_hardcoded_workspace_hosts(self):
         files = [p for p in SKILL.rglob("*") if p.is_file() and p.suffix in (".py", ".js", ".css", ".html", ".json", ".md")

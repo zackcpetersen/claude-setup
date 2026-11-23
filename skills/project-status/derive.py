@@ -37,6 +37,10 @@ DEFAULTS = {
     # links.ticket_keys: tracker project keys ("ENG"); empty links any KEY-123 except standards like UTF-8.
     # links.repos: repo names a "repo #123" mention may name, on top of the repos in the GitHub feed.
     "links": {"patterns": [], "ticket_keys": [], "repos": []},
+    # focus: the home layout. parked_patterns move matching open items to Parked; items due more than
+    # parked_after_days out go there too. feed_note_hours: a GitHub or Slack feed older than this gets a note.
+    "focus": {"up_next": 3, "cap": 5, "parked_patterns": [r"^Idea\b", r"\bParked\b", r"^After\b"],
+              "parked_after_days": 14, "feed_note_hours": 24},
 }
 
 EFFORT = {"merge": 2, "send-draft": 2, "approve-agent": 2, "slack": 5, "nudge": 5, "confirm": 5, "todo": 5,
@@ -505,6 +509,23 @@ def source_state(name, feed, err, cfg, now, tz):
 
 # ---------- done today ----------
 
+def norm_title(text):
+    return re.sub(r"\W+", " ", str(text or "").lower()).strip()
+
+
+def drop_done_today(items, inbox, today, tz):
+    """Open items whose title matches an inbox.json item marked done today are left out.
+
+    The board mirror marks a TODO done in inbox.json while the same line can linger in projects.json (a one-off or an
+    ask). Matching is on the whole title only: a shared ticket link can cover several asks, so links never clear one.
+    """
+    done = {norm_title(s.get("title")) for s in (inbox or {}).get("items") or []
+            if s.get("done_at") and _local_day(s["done_at"], tz) == today and s.get("title")}
+    if not done:
+        return items
+    return [i for i in items if i.get("source") == "session" or norm_title(i.get("title")) not in done]
+
+
 def _local_day(value, tz):
     d = parse_time(value, tz)
     return d.astimezone(tz).date() if d else None
@@ -883,6 +904,186 @@ def linked_data(data, conf):
     return projects, waits, offs
 
 
+# ---------- focus: the home layout ----------
+
+STEP_RE = re.compile(r"\b(chunk|step|part|batch|phase|stage|wave|round) (\d+) of (\d+)\b", re.I)
+NOT_WIN_RE = re.compile(r"\b(no new|not yet|still|overdue|waiting on|is due|to be confirmed|confirming|ends today)\b", re.I)
+
+
+def first_sentence(text):
+    text = " ".join(str(text or "").split())
+    m = re.search(r"\.\s+[A-Z0-9]", text)
+    return text[:m.start() + 1] if m else text
+
+
+def open_label(url, conf):
+    """Button text for a link: the ticket key, repo#N, "thread", else "link"."""
+    url = str(url or "")
+    tracker = str(conf.get("tracker_url") or "")
+    if tracker and "FILL-IN" not in tracker and url.startswith(tracker):
+        key = url[len(tracker):].split("/")[0].split("?")[0]
+        if key:
+            return "Open " + key
+    m = GH_PR.match(url)
+    if m:
+        return f"Open {m.group(2)}#{m.group(3)}"
+    if SLACK_URL.match(url):
+        return "Open thread"
+    return "Open link"
+
+
+def when_label(due, today):
+    d = parse_day(due)
+    if not d:
+        return "", False
+    n = (d - today).days
+    if n < 0:
+        return (f"{-n} day late" if n == -1 else f"{-n} days late"), True
+    if n == 0:
+        return "due today", False
+    if n == 1:
+        return "due tomorrow", False
+    return "due " + d.strftime("%a %m-%d"), False
+
+
+def split_action(title):
+    """("Nudge Ana", "the export file") from "Nudge Ana: the export file"; the whole title when there is no short lead."""
+    t = str(title or "")
+    if ": " in t:
+        head, rest = t.split(": ", 1)
+        if 0 < len(head) <= 64:
+            return head, rest
+    return t, ""
+
+
+def _need_row(it, today, old_sources):
+    when, late = when_label(it.get("due"), today)
+    return {"hid": it.get("hid"), "title": it.get("title") or "", "title_parts": it.get("title_parts"),
+            "link": it.get("link") or "", "when": when, "late": late, "minutes": int(it.get("effort_min") or 5),
+            "source": it.get("source") or "", "project_id": it.get("project_id") or "", "kind": it.get("kind") or "",
+            "why": it.get("why") or "", "feed_old": bool(set(it.get("sources") or [it.get("source")]) & old_sources)}
+
+
+def focus_view(view, feeds, conf, now, tz):
+    """Everything the one-screen home shows: the hero, up next, running, wins, parked, project tiles, feed note."""
+    fc = conf.get("focus") or {}
+    today = date.fromisoformat(view["today"])
+    pats = []
+    for p in fc.get("parked_patterns") or []:
+        try:
+            pats.append(re.compile(p, re.I))
+        except re.error:
+            continue
+    later_days = int(fc.get("parked_after_days") or 14)
+
+    # Feeds older than feed_note_hours get one note near the rows they fed.
+    old, old_sources = [], set()
+    for name in SCRIPT_SOURCES:
+        feed = (feeds or {}).get(name)
+        gen = parse_time((feed or {}).get("generated_at") or (feed or {}).get("updated_at"))
+        if gen and now - gen > timedelta(hours=float(fc.get("feed_note_hours") or 24)):
+            old.append((SOURCE_LABELS.get(name, name), gen.astimezone(tz).strftime("%m-%d %H:%M")))
+            old_sources.add(name)
+    feed_note = None
+    if old:
+        same = len({w for _, w in old}) == 1
+        feed_note = {"sources": sorted(old_sources),
+                     "text": (" and ".join(n for n, _ in old) + (" feed" if len(old) == 1 else " feeds") + f" last refreshed {old[0][1]}"
+                              if same else "; ".join(f"{n} feed last refreshed {w}" for n, w in old))}
+
+    needs, parked, confirms = [], [], []
+    for it in view["inbox"]["items"]:
+        due = parse_day(it.get("due"))
+        if any(p.search(it.get("title") or "") for p in pats) or (due and (due - today).days > later_days):
+            parked.append(_need_row(it, today, old_sources))
+        elif it.get("kind") == "confirm" and not it.get("late"):
+            confirms.append(it)
+        else:
+            needs.append(_need_row(it, today, old_sources))
+
+    names = {p.get("id", ""): p.get("name") or "" for p in view.get("projects") or []}
+    hero = None
+    if needs:
+        h = dict(needs[0])
+        head, rest = split_action(h["title"])
+        h["action"] = head
+        h["detail_parts"] = link_mentions(rest, conf) if rest else []
+        h["open_label"] = open_label(h["link"], conf) if h["link"] else ""
+        h["project"] = names.get(h["project_id"], "")
+        hero = h
+
+    running = []
+    for p in view.get("projects") or []:
+        if p.get("next_milestone_date") == view["today"] and p.get("next_milestone"):
+            text = first_sentence(p["next_milestone"])
+            m = STEP_RE.search(text)
+            running.append({"kind": "today", "title": text, "title_parts": link_mentions(text, conf), "link": "",
+                            "step": m.group(0) if m else "today", "done": int(m.group(2)) - 1 if m else None,
+                            "total": int(m.group(3)) if m else None, "pct": None, "late": False})
+    for pid, js in (view.get("jobs") or {}).items():
+        for j in js:
+            if j.get("finished"):
+                continue
+            step = f"{j.get('done')} of {j.get('total')}" + (f" {j['unit']}" if j.get("unit") else "") if j.get("total") else ""
+            running.append({"kind": "job", "title": f"{names.get(pid, pid)}: {j.get('label')}",
+                            "title_parts": link_mentions(f"{names.get(pid, pid)}: {j.get('label')}", conf), "link": "",
+                            "step": step + (f", done {j['eta'][5:]}" if j.get("eta") else ""), "pct": j.get("pct"),
+                            "late": bool(j.get("late")), "done": None, "total": None})
+    delivered_titles = set()
+    for d in view.get("delivered") or []:
+        delivered_titles.add(d.get("title"))
+        running.append({"kind": "delivered", "title": d.get("title") or "", "title_parts": d.get("title_parts"),
+                        "link": d.get("link") or "", "step": f"day {d['elapsed']} of {d['total']}",
+                        "pct": round(100 * d["elapsed"] / d["total"]) if d.get("total") else 0, "late": bool(d.get("late")),
+                        "done": None, "total": None})
+    for it in confirms:
+        if it.get("title") in delivered_titles:
+            continue
+        running.append({"kind": "confirm", "title": it.get("title") or "", "title_parts": it.get("title_parts"),
+                        "link": it.get("link") or "", "step": "to confirm", "pct": None, "late": False,
+                        "done": None, "total": None})
+    waits = []
+    scale = (view.get("waiting") or {}).get("scale_days") or 1
+    for w, r in zip(view.get("waiting_on") or [], (view.get("waiting") or {}).get("rows") or []):
+        if r.get("late") or r.get("due_today"):
+            continue  # a nudge that is due is under needs you
+        days = r.get("days")
+        nudge = f", nudge {w['nudge_due'][5:10]}" if w.get("nudge_due") else ""
+        waits.append(((w.get("nudge_due") is None), days or 0, {
+            "kind": "wait", "person": w.get("person") or "someone", "title": w.get("what") or "",
+            "title_parts": w.get("what_parts"), "link": w.get("link") or "",
+            "step": (f"waiting {days}d" if days is not None else "waiting") + nudge,
+            "pct": round(100 * days / scale) if days is not None else None, "late": False, "done": None, "total": None}))
+    waits.sort(key=lambda x: (x[0], x[1]))
+    running += [w for _, _, w in waits]
+
+    wins = []
+    for p in view.get("projects") or []:
+        for rp in p.get("recent_progress") or []:
+            text = rp.get("text") or ""
+            if rp.get("date") == view["today"] and text and not NOT_WIN_RE.search(first_sentence(text)):
+                short = first_sentence(text)
+                wins.append({"title": short, "title_parts": link_mentions(short, conf), "link": "", "full": text})
+    for d in view["inbox"].get("done_today") or []:
+        ref = str(d.get("ref") or "")
+        link = ref[4:] if ref.startswith("url:https://") else ""
+        wins.append({"title": d.get("title") or "", "title_parts": link_mentions(d.get("title") or "", conf), "link": link,
+                     "full": d.get("title") or ""})
+
+    tiles = []
+    for p in view.get("projects") or []:
+        items = [i for g in p.get("breakdown") or [] for i in g.get("items") or []]
+        mine = [n for n in needs if n["project_id"] == p.get("id")]
+        tiles.append({"id": p.get("id", ""), "pct": p.get("progress_pct"), "steps_done": sum(1 for i in items if i.get("state") == "done"),
+                      "steps_total": len(items), "needs": len(mine), "late": sum(1 for n in mine if n["late"])})
+
+    merged = next((s["n"] for s in ((view.get("pipeline") or {}).get("stages") or []) if s["key"] == "merged"), 0)
+    return {"hero": hero, "up_next": needs[1:], "up_next_shown": int(fc.get("up_next") or 3), "cap": int(fc.get("cap") or 5),
+            "running": running, "wins": wins, "parked": parked, "tiles": tiles, "feed_note": feed_note,
+            "needs": len(needs), "late": sum(1 for n in needs if n["late"]), "minutes": sum(n["minutes"] for n in needs),
+            "merged_this_week": merged}
+
+
 # ---------- the whole view ----------
 
 def next_meeting(inbox, now, tz):
@@ -918,7 +1119,7 @@ def build_view(data, cfg, inbox, feeds, prev_state, now, errors=None):
     raw = shown + snoozed + project_items(data, today)
     raw += github_items(feeds.get("github"), overrides, ib.get("no_ci_repos") or [])
     raw += slack_items(feeds.get("slack"), ib.get("slack_url") or "", overrides)
-    merged = dedupe(raw)
+    merged = drop_done_today(dedupe(raw), inbox, today, tz)
 
     prev_open = prev_state.get("open") or {}
     for it in merged:
@@ -992,4 +1193,5 @@ def build_view(data, cfg, inbox, feeds, prev_state, now, errors=None):
     view["delivered"] = delivered_view(items, later, today, tz)
     view["projects"], view["waiting_on"], view["one_offs"] = linked_data(data, conf)
     view["unlinked"] = unlinked_mentions(view, data, inbox, conf)
+    view["focus"] = focus_view(view, feeds, conf, now, tz)
     return view, state
