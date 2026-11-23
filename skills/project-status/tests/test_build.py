@@ -167,10 +167,15 @@ class Build(unittest.TestCase):
         self.assertIn('id="page"', html)
         self.assertIn('<meta charset="utf-8">', html)
         f = page_data(html)["focus"]
-        for k in ("hero", "up_next", "running", "wins", "parked", "tiles", "feed_note", "cap", "up_next_shown"):
+        for k in ("hero", "up_next", "running", "wins", "parked", "tiles", "feed_note", "cap", "up_next_shown",
+                  "late_items", "shelf"):
             self.assertIn(k, f)
         self.assertIsNotNone(f["hero"])
         self.assertTrue(f["hero"]["action"])
+        self.assertEqual(f["late"], len(f["late_items"]))
+        # The GitHub page reads the pipeline and stats the build already carries.
+        for k in ("pipeline", "stats", "feeds"):
+            self.assertIn(k, page_data(html))
 
     def test_no_hardcoded_workspace_hosts(self):
         files = [p for p in SKILL.rglob("*") if p.is_file() and p.suffix in (".py", ".js", ".css", ".html", ".json", ".md")
