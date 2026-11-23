@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
-"""board-event: the board's append-only event log, one JSON object per line.
-
-Write each fact once (`add`); the board and the status page read what is new since
-their cursor (`since`, `today`) at checkpoints. One file per local day in
-~/.claude/board-events/ (override with BOARD_EVENTS_DIR). Exit 0 ok, 1 when the event
-could not be logged, 2 on a usage or validation error. Standard library only. See
-skills/board/SKILL.md, "Event log".
-"""
+"""board-event: the board's append-only event log, one JSON object per line, one file per local day
+in ~/.claude/board-events/ (or BOARD_EVENTS_DIR). Write each fact once (`add`); views read what is new
+(`since`, `today`) at checkpoints. Exit 0 ok, 1 not logged, 2 usage error. See skills/board/SKILL.md."""
 
 import argparse
 import fcntl
@@ -25,7 +20,7 @@ KINDS = {
     "draft-created": False, "draft-sent": False, "waiting-on": False, "needs-you": True,
     "cleared": False, "goal-tick": False, "note": False,
 }
-NEVER_DEDUPED = {"failed", "needs-you"}  # a repeat must re-raise, unless --dedupe is given
+NEVER_DEDUPED = {"failed", "needs-you", "cleared"}  # a repeat must re-raise or re-clear, unless --dedupe is given
 TEXT_MAX = 300
 FIELD_MAX = 6 * 1024
 LINE_MAX = 8 * 1024
@@ -55,9 +50,10 @@ def read_file(path, warn):
     for raw in (path.read_text() if path.exists() else "").splitlines():
         try:
             ev = json.loads(raw)
-            assert isinstance(ev, dict) and ID_RE.match(str(ev.get("id", "")))
+            if not isinstance(ev, dict) or not ID_RE.match(str(ev.get("id", ""))):
+                raise ValueError("no event id")
             out.append((ev, raw))
-        except (ValueError, AssertionError):
+        except ValueError:
             if raw.strip():
                 warn.append(f"{path.name}: skipped a line that does not parse")
     return out
@@ -71,7 +67,7 @@ def parse_fields(pairs):
             raise Invalid(f"--field needs key=value with a lower-case key, got {pair!r}")
         if len(value) > FIELD_MAX:
             raise Invalid(f"--field {key} is over {FIELD_MAX} characters")
-        fields[key] = int(value) if re.fullmatch(r"-?\d{1,15}", value) else {"true": True, "false": False}.get(value, value)
+        fields[key] = int(value) if re.fullmatch(r"-?(0|[1-9]\d{0,14})", value) else {"true": True, "false": False}.get(value, value)
     return fields
 
 
@@ -102,10 +98,10 @@ def build_event(args):
 
 
 def is_cleared_after(match, later):
-    """True when a `cleared` event after `match` targets it (fields.clears or a shared link)."""
+    """True when a `cleared` event after `match` targets it: fields.clears, or the same key and a shared link."""
     links = set(match.get("links") or [])
-    return any(ev.get("kind") == "cleared" and ((ev.get("fields") or {}).get("clears") == match["id"]
-                                                or links & set(ev.get("links") or [])) for ev in later)
+    return any(ev.get("kind") == "cleared" and ((ev.get("fields") or {}).get("clears") == match["id"] or (
+        ev.get("key") == match.get("key") and links & set(ev.get("links") or []))) for ev in later)
 
 
 def find_duplicate(ev, events):
@@ -118,12 +114,14 @@ def find_duplicate(ev, events):
 def next_id(now, last_id):
     prefix = now.strftime("%Y%m%dT%H%M%SZ")
     if last_id and last_id[:16] >= prefix:  # same second, or the clock stepped back: stay after the last id
-        return f"{last_id[:16]}-{int(last_id[17:]) + 1:04d}"
+        if int(last_id[17:]) < 9999:
+            return f"{last_id[:16]}-{int(last_id[17:]) + 1:04d}"
+        prefix = (datetime.strptime(last_id[:16], "%Y%m%dT%H%M%SZ") + timedelta(seconds=1)).strftime("%Y%m%dT%H%M%SZ")
     return f"{prefix}-0001"
 
 
 def add(args):
-    ev = build_event(args)  # Invalid -> exit 2, before anything touches the disk
+    ev = build_event(args)  # Invalid -> exit 2; nothing is written to a day file
     folder = events_dir()
     now = utcnow().replace(microsecond=0)
     today = local_day(now)

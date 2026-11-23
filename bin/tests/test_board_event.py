@@ -107,9 +107,10 @@ class BoardEventTests(unittest.TestCase):
         self.assertNotIn("URGENT", self.run_cli("add", "failed", "k", "flaky", "--no-urgent")[1])
         self.assertIn("URGENT", self.run_cli("add", "note", "k", "look now", "--urgent")[1])
         self.add("job-progress", "k", "moved", "--field", "done=134000", "--field", "neg=-3",
-                 "--field", "ok=true", "--field", "off=false", "--field", "eta=2026-12-01", "--field", "who=a=b")
+                 "--field", "ok=true", "--field", "off=false", "--field", "eta=2026-12-01", "--field", "who=a=b", "--field", "zip=0042")
         self.assertEqual(self.lines()[-1]["fields"],
-                         {"done": 134000, "neg": -3, "ok": True, "off": False, "eta": "2026-12-01", "who": "a=b"})
+                         {"done": 134000, "neg": -3, "ok": True, "off": False, "eta": "2026-12-01", "who": "a=b", "zip": "0042"})
+        self.assertEqual(B.next_id(NOON, "20261120T183012Z-9999"), "20261120T183013Z-0001")  # counter full
 
     def test_reraised_wait_after_clear_is_written(self):
         link = "https://example.invalid/thread/1"
@@ -120,8 +121,12 @@ class BoardEventTests(unittest.TestCase):
         self.add("needs-you", "k", "Approve it", "--link", link, "--dedupe", "ask-1")
         self.add("cleared", "k", "Approved", "--link", link)
         self.add("needs-you", "k", "Approve it", "--link", link, "--dedupe", "ask-1")
-        self.assertEqual([e["kind"] for e in self.lines()],
-                         ["waiting-on", "cleared", "waiting-on", "needs-you", "cleared", "needs-you"])
+        self.add("cleared", "k", "Approved", "--link", link)  # a second identical clear is still written
+        self.add("waiting-on", "k", "Waiting on the export file", "--link", link)
+        self.add("cleared", "other", "Other item done", "--link", link)  # another key's clear lifts nothing
+        self.assertTrue(self.run_cli("add", "waiting-on", "k", "Waiting on the export file", "--link", link)[1].startswith("exists"))
+        self.assertEqual([e["kind"] for e in self.lines()], ["waiting-on", "cleared", "waiting-on", "needs-you",
+                                                             "cleared", "needs-you", "cleared", "waiting-on", "cleared"])
 
     def test_unwritable_folder_exits_1_with_warning(self):
         blocker = Path(self.tmp.name) / "afile"
@@ -141,16 +146,13 @@ class BoardEventTests(unittest.TestCase):
         self.assertEqual(err.count("warning:"), 1)
 
     def test_parallel_adds_keep_every_line_and_unique_ids(self):
-        script = ("import importlib.machinery as m, importlib.util as u, sys\n"
-                  "L = m.SourceFileLoader('b', sys.argv[1]); B = u.module_from_spec(u.spec_from_loader('b', L))\n"
-                  "L.exec_module(B)\n"
-                  "for i in range(25):\n"
-                  "    assert B.main(['add', 'note', 'k', f'w{sys.argv[2]} n{i}']) == 0\n")
+        script = ("import importlib.machinery as m, importlib.util as u, sys; L = m.SourceFileLoader('b', sys.argv[1])\n"
+                  "B = u.module_from_spec(u.spec_from_loader('b', L)); L.exec_module(B)\n"
+                  "assert all(B.main(['add', 'note', 'k', f'w{sys.argv[2]} n{i}']) == 0 for i in range(25))\n")
         procs = [subprocess.Popen([sys.executable, "-c", script, str(BIN / "board-event"), str(w)],
                                   stdout=subprocess.DEVNULL) for w in range(8)]
         self.assertEqual([p.wait() for p in procs], [0] * 8)
-        events = [json.loads(x) for f in sorted(self.dir.glob("*.jsonl")) for x in f.read_text().splitlines()]
-        ids = [e["id"] for e in events]
+        ids = [json.loads(x)["id"] for f in sorted(self.dir.glob("*.jsonl")) for x in f.read_text().splitlines()]
         self.assertEqual(len(ids), 200)
         self.assertEqual(ids, sorted(set(ids)))
 
