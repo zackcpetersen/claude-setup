@@ -12,8 +12,7 @@ Home, in three columns:
 - **Header**: the date, build time and count chips, each a link: "need you" with total minutes (`#need`), "late" (`#late`), "running" (`#running`), "wins today" (`#wins`), and "GitHub stats" (`#github`).
 - **Do this first** (the hero): the single most important open item, with its one next action, a rough time in minutes, an Open button to its link and its project. When nothing needs the user it says "Nothing needs you" and points at what is running.
 - **Up next**: the next 3 items that need the user, one row each with the action, the date and minutes. The rest fold behind "Show N more". Rows from a GitHub or Slack feed older than 24 hours carry an "old feed" badge, explained once in a note at the end of this card.
-- **Parked**: ideas and later items, collapsed. An open item lands here when its title starts with "Idea" or "After", says "Parked", or is due more than 14 days out (config `focus`).
-- **Shelf**: things kept for some day that are on no list, collapsed and hidden when empty. Read from `shelf[]` in `projects.json`.
+- **Shelf** (the user also says "parked" or "loose ends"): one collapsed section with one total count, capped at 5 when open. It holds the open items the page parks (tag "idea" or "later": a title that starts with "Idea" or "After", says "Parked", or is due more than 14 days out, config `focus`; tag "snoozed" with its "back MM-DD" date) and the loose ends from `shelf[]` in `projects.json` (tag "loose end", with its age in days and a quiet "over 14d" flag past `shelf.stale_days`). The summary shows "N of 12 loose ends" when `shelf.cap` is set. When empty it still shows, with "Shelf is empty".
 - **Projects in progress**: one row per project, sorted by priority (P1 first): a ring (percent), name, priority and status, a step bar with "X of Y steps", the next milestone, its ticket and Slack channel links, and "late" and "for you" badges. The name opens the project's own page.
 - **Running without you**: things in flight that need nothing from the user: today's dated milestones (with their position, "chunk 2 of 4" or "3 of 10 files", when the text says so, else "today"), long jobs, deliveries counting down to their confirm-by date ("day X of Y"), and the people we wait on (aging bars). 5 shown, the rest folded.
 - **Wins today**: today's progress lines, one-offs finished today and the items cleared today, 5 shown, the rest folded. "N PRs merged this week" opens the GitHub page.
@@ -25,7 +24,7 @@ Other pages (hash routes; each has a "Today" link back, and Esc goes home):
 |---|---|
 | `#need` | Every item that needs the user, in order, with its project |
 | `#late` | Every late item (late asks and nudges, late milestones and jobs, passed project deadlines) with its date, link and project |
-| `#running`, `#wins`, `#parked`, `#shelf` | The full list behind each home card |
+| `#running`, `#wins`, `#shelf` (also `#parked`) | The full list behind each home card |
 | `#p-<id>` | One project: header (ring, priority, status, deadline, steps, all tickets and Slack links, summary), then Late (first, in coral, each with its date and link), Needs you, Next (with how the percent was worked out), Running, Breakdown, Recent progress, Decisions and Links |
 | `#github` (also `#github-<me or team>-<30 or 90>`) | PR pipeline by stage (with CI failed and conflict flags), reviews asked of the user, and the stats: PRs merged, reviews given, time to first review and to merge (with sparklines), merged per week (chart and table), review load, turnaround (median and p90), PRs by repo group and the data range. Me or team, 30 or 90 days |
 
@@ -44,11 +43,11 @@ Nothing in this skill names a company, person or project. Those come from the da
 | `template.html` | The page shell. `build.py` inlines `page.css`, `page.js`, the theme and the data into it, so the published page is one file |
 | `page.css`, `page.js` | All styles and all page code: a few reusable parts (`row`, `list`, `section`, `subpage`) and a hash router (`ROUTES`). Neutral colors, no names or links baked in |
 | `build.py` | Turns a data file (and optional config and home folder) into the page. The data format is in its docstring |
-| `derive.py` | Every rule the page shows: inbox items, dedupe, bands, freshness, done today, job finish dates, waiting and delivery bars, mention links, and `focus_view` (hero, up next, running, wins, parked, shelf, the late list, project tiles with their tickets and Slack links, feed note) |
+| `derive.py` | Every rule the page shows: inbox items, dedupe, bands, freshness, done today, job finish dates, waiting and delivery bars, mention links, and `focus_view` (hero, up next, running, wins, the shelf, the late list, project tiles with their tickets and Slack links, feed note) |
 | `inbox.py` | The only way the session writes `inbox.json` |
 | `add_oneoff.py` | Adds or finishes a one-off in the data file |
 | `job.py` | Records progress on a long job (a backfill, a big export) in the data file |
-| `config.example.json` | Starter config: title, tracker and GitHub link bases, footer note, time zone, inbox and feed settings, logo, color overrides |
+| `config.example.json` | Starter config: title, tracker and GitHub link bases, footer note, time zone, inbox and feed settings, shelf source and cap, logo, color overrides |
 | `sample-data.json`, `sample-home/` | Made-up data, inbox and feeds to try the page with |
 | `tests/` | `unittest` tests: `python3 -m unittest discover -s skills/project-status/tests` |
 | `~/bin/status-feeds` | From `bin/` in this repo. Writes the GitHub and Slack feed files on a schedule, no model in the loop |
@@ -99,11 +98,11 @@ If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the 
    - Keep `one_offs` and every project's `jobs` already in the file. They are the user's own list and `job.py`'s.
    - Set `next_milestone_date` (`YYYY-MM-DD`) when the next milestone has a date, so it shows under Running without you on that day. Start its first sentence with the position when the work is staged ("chunk 1 of 4").
    - Each project lists its tickets and Slack channel in `links[]` (`{"label": "#channel-name", "url": "<channel link>"}`), plus its `epic`. The page shows them on the project's row and page; a project without them shows "none in the data".
-   - Keep `shelf` as it is (the user's own list).
+   - Fill `shelf` from the loose-ends source named by `shelf.source` in `config.json` (for the `tidy` skill, the Projects row named by the `Loose ends` line in `~/.claude/config/tidy.md`): one `{title, added, link, done}` per checklist line (`- [ ] item (added YYYY-MM-DD) link`; a ticked line is `done: true`). Copy the lines as they are; never add or drop one. Without `shelf.source`, keep `shelf` as it is.
    - Every item carries a link to its source when it names one: `link` on asks and waits, `ref` or `links[]` for tickets, PRs, Notion pages, Slack threads, runs and docs.
    - Keep `link`, `effort` and `who_waits` fields when present, and set `needs_me[].link` and `waiting_on[].link` whenever the source line has a URL (a Slack thread, a PR), so items merge with the feeds instead of showing twice.
    - Follow "Writing style" above for every line (outcome or action first, one fact per line, "chunk X of Y" for staged work, concrete wins, plain hyphens). Leave out finished projects.
-   - Skip the Projects row named by the `Loose ends` line in `~/.claude/config/tidy.md` (older installs: `### Tidy` in `~/.claude/CLAUDE.md`) (the `tidy` skill's catch-all list).
+   - Do not show the loose-ends row as a project: skip the Projects row named by the `Loose ends` line in `~/.claude/config/tidy.md` (older installs: `### Tidy` in `~/.claude/CLAUDE.md`) (the `tidy` skill's catch-all list).
    - Return a short list of anything unsure or stale. Relay it.
 2. **Check** the data before building: drop asks the user already answered in this session, and links that are not `https://`.
 3. **Build**: `python3 ~/.claude/skills/project-status/build.py ~/.claude/project-status/projects.json <scratchpad>/project-status.html --config ~/.claude/project-status/config.json --home ~/.claude/project-status`. Relay any `warning: unlinked mention` lines it prints and fix them (see "Links").

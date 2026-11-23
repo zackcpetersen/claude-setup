@@ -25,8 +25,8 @@ projects.json:
   one_offs[]   title (the only required field), state, needs_me (true/false), due, note, ref, progress_pct,
                done_on (YYYY-MM-DD; a done one-off shows under Wins today on that day)
                Small standalone items that belong to no project. Add or finish one with add_oneoff.py.
-  shelf[]      title (or a plain string), note, link, added, project_id: things kept for some day, on no list.
-               The page shows them in a collapsed Shelf card (hidden when empty) and on #shelf.
+  shelf[]      {title, added (YYYY-MM-DD), link, done} or a plain string: the loose-ends list, copied by the gather
+               step from config shelf.source. Shown with the parked items in the collapsed Shelf and on #shelf.
 Every field except a project's id and name is optional; the page skips what is missing.
 `link` on a needs_me or waiting_on row (a PR or Slack thread URL) lets the inbox merge it with the feeds.
 
@@ -46,6 +46,8 @@ config.json (optional, keeps anything specific to one person or company out of t
                relative to the config file's folder. "logo" is drawn in the light theme, "logo_dark" in the dark
                one; a missing variant hides the logo in that theme. SVG, PNG, JPEG or WebP, at most 60 KB each.
                The page shows it at the left of the header.
+  shelf        {"source": "<loose-ends page>", "cap": 12, "stale_days": 14}: where the gather step reads loose ends,
+               the list's size limit ("N of 12") and the age past which a loose end is flagged.
   focus        {"up_next": 3, "cap": 5, "parked_patterns": ["^Idea\\b"], "parked_after_days": 14, "feed_note_hours": 24}:
                the one-screen layout (see derive.DEFAULTS).
 """

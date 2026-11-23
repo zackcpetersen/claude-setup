@@ -108,7 +108,9 @@ than 6 months.
 
 - 2026-11-23: The `project-status` page becomes one screen: a "Do this
   first" card, up next, running without you, wins today, a folded
-  Parked list, a Shelf list (`shelf[]` in `projects.json`) and one row
+  Shelf (parked items plus loose ends from `shelf[]` in `projects.json`;
+  optional `shelf` block in `config.json` with `source`, `cap` and
+  `stale_days`; `#parked` still opens it) and one row
   per project by priority, each opening its own page (`#p-<id>`). Every
   header count opens its rows (`#need`, `#late`, `#running`, `#wins`), and
   `#github` holds the PR pipeline, review requests and stats. The nav
