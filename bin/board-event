@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""board-event: the board's append-only event log, one JSON object per line.
+
+Write each fact once (`add`); the board and the status page read what is new since
+their cursor (`since`, `today`) at checkpoints. One file per local day in
+~/.claude/board-events/ (override with BOARD_EVENTS_DIR). Exit 0 ok, 1 when the event
+could not be logged, 2 on a usage or validation error. Standard library only. See
+skills/board/SKILL.md, "Event log".
+"""
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import re
+import sys
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+# kind -> urgent by default
+KINDS = {
+    "merged": False, "deployed": False, "run-started": False, "run-finished": False,
+    "failed": True, "job-progress": False, "job-done": False, "decision": False,
+    "draft-created": False, "draft-sent": False, "waiting-on": False, "needs-you": True,
+    "cleared": False, "goal-tick": False, "note": False,
+}
+NEVER_DEDUPED = {"failed", "needs-you"}  # a repeat must re-raise, unless --dedupe is given
+TEXT_MAX = 300
+FIELD_MAX = 6 * 1024
+LINE_MAX = 8 * 1024
+ID_RE = re.compile(r"^\d{8}T\d{6}Z-\d{4}$")
+FIELD_KEY_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+class Invalid(Exception):
+    """A usage or validation error: exit 2."""
+
+
+def utcnow():
+    return datetime.now(timezone.utc)
+
+
+def events_dir():
+    return Path(os.environ.get("BOARD_EVENTS_DIR") or Path.home() / ".claude" / "board-events")
+
+
+def local_day(now):
+    return now.astimezone().date()
+
+
+def read_file(path, warn):
+    """(event, raw line) pairs of one day file. A line that does not parse (a torn write) is skipped."""
+    out = []
+    for raw in (path.read_text() if path.exists() else "").splitlines():
+        try:
+            ev = json.loads(raw)
+            assert isinstance(ev, dict) and ID_RE.match(str(ev.get("id", "")))
+            out.append((ev, raw))
+        except (ValueError, AssertionError):
+            if raw.strip():
+                warn.append(f"{path.name}: skipped a line that does not parse")
+    return out
+
+
+def parse_fields(pairs):
+    fields = {}
+    for pair in pairs or []:
+        key, sep, value = pair.partition("=")
+        if not sep or not FIELD_KEY_RE.match(key):
+            raise Invalid(f"--field needs key=value with a lower-case key, got {pair!r}")
+        if len(value) > FIELD_MAX:
+            raise Invalid(f"--field {key} is over {FIELD_MAX} characters")
+        fields[key] = int(value) if re.fullmatch(r"-?\d{1,15}", value) else {"true": True, "false": False}.get(value, value)
+    return fields
+
+
+def dedupe_value(kind, key, ref, text, links, fields):
+    blob = "|".join([kind, key, ref or "", text, json.dumps(sorted(links)), json.dumps(fields, sort_keys=True)])
+    return hashlib.sha1(blob.encode()).hexdigest()[:12]
+
+
+def build_event(args):
+    if args.kind not in KINDS:
+        raise Invalid(f"unknown kind {args.kind!r}; one of: {', '.join(KINDS)}")
+    for name, value, cap in (("key", args.key, 80), ("text", args.text, TEXT_MAX)):
+        if not value.strip() or "\n" in value or "\r" in value:
+            raise Invalid(f"{name} must be one non-empty line")
+        if len(value) > cap:
+            raise Invalid(f"{name} is over {cap} characters")
+    links = args.link or []
+    for link in links:
+        if not re.match(r"^https?://\S+$", link):
+            raise Invalid(f"--link must be an http(s) URL, got {link!r}")
+    fields = parse_fields(args.field)
+    ev = {"v": 1, "id": None, "ts": None, "day": None, "key": args.key, "kind": args.kind, "text": args.text}
+    ev.update({k: v for k, v in (("links", links), ("ref", args.ref), ("project", args.project), ("fields", fields)) if v})
+    ev["urgent"] = KINDS[args.kind] if args.urgent is None else args.urgent
+    ev["by"] = args.by or os.environ.get("BOARD_EVENT_BY") or "main"
+    ev["dedupe"] = args.dedupe or dedupe_value(args.kind, args.key, args.ref, args.text, links, fields)
+    return ev
+
+
+def is_cleared_after(match, later):
+    """True when a `cleared` event after `match` targets it (fields.clears or a shared link)."""
+    links = set(match.get("links") or [])
+    return any(ev.get("kind") == "cleared" and ((ev.get("fields") or {}).get("clears") == match["id"]
+                                                or links & set(ev.get("links") or [])) for ev in later)
+
+
+def find_duplicate(ev, events):
+    for i, old in enumerate(events):
+        if old.get("dedupe") == ev["dedupe"] and old.get("kind") == ev["kind"] and not is_cleared_after(old, events[i + 1:]):
+            return old
+    return None
+
+
+def next_id(now, last_id):
+    prefix = now.strftime("%Y%m%dT%H%M%SZ")
+    if last_id and last_id[:16] >= prefix:  # same second, or the clock stepped back: stay after the last id
+        return f"{last_id[:16]}-{int(last_id[17:]) + 1:04d}"
+    return f"{prefix}-0001"
+
+
+def add(args):
+    ev = build_event(args)  # Invalid -> exit 2, before anything touches the disk
+    folder = events_dir()
+    now = utcnow().replace(microsecond=0)
+    today = local_day(now)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        with open(folder / ".lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            warn = []
+            recent = [e for d in (today - timedelta(days=1), today) for e, _ in read_file(folder / f"{d}.jsonl", warn)]
+            if args.dedupe or ev["kind"] not in NEVER_DEDUPED:
+                dup = find_duplicate(ev, recent)
+                if dup:
+                    print(f"exists {dup['id']}")
+                    return 0
+            ev["id"] = next_id(now, max((e["id"] for e in recent), default=None))
+            ev["ts"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+            ev["day"] = today.isoformat()
+            line = json.dumps(ev, ensure_ascii=False, separators=(", ", ": ")) + "\n"
+            data = line.encode()
+            if len(data) > LINE_MAX:
+                raise Invalid(f"event is over {LINE_MAX} bytes")
+            path = folder / f"{today}.jsonl"
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                if os.fstat(fd).st_size and not path.read_bytes().endswith(b"\n"):
+                    data = b"\n" + data  # a torn line from a crash: start the new event on its own line
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+    except OSError as e:
+        print(f"warning: event not logged: {e}", file=sys.stderr)
+        return 1
+    print(f"added {ev['id']}")
+    if ev["urgent"]:
+        print(f"URGENT {ev['id']} {ev['kind']} {ev['key']}: {ev['text']}")
+    return 0
+
+
+def read_days(days):
+    """Events from the given day files, in id order, under a brief shared lock."""
+    folder = events_dir()
+    if not folder.is_dir():
+        return []
+    warn, rows = [], []
+    with open(folder / ".lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_SH)
+        for d in days(folder):
+            rows.extend(read_file(folder / f"{d}.jsonl", warn))
+    for w in warn:
+        print(f"warning: {w}", file=sys.stderr)
+    return sorted(rows, key=lambda r: r[0]["id"])
+
+
+def all_days(folder, start=date.min):
+    names = (p.stem for p in folder.glob("*.jsonl") if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.stem))
+    return sorted(d for d in map(date.fromisoformat, names) if d >= start)
+
+
+def cursor_id(value):
+    if ID_RE.match(value):
+        return value
+    try:
+        when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise Invalid(f"since needs an event id or an ISO time, got {value!r}")
+    return when.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-9999"
+
+
+def show(rows, as_json, kinds=None, key=None):
+    for ev, raw in rows:
+        if (kinds and ev.get("kind") not in kinds) or (key and ev.get("key") != key):
+            continue
+        if as_json:
+            print(raw)
+        else:
+            links = f" [{', '.join(ev['links'])}]" if ev.get("links") else ""
+            print(f"{ev['id']} {ev.get('kind')} {ev.get('key')}: {ev.get('text')}{links}")
+    return 0
+
+
+def since(args):
+    cur = cursor_id(args.cursor)
+    # ids are UTC and files are local days: start one day before the id's UTC date
+    start = date(int(cur[:4]), int(cur[4:6]), int(cur[6:8])) - timedelta(days=1)
+    rows = [r for r in read_days(lambda f: all_days(f, start)) if r[0]["id"] > cur]
+    return show(rows, args.json, args.kind, args.key)
+
+
+def today(args):
+    return show(read_days(lambda f: [local_day(utcnow())]), args.json)
+
+
+def parser():
+    p = argparse.ArgumentParser(prog="board-event", description="The board's append-only event log.")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    a = sub.add_parser("add", help="append one event: add <kind> <key> <text>")
+    for name in ("kind", "key", "text"):
+        a.add_argument(name)
+    for name in ("--link", "--field"):
+        a.add_argument(name, action="append")
+    for name in ("--ref", "--project", "--dedupe", "--by"):
+        a.add_argument(name)
+    a.add_argument("--urgent", dest="urgent", action="store_true", default=None)
+    a.add_argument("--no-urgent", dest="urgent", action="store_false")
+    s = sub.add_parser("since", help="events after an event id or ISO time")
+    s.add_argument("cursor")
+    s.add_argument("--kind", action="append")
+    s.add_argument("--key")
+    t = sub.add_parser("today", help="today's events")
+    for sp, func in ((a, add), (s, since), (t, today)):
+        sp.set_defaults(func=func)
+        if sp in (s, t):
+            sp.add_argument("--json", action="store_true", help="print the raw lines")
+    return p
+
+
+def main(argv=None):
+    args = parser().parse_args(argv)
+    try:
+        return args.func(args)
+    except Invalid as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    except OSError as e:  # a folder the reader cannot open
+        print(f"warning: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
