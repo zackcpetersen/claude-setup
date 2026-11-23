@@ -106,6 +106,10 @@ The manual equivalent, and what `update.sh` does under the hood:
 Newest first. Only entries that need a manual step; delete entries older
 than 6 months.
 
+- 2026-11-23: Board wrap now ends by asking for `/clear` every day, and
+  wrap.md has a pickup check for the new session (waits, Slack poll).
+  Per machine: run ./update.sh; reinstall model-discipline (version
+  1.2.2, the update.sh output has the command) and restart.
 - 2026-11-23: The `project-status` page becomes one screen: a "Do this
   first" card, up next, running without you, wins today, a folded
   Shelf (parked items plus loose ends from `shelf[]` in `projects.json`;

@@ -17,7 +17,7 @@ One place to see all active work. State lives in a Notion database with one row 
 | `/board resume <key>` | Restart a stream from its registry row after a session restart | start.md |
 | `/board status [<key>]` | Stage of one or all streams, from files first, agents second | start.md |
 | `/board access` | Run the morning access check alone and list what still needs the user | SKILL.md |
-| `/board wrap` | End of day: verify today's drafts went out, clean merged worktrees and branches, stop strays and the Slack poll, list temporary permission rules, write the handoff | wrap.md |
+| `/board wrap` | End of day: verify today's drafts went out, clean merged worktrees and branches, stop strays and the Slack poll, list temporary permission rules, write the handoff, ask for `/clear`; pickup checks after any `/clear` | wrap.md |
 | `/board tidy` | Run the `tidy` skill's weekly mode now | SKILL.md |
 | `/board done <text>` / `/board defer <text>` | Tick or move one line on Your view. `done oncall: <text>` appends `- [x] oncall: <text>` to Done today, which the next standup puts under Oncall | SKILL.md |
 
