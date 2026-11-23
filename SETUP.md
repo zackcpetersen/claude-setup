@@ -108,8 +108,11 @@ than 6 months.
 
 - 2026-11-23: The `project-status` page becomes one screen: a "Do this
   first" card, up next, running without you, wins today, a folded
-  Parked list and project rings. The nav rail, KPI tiles, timeline and
-  separate pages are gone; old page links open the same page. Nothing
+  Parked list, a Shelf list (`shelf[]` in `projects.json`) and one row
+  per project by priority, each opening its own page (`#p-<id>`). Every
+  header count opens its rows (`#need`, `#late`, `#running`, `#wins`), and
+  `#github` holds the PR pipeline, review requests and stats. The nav
+  rail and timeline are gone; old page links open the nearest page. Nothing
   breaks: old data and config files build. Per machine: if
   `config.json` sets only `brand.logo_dark`, also set `brand.logo`, or
   the logo stays hidden in the light theme (the header is no longer a
@@ -117,7 +120,7 @@ than 6 months.
   also set `--on-rail` (its headline) and, in `theme.dark`, `--hero` (the
   hero's dark mix). Optional: a `focus` block in `config.json` (`up_next`,
   `cap`, `parked_patterns`, `parked_after_days`, `feed_note_hours`). The
-  `eng-stats` schedule can stay; the page does not show its numbers yet.
+  `eng-stats` schedule stays; its numbers show on `#github`.
 
 - 2026-11-<merge day>: Workflow and self-review changes. Per machine: run
   ./update.sh; reinstall model-discipline (version 1.2.0, the update.sh

@@ -15,13 +15,18 @@ projects.json:
                progress_pct (0-100), progress_basis, next_milestone, deadline,
                needs_me[] {ask, ticket, due, link, effort ("5m"), who_waits}, summary,
                breakdown[] {group, items[] {text, state (done | in progress | waiting | blocked | not started), owner, ref, date}},
-               decisions[] {date, decision}, recent_progress[] {date, text}, links[] {label, url},
+               decisions[] {date, decision}, recent_progress[] {date, text},
+               links[] {label, url}: tracker links count as the project's tickets (with epic) and Slack channel or
+               thread links as its Slack links; label a channel "#name" so the page shows the name,
                next_milestone_date (YYYY-MM-DD, puts the milestone under Running on that day; lead with its position, "chunk 1 of 4"),
                jobs[] {label, done, total, unit, per_day, eta, updated}: long jobs such as a backfill.
                Written by job.py, not by hand; the page works out percent, finish date and lateness.
   waiting_on[] person, what, project_id, since, nudge_due, where, link
-  one_offs[]   title (the only required field), state, needs_me (true/false), due, note, ref, progress_pct
-               Small standalone items that belong to no project. Add one with add_oneoff.py.
+  one_offs[]   title (the only required field), state, needs_me (true/false), due, note, ref, progress_pct,
+               done_on (YYYY-MM-DD; a done one-off shows under Wins today on that day)
+               Small standalone items that belong to no project. Add or finish one with add_oneoff.py.
+  shelf[]      title (or a plain string), note, link, added, project_id: things kept for some day, on no list.
+               The page shows them in a collapsed Shelf card (hidden when empty) and on #shelf.
 Every field except a project's id and name is optional; the page skips what is missing.
 `link` on a needs_me or waiting_on row (a PR or Slack thread URL) lets the inbox merge it with the feeds.
 
@@ -34,7 +39,7 @@ config.json (optional, keeps anything specific to one person or company out of t
   inbox        cap, home_count, stale_days, slack_url, effort_defaults and the feed settings (see derive.DEFAULTS)
   feeds        every_minutes, hours, days: the status-feeds schedule, used to tell when a feed is stale
   links        {"patterns": [{"match": "<regex with one group>", "url": "<base>{1}"}]}: link bases for other keys
-  stats        settings for ~/bin/eng-stats (it writes feeds/stats.json; the focus page does not show it yet)
+  stats        settings for ~/bin/eng-stats (it writes feeds/stats.json, shown on the #github page)
   theme        {"light": {"--token": "value"}} overriding the page's color and font tokens (page.css :root).
                The page keeps one look in light and dark; add "dark" only if you want a separate dark palette.
   brand        {"logo": "logo.svg", "logo_dark": "logo-white.svg", "name": "Example Co"}: an optional logo, paths
