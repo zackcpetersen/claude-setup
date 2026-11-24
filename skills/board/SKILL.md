@@ -133,6 +133,9 @@ When config names a `Projects` data source, each long-lived workstream has one r
 - Decisions: when the user says something was decided, append a row to that project's Decisions table the same day. The public hub (if any) gets the team-facing version; the project page gets the private one.
 - Memory files keep pointers and how-to-apply rules; project narrative moves to the project page. Propose, under "Memory corrections to apply", trimming any memory file whose facts now live on a project page.
 - New workstream: propose a row in chat; create it only after the user says yes.
+- Slack places: when a channel, a long-running thread or a DM turns out to belong to a project, record it the same day in four places: the project's notes (channel id, thread ts, who posts there), a `Slack:` line in the project page's `## Links`, the project's `links[]` on the status page, and, for channels, the `Watched channels` line in config.
+- Finding a message "from" a partner or project: read its recorded places directly first. Search is the fallback; it lags a few minutes on fresh messages and `from:` misses external (shared-channel) authors.
+- This is record-keeping, not a watch: it does not change what wakes the session.
 
 ## Project status page
 

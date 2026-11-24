@@ -123,6 +123,7 @@ Append only. The team-facing version goes on the public hub, if any.
 - YYYY-MM-DD: one dated line per sync that moved the project. Append only.
 ## Links
 - tracker, chat channels and threads, public pages, repos and PRs, local paths
+- Slack: each channel, thread and DM that belongs to the project, as links
 ```
 
 ## Child page body ("Claude scratchpad - YYYY-MM-DD")
