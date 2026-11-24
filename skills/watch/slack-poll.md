@@ -17,6 +17,8 @@ Rules for editing this file:
 | `{{keywords}}` | `Slack poll keywords` line |
 | `{{ignore}}` | `Slack poll ignore` line |
 | `{{active_after}}` | the earlier of `{{after}}` and now, minus the `Slack poll group-dms lookback` line (default 60 minutes), as Unix time; `none` when the `group-dms` trigger is off or `Slack poll group-dms` is `all` |
+| `{{channels}}` | `Slack poll channels` line; `none` when it is missing or a placeholder |
+| `{{channel_oldest}}` | `{{after}}` minus 24 hours, so a watched channel's older threads are read for new replies |
 | `{{user_name}}` | `Slack poll user name` line, else a valid name an earlier poll looked up (one word of 2 or more letters, kept in the state file), else `look up`; `not needed` when `{{active_after}}` is `none` |
 
 ```text
@@ -31,6 +33,7 @@ Keywords: {{keywords}}
 Ignore (channels, people or groups to leave out): {{ignore}}
 Group DM activity window starts at Unix time: {{active_after}}
 User first name: {{user_name}}
+Watched channels: {{channels}}
 
 For each enabled trigger, run its recipe below with `slack_search_public_and_private`. Run only the recipes for enabled triggers. Every call uses: after "{{after}}", sort "timestamp", sort_dir "asc", response_format "detailed", include_context false, limit 20. If a result says there is a next page, fetch it with the cursor, at most 3 pages per recipe.
 
@@ -42,26 +45,33 @@ For each enabled trigger, run its recipe below with `slack_search_public_and_pri
 - thread-replies-mpim: the thread-replies recipe with channel_types "mpim" only. kind "thread-reply".
 - keywords: once per keyword, keywords ["<keyword>"], channel_types "public_channel,private_channel,mpim,im". kind "keyword". Skip if the keyword list is "none".
 
+Watched channels: skip if the list above is "none". These are read, not searched, because search lags on fresh messages. For each listed channel:
+1. A channel ID (C... or G...) is used as is. A name (with or without #) is turned into its ID with one `slack_search_channels` call.
+2. Run `slack_read_channel` with oldest "{{channel_oldest}}", limit 30, response_format "detailed". Results come newest first. If there is a next page and the oldest message on this page is still newer than Unix time {{channel_oldest}}, fetch the next page with the cursor, at most 3 pages in all.
+3. Keep each message in the result at or after Unix time {{after}}. kind "channel".
+4. Thread replies: for each message in the result that shows replies (for example "Thread: 2 replies (latest: <time>)"), run `slack_read_thread` on it with oldest "{{after}}", unless its latest reply time is clearly before {{after_iso}} (the shown time may be in another time zone; when unsure, read the thread). At most 10 thread reads per channel, latest replies first. Keep each reply the read returns at or after Unix time {{after}}, not the parent again. kind "channel".
+In a watched channel, keep bot or app posts too, with hint "bot".
+
 Two collect-only extras. They add no events:
 - active group DMs: skip if the activity window above is "none". Otherwise run one search with filters "from:<@{{slack_user_id}}>", channel_types "mpim", after the activity window start (not the search window), sort_dir "desc" (newest first, unlike the other searches), limit 20, one page. Put the channel ID of every result in "user_active_mpims", each ID once.
 - first name: only if the user first name above is "look up", read the profile of {{slack_user_id}} with `slack_read_user_profile` and put their first name in "user_first_name". Otherwise leave it "".
 
 Keep every message found, except these, which you drop:
 - messages written by the user ({{slack_user_id}});
-- bot or app posts (marked [BOT]), except in the user-groups recipe, where a bot post that tags one of the user's groups is kept;
+- bot or app posts (marked [BOT]), except in the user-groups recipe, where a bot post that tags one of the user's groups is kept, and in watched channels;
 - channel join or leave notices, and messages that are only emoji;
 - messages older than Unix time {{after}};
 - anything in the ignore list (by channel id, channel name, person id or person name).
 
-If the same message shows up in more than one recipe, list it once, with the first kind in this order: dm, mention, user-group, thread-reply, keyword, group-dm.
+If the same message shows up in more than one recipe, list it once, with the first kind in this order: dm, mention, user-group, thread-reply, keyword, channel, group-dm.
 
 For each kept message, fill one event:
 - channel_id: the channel ID from the result (C..., D... or G...).
 - channel_name: the channel name, or "DM with <name>" for a direct message.
 - ts: the Message_ts value, exactly as shown.
-- thread_ts: the thread_ts value from the permalink if there is one, else null.
+- thread_ts: the thread_ts value from the permalink if there is one (for a watched channel reply, the parent's ts), else null.
 - author: the sender's name. author_id: the sender's user ID (U...).
-- kind: from the recipe.
+- kind: from the recipe, or "channel" for a watched channel.
 - text: the message text, cut to 500 characters.
 - permalink: the permalink URL.
 - hint: one word. "ack" for thanks, ok, sign-offs or emoji-like replies with no request; "bot" for a post by a bot or app; "fyi" for news or information with no question or request for the user; "ask" for a question or request the user may need to act on. When unsure, use "ask".

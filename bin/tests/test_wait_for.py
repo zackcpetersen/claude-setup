@@ -803,6 +803,7 @@ class SlackTests(Base):
         self.assertEqual(cfg["triggers"], list(W.SLACK_DEFAULT_TRIGGERS))
         self.assertEqual(cfg["model"], "haiku")
         self.assertEqual(cfg["quiet"], [])  # the example line is a placeholder: nothing is quiet by default
+        self.assertEqual(cfg["channels"], [])  # likewise no watched channels
 
 
 def claude_answer(obj, cost=0.004):
@@ -862,7 +863,7 @@ class GroupDmTests(SlackTests):
         out, _ = self.poll([gdm("1.1", kind="thread-reply", thread_ts="1.0"), gdm("1.2")])
         self.assertEqual(self.reported(out), ["1.1"])
         prompt = W.slack_prompt_template()
-        self.assertIn("thread-reply, keyword, group-dm.", prompt)  # thread replies win over group-dm
+        self.assertIn("thread-reply, keyword, channel, group-dm.", prompt)  # thread replies win over group-dm
 
     def test_rule3_user_active_group_dm_is_reported(self):
         out, calls = self.poll([gdm("1.1"), gdm("1.2", channel_id="G0OTHER")], user_active_mpims=["G0GROUP"])
@@ -1057,6 +1058,80 @@ class QuietTests(SlackTests):
         self.assertEqual(rc, 2)
         self.assertIn("chatter", err)
         self.assertIn("ack, bot, fyi", err)
+
+
+def chan(ts, **kw):
+    return ev(ts, **{"channel_id": "C0WATCH", "channel_name": "watched", "kind": "channel", "text": "status?", **kw})
+
+
+class ChannelTests(SlackTests):
+    def setUp(self):
+        super().setUp()
+        self.digest = self.tmp / "state" / "slack-poll-digest.jsonl"
+        self.md = SLACK_MD.format(tmp=self.tmp) + "- Slack poll channels: C0WATCH, #other-room\n"
+        self.cfg_path.write_text(self.md)
+
+    def poll(self, events):
+        rc, out, err, calls = self.slack([claude_answer({"events": events})], "--once")
+        self.assertEqual(rc, 0, err)
+        return out, calls[0][0][2]
+
+    def reported(self, out):
+        word, _, path = out.split(" ")
+        self.assertEqual(word, "SLACK")
+        return json.loads(Path(path).read_text())["events"]
+
+    def test_unset_line_changes_nothing(self):
+        for md in (SLACK_MD.format(tmp=self.tmp),
+                   SLACK_MD.format(tmp=self.tmp) + "- Slack poll channels: <C0XXXXXXX, #channel-name>\n"):
+            self.cfg_path.write_text(md)
+            self.assertEqual(W.load_slack_config(self.cfg_path)["channels"], [])
+            _, prompt = self.poll([])
+            self.assertIn("Watched channels: none", prompt)
+            self.assertNotIn("{{", prompt)
+
+    def test_channels_line_reaches_the_prompt(self):
+        self.assertEqual(W.load_slack_config(self.cfg_path)["channels"], ["C0WATCH", "#other-room"])
+        _, prompt = self.poll([])
+        self.assertIn("Watched channels: C0WATCH, #other-room", prompt)
+        self.assertIn("slack_read_channel", prompt)
+        oldest = int(W.NOW().timestamp()) - 15 * 60 - int(W.SLACK_CHANNEL_THREAD_LOOKBACK.total_seconds())
+        self.assertIn(str(oldest), prompt)  # older parents are read too, so new replies on them are found
+
+    def test_channel_message_with_no_mention_is_reported(self):
+        out, _ = self.poll([chan("1.1"), chan("1.2", thread_ts="1.0")])
+        self.assertEqual([(e["ts"], e["kind"]) for e in self.reported(out)], [("1.1", "channel"), ("1.2", "channel")])
+        self.assertEqual(json.loads(self.state.read_text())["seen"], ["C0WATCH:1.1", "C0WATCH:1.2"])
+
+    def test_own_messages_are_skipped(self):
+        out, _ = self.poll([chan("1.1", author_id="U0SELF")])
+        self.assertEqual(out, "NOTHING")
+
+    def test_quiet_hint_does_not_silence_a_human_in_a_watched_channel(self):
+        self.cfg_path.write_text(self.md + "- Slack poll quiet: ack, bot, fyi\n")
+        out, _ = self.poll([chan("1.1", hint="fyi"), chan("1.2", hint="ack"), chan("1.3", hint="bot")])
+        self.assertEqual([e["ts"] for e in self.reported(out)], ["1.1", "1.2"])
+        self.assertEqual([json.loads(l)["ts"] for l in self.digest.read_text().splitlines()], ["1.3"])
+
+    def test_quiet_hint_does_not_silence_other_kinds_in_a_watched_channel(self):
+        self.cfg_path.write_text(self.md + "- Slack poll quiet: ack, bot, fyi\n")
+        out, _ = self.poll([chan("1.1", hint="fyi", kind="thread-reply"), chan("1.2", hint="ack", kind="keyword"),
+                            chan("1.3", hint="fyi", kind="user-group", channel_id="C0OTHER", channel_name="other-room"),
+                            chan("1.4", hint="bot", kind="thread-reply"),
+                            chan("1.5", hint="fyi", kind="thread-reply", channel_id="C0ELSE", channel_name="else")])
+        self.assertEqual([e["ts"] for e in self.reported(out)], ["1.1", "1.2", "1.3"])
+        self.assertEqual([json.loads(l)["ts"] for l in self.digest.read_text().splitlines()], ["1.4", "1.5"])
+
+    def test_no_duplicate_when_also_a_mention(self):
+        out, _ = self.poll([chan("1.1"), chan("1.1", kind="mention"), chan("1.2")])
+        self.assertEqual([(e["ts"], e["kind"]) for e in self.reported(out)], [("1.1", "mention"), ("1.2", "channel")])
+        out, _ = self.poll([chan("1.1", kind="mention")])
+        self.assertEqual(out, "NOTHING")  # seen state covers both kinds
+
+    def test_ignore_line_still_applies(self):
+        self.cfg_path.write_text(self.md.replace("Slack poll ignore: C0NOISE", "Slack poll ignore: C0NOISE, #watched"))
+        out, _ = self.poll([chan("1.1")])
+        self.assertEqual(out, "NOTHING")
 
 
 class SplitConfigTests(unittest.TestCase):
