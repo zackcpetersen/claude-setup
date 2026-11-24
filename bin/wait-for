@@ -47,6 +47,8 @@ SLACK_HELD_KEEP = timedelta(days=14)  # held group DM lines older than this are 
 SLACK_HELD_TAIL = 200  # lines checked for a duplicate key before appending
 SLACK_QUIET_HINTS = ("ack", "bot", "fyi")  # hints the `Slack poll quiet` line may list; default is none of them
 SLACK_NEVER_QUIET = ("dm", "mention")  # a DM or a direct mention always wakes, whatever its hint
+SLACK_KIND_ORDER = ("dm", "mention", "user-group", "thread-reply", "keyword", "channel", "group-dm")  # first wins
+SLACK_CHANNEL_THREAD_LOOKBACK = timedelta(hours=24)  # watched channels: parents this old are read for new replies
 _warned = set()
 SLACK_READ_TOOLS = ("slack_search_public_and_private", "slack_search_public", "slack_read_thread", "slack_read_channel",
                     "slack_read_user_profile", "slack_search_users", "slack_search_channels")
@@ -239,6 +241,7 @@ def load_slack_config(path=None):
     name = watches.get("Slack poll user name", "")
     lookback = parse_duration(watches.get("Slack poll group-dms lookback") or SLACK_GROUP_DM_LOOKBACK)
     quiet_line = watches.get("Slack poll quiet")
+    channels = watches.get("Slack poll channels", "")
     quiet = [] if (quiet_line or "").lower() == "none" else (
         [w.lower() for w in _split_list(quiet_line)] if quiet_line else [])
     bad = [w for w in quiet if w not in SLACK_QUIET_HINTS]
@@ -258,6 +261,7 @@ def load_slack_config(path=None):
         "user_name": "" if _is_unset(name) else name.split()[0],
         "group_dm_lookback": lookback,
         "quiet": quiet,
+        "channels": [c for c in _split_list(channels) if not _is_unset(c)] if not _is_unset(channels) else [],
     }
 
 
@@ -624,6 +628,32 @@ def aimed_at_user(event, cfg, name, active):
             or event.get("channel_id") in active)
 
 
+def quiet_event(event, cfg):
+    """True when the event's hint is on the `Slack poll quiet` line and its kind may be quieted.
+
+    A missing or unknown hint wakes. DMs and direct mentions always wake. In a watched channel only a bot post
+    may be quiet: a human message there always wakes, whatever kind it came back as (thread-reply, keyword...).
+    """
+    hint, kind = str(event.get("hint") or "").lower(), event.get("kind")
+    if hint not in cfg.get("quiet", ()) or kind in SLACK_NEVER_QUIET:
+        return False
+    watched = {c.lstrip("#").lower() for c in cfg.get("channels") or ()}
+    names = {str(event.get(k) or "").lstrip("#").lower() for k in ("channel_id", "channel_name")}
+    return hint == "bot" or (kind != "channel" and not names & watched)
+
+
+def dedupe_events(events):
+    """One event per message: when a message comes back under more than one kind, keep the kind that comes
+    first in SLACK_KIND_ORDER, at the place the message first showed up."""
+    rank = {k: i for i, k in enumerate(SLACK_KIND_ORDER)}
+    best = {}
+    for e in events:
+        key = f"{e['channel_id']}:{e['ts']}"
+        if key not in best or rank.get(e.get("kind"), len(rank)) < rank.get(best[key].get("kind"), len(rank)):
+            best[key] = e
+    return list(best.values())
+
+
 def held_path(state_file):
     state_file = Path(state_file)
     return state_file.with_name(state_file.stem + "-held.jsonl")
@@ -704,6 +734,8 @@ def poll_slack(cfg, since=None):
         "ignore": ", ".join(cfg["ignore"]) or "none",
         "active_after": str(int(active_after.timestamp())) if filtering else "none",
         "user_name": (name or "look up") if filtering else "not needed",
+        "channels": ", ".join(cfg.get("channels") or ()) or "none",
+        "channel_oldest": str(int((after - SLACK_CHANNEL_THREAD_LOOKBACK).timestamp())),
     })
     answer, cost = parse_claude(run_claude(slack_command(cfg, prompt), str(events_dir)))
     seen = set(state["seen"])
@@ -717,7 +749,7 @@ def poll_slack(cfg, since=None):
             warn_once("user-name", "slack user-name: could not read your first name from your Slack profile, so group "
                       "DM messages are not matched by name; set `Slack poll user name:` in the ### Watches section")
     fresh, held, quiet = [], [], []
-    for e in parse_events(data):
+    for e in dedupe_events(parse_events(data)):
         key = f"{e['channel_id']}:{e['ts']}"
         names = {str(e.get(k) or "").lstrip("#@").lower() for k in ("channel_id", "channel_name", "author_id", "author")}
         if key in seen or e.get("author_id") == cfg["user"] or names & ignore:
@@ -726,8 +758,7 @@ def poll_slack(cfg, since=None):
         e["text"] = str(e.get("text") or "")[:SLACK_TEXT_CAP]
         if filtering and e.get("kind") == "group-dm" and not aimed_at_user(e, cfg, name, active):
             held.append(e)
-        elif (str(e.get("hint") or "").lower() in cfg.get("quiet", ())  # a missing or unknown hint wakes
-              and e.get("kind") not in SLACK_NEVER_QUIET):
+        elif quiet_event(e, cfg):
             quiet.append(e)
         else:
             fresh.append(e)
