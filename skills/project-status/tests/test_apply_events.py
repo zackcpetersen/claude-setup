@@ -195,9 +195,50 @@ class ApplyEvents(unittest.TestCase):
                  ev(3, "waiting-on", "billing-migration", "Wait", fields={"who": "Bo"}))
         self.log(ev(4, "cleared", "billing-migration", "Bo replied", fields={"clears": ev(3, "x", "x", "x")["id"]}))
         r = self.run_apply()
-        self.assertIn("applied 0, skipped 2, unplaced 2", r.stdout)  # nothing left for the clears to match
+        # the asks are skipped, and their clears have nothing left to remove: skipped too, never unplaced
+        self.assertIn("applied 0, skipped 4, unplaced 0", r.stdout)
         self.assertEqual(len(self.project()["needs_me"]), 1)
         self.assertEqual(self.data()["waiting_on"], [])
+
+    def test_clear_naming_a_wait_keeps_other_rows_on_the_same_link(self):
+        pr = "https://github.com/owner/repo/pull/12"
+        d = self.data()
+        d["one_offs"].append({"title": "Watch PR 12", "state": "not started", "ref": pr})
+        d["waiting_on"].append({"person": "Bo", "what": "Bo reviews too", "project_id": "search-revamp", "link": pr})
+        self.write(d)
+        wait = ev(1, "waiting-on", "billing-migration", "Ana reviews", links=[pr], fields={"who": "Ana"})
+        self.log(wait, ev(2, "needs-you", "billing-migration", "Merge PR 12", links=[pr + "#discussion"]))
+        self.run_apply()
+        # Ana's wait shares Bo's link, so add_waiting skipped it: seed it by hand, as a gather would
+        d = self.data()
+        d["waiting_on"].append({"person": "Ana", "what": "Ana reviews", "project_id": "billing-migration", "link": pr})
+        self.write(d)
+        self.log(ev(4, "cleared", "billing-migration", "Ana approved", links=[pr], fields={"clears": wait["id"]}))
+        r = self.run_apply()
+        self.assertIn("applied 1, skipped 0, unplaced 0", r.stdout)
+        self.assertIn("Merge PR 12", [a["ask"] for a in self.project()["needs_me"]])
+        self.assertEqual([w["what"] for w in self.data()["waiting_on"]], ["Bo reviews too"])
+        self.assertEqual(self.data()["one_offs"][-1]["state"], "not started")
+
+    def test_job_fields_from_events_are_normalized_and_bad_ones_unplaced(self):
+        self.log(ev(1, "job-progress", "billing-migration", "Backfill moved",
+                    fields={"job": "Backfill", "done": "12.5", "total": "60", "per_day": "2.5", "eta": "2026-01-20"}),
+                 ev(2, "job-progress", "billing-migration", "Bad eta", fields={"job": "Backfill", "done": 20, "eta": "soon"}))
+        r = self.run_apply()
+        self.assertIn("applied 1, skipped 0, unplaced 1", r.stdout)
+        j = self.project()["jobs"][0]
+        self.assertEqual((j["done"], j["total"], j["per_day"], j["eta"]), (12.5, 60, 2.5, "2026-01-20"))
+
+    def test_non_id_cursor_warns_and_is_left_alone(self):
+        d = self.data()
+        d["events_cursor"] = "2026-01-12T18:00:00Z"
+        self.write(d)
+        self.log(ev(1, "note", "billing-migration", "today"))
+        r = self.run_apply()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("is not an event id", r.stderr)
+        self.assertEqual(self.data()["events_cursor"], "2026-01-12T18:00:00Z")
+        self.assertEqual([x["text"] for x in self.project()["recent_progress"]], ["today"])
 
     def test_missing_cursor_starts_at_today_and_dates_come_from_event_day(self):
         self.log(ev(1, "note", "billing-migration", "yesterday", day="2026-01-13"),

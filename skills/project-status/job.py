@@ -63,7 +63,17 @@ def find_job(jobs, label):
 
 
 def set_job(project, label, fields, now):
-    """Create the job or update only the given fields (done, total, unit, per_day, eta); stamp `updated`."""
+    """Create the job or update only the given fields (done, total, unit, per_day, eta); stamp `updated`.
+
+    Numbers go through number() and eta through eta_date(), so event fields ("2.5", "60") are stored like CLI ones.
+    A bad value raises ValueError before anything changes.
+    """
+    fields = dict(fields)
+    for k in ("done", "total", "per_day"):
+        if fields.get(k) is not None:
+            fields[k] = number(str(fields[k]))
+    if fields.get("eta") is not None:
+        fields["eta"] = eta_date(str(fields["eta"]))
     jobs = project.setdefault("jobs", [])
     job = find_job(jobs, label)
     if job is None:

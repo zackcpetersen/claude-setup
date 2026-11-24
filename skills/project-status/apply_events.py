@@ -6,8 +6,9 @@
 Reads the events after the file's top-level `events_cursor` (no cursor: the start of today's log file), applies
 the kinds that need no judgment, sets `as_of` and moves `events_cursor` to the last event read, in one locked,
 atomic write. Prints `applied N, skipped N, unplaced N`, then one `unplaced <id> <kind> <key>: <text>` line each.
-Unplaced events (no matching project, a `failed`, a `cleared` that matched nothing) are for the publisher to relay
-or place by hand; the cursor still moves past them. Every edit is dated with the event's own `day`, and every edit
+Unplaced events (no matching project, a `failed`, a `cleared` that matched nothing, job fields that do not parse)
+are for the publisher to relay or place by hand; the cursor still moves past them. A cursor that is not an event id
+is reported on stderr and left as it is (only today's events are applied). Every edit is dated with the event's own `day`, and every edit
 checks for an existing row first, so a replay never adds a line twice.
 
 The events folder is --events-dir, else BOARD_EVENTS_DIR, else ~/.claude/board-events. A missing folder or an
@@ -70,8 +71,12 @@ def read_events(folder, start):
     return sorted(rows, key=lambda e: e["id"])
 
 
+def cursor_ok(cursor):
+    return not cursor or bool(ID_RE.match(str(cursor)))
+
+
 def new_events(folder, cursor, today):
-    if cursor and ID_RE.match(cursor):
+    if cursor and ID_RE.match(str(cursor)):
         # ids are UTC and files are local days: start one day before the cursor's UTC date
         start = date(int(cursor[:4]), int(cursor[4:6]), int(cursor[6:8])) - timedelta(days=1)
         return [e for e in read_events(folder, start) if e["id"] > cursor]
@@ -125,16 +130,17 @@ def clear_target(ev, by_id):
     return ev_link(ev) or ev_link(target), target.get("text") or ""
 
 
-def is_cleared_later(ev, later, by_id):
+def cleared_later_by(ev, later, by_id):
+    """The later cleared event in this batch that covers `ev`, or None."""
     for c in later:
         if c.get("kind") != "cleared":
             continue
         if (c.get("fields") or {}).get("clears") == ev["id"]:
-            return True
+            return c
         link, text = clear_target(c, by_id)
         if same_link(link, ev_link(ev)) or (text and text == ev.get("text")):
-            return True
-    return False
+            return c
+    return None
 
 
 # ---------- edits ----------
@@ -195,7 +201,35 @@ def add_waiting(data, project, ev):
     return True
 
 
+def row_matches(row, link, text, text_key):
+    return same_link(row.get("link"), link) or bool(text and row.get(text_key) == text)
+
+
+def clear_named(data, ev, target):
+    """A clear whose fields.clears names an ask or wait: remove only rows of that kind, in that project,
+    matching that event's link or text, so another row sharing the link (a merge ask on the same PR) stays."""
+    project = find_project(data, target)
+    link, text = ev_link(target), target.get("text") or ""
+    if target.get("kind") == "needs-you":
+        if project is None:
+            return False
+        rows = project.get("needs_me") or []
+        keep = [r for r in rows if not row_matches(r, link, text, "ask")]
+        project["needs_me"] = keep if len(keep) != len(rows) else rows
+    else:
+        pid = project.get("id") if project is not None else None
+        rows = data.get("waiting_on") or []
+        keep = [r for r in rows if not (r.get("project_id") == pid and row_matches(r, link, text, "what"))]
+        if len(keep) != len(rows):
+            data["waiting_on"] = keep
+    return len(keep) != len(rows)
+
+
 def clear(data, ev, by_id):
+    target = by_id.get((ev.get("fields") or {}).get("clears"))
+    if target is not None and target.get("kind") in ("needs-you", "waiting-on"):
+        hit = clear_named(data, ev, target)
+        return hit, hit
     link, text = clear_target(ev, by_id)
     hit = False
     for p in data.get("projects") or []:
@@ -212,15 +246,16 @@ def clear(data, ev, by_id):
     return hit, hit or o is not None
 
 
-def apply_one(data, ev, later, by_id, tz):
-    """'applied', 'skipped' or 'unplaced'."""
+def apply_one(data, ev, later, by_id, tz, absorbed):
+    """'applied', 'skipped' or 'unplaced'. `absorbed` collects ids of clears whose ask or wait was skipped
+    earlier in this batch: those clears have nothing left to remove and count as skipped, not unplaced."""
     kind = ev.get("kind")
     f = ev.get("fields") or {}
     if kind == "failed":
         return "unplaced"
     if kind == "cleared":
         changed, matched = clear(data, ev, by_id)
-        return "applied" if changed else ("skipped" if matched else "unplaced")
+        return "applied" if changed else ("skipped" if matched or ev["id"] in absorbed else "unplaced")
     if kind in NO_CHANGE_KINDS and not (kind == "run-started" and f.get("job")):
         return "skipped"
     project = find_project(data, ev)
@@ -235,14 +270,19 @@ def apply_one(data, ev, later, by_id, tz):
     elif kind in ("job-progress", "run-started"):
         if not f.get("job"):
             return "unplaced"
-        job.set_job(project, str(f["job"]), f, when or datetime.now(timezone.utc))
+        try:
+            job.set_job(project, str(f["job"]), f, when or datetime.now(timezone.utc))
+        except ValueError:  # a done/total/per_day that is not a number, or an eta that is not YYYY-MM-DD
+            return "unplaced"
         changed = True
     elif kind == "job-done":
         if not f.get("job"):
             return "unplaced"
         changed = job.finish_job(project, str(f["job"]), when, tz, day=day) is not None
     elif kind in ("needs-you", "waiting-on"):
-        if is_cleared_later(ev, later, by_id):
+        c = cleared_later_by(ev, later, by_id)
+        if c is not None:
+            absorbed.add(c["id"])
             return "skipped"
         changed = add_needs_me(project, ev) if kind == "needs-you" else add_waiting(data, project, ev)
     else:
@@ -265,16 +305,21 @@ def main(argv=None):
     folder = events_dir(a.events_dir)
     counts, unplaced = {"applied": 0, "skipped": 0, "unplaced": 0}, []
     with locked_json(Path(a.data)) as data:
-        events = new_events(folder, data.get("events_cursor"), today)
+        cursor = data.get("events_cursor")
+        if not cursor_ok(cursor):
+            print(f"warning: events_cursor {cursor!r} is not an event id; applied today's events only and left the "
+                  "cursor as it is. Set it to an event id (board-event today) or remove it.", file=sys.stderr)
+        events = new_events(folder, cursor, today)
         # a cleared event may point (fields.clears) at an event before the cursor: index the whole folder
         by_id = {e["id"]: e for e in (read_events(folder, date.min)
                                       if any(e.get("kind") == "cleared" for e in events) else events)}
+        absorbed = set()
         for i, ev in enumerate(events):
-            result = apply_one(data, ev, events[i + 1:], by_id, tz)
+            result = apply_one(data, ev, events[i + 1:], by_id, tz, absorbed)
             counts[result] += 1
             if result == "unplaced":
                 unplaced.append(ev)
-        if events:
+        if events and cursor_ok(cursor):
             data["events_cursor"] = events[-1]["id"]
         data["as_of"] = job.stamp(now)
         print(f"applied {counts['applied']}, skipped {counts['skipped']}, unplaced {counts['unplaced']}"
