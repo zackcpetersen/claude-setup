@@ -47,6 +47,8 @@ Nothing in this skill names a company, person or project. Those come from the da
 | `inbox.py` | The only way the session writes `inbox.json` |
 | `add_oneoff.py` | Adds or finishes a one-off in the data file |
 | `job.py` | Records progress on a long job (a backfill, a big export) in the data file |
+| `apply_events.py` | Applies event-log events since `events_cursor` to the data file (progress, decisions, jobs, asks, waits, clears) and prints what it could not place |
+| `datafile.py` | `locked_json`: the shared lock and atomic write that `job.py`, `add_oneoff.py` and `apply_events.py` use for the data file |
 | `config.example.json` | Starter config: title, tracker and GitHub link bases, footer note, time zone, inbox and feed settings, shelf source and cap, logo, color overrides |
 | `sample-data.json`, `sample-home/` | Made-up data, inbox and feeds to try the page with |
 | `tests/` | `unittest` tests: `python3 -m unittest discover -s skills/project-status/tests` |
@@ -92,7 +94,7 @@ If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the 
 
 ## Refresh
 
-1. **Gather** the data into `~/.claude/project-status/projects.json`, in the format from `build.py`'s docstring. Dispatch one read-only agent for this (pass `model`); it writes only that file. Sources, in order: the user's project notes (for the `board` skill, the `Projects data source` line in `~/.claude/config/board.md` (older installs: `### Work board` in `~/.claude/CLAUDE.md`), plus today's board row), then the tracker and GitHub only for gaps. Rules for the agent:
+1. **Gather** the data into `~/.claude/project-status/projects.json`, in the format from `build.py`'s docstring. First run `python3 ~/.claude/skills/project-status/apply_events.py ~/.claude/project-status/projects.json` so events logged since the cursor land and the cursor moves past them (it takes the file's lock, which the gather agent cannot); relay its `unplaced` lines. Running it before the gather, not after, means the gather's fresh lists are never stacked with the same facts again. Then dispatch one read-only agent for this (pass `model`); it writes only that file. Sources, in order: the user's project notes (for the `board` skill, the `Projects data source` line in `~/.claude/config/board.md` (older installs: `### Work board` in `~/.claude/CLAUDE.md`), plus today's board row), then the tracker and GitHub only for gaps. Rules for the agent:
    - `needs_me` holds only what the user must do or decide by hand. What waits on someone else goes in `waiting_on`. What an agent can do alone goes in neither.
    - `progress_pct` comes from real milestones or tickets, and `progress_basis` says how in one sentence. Never invent precision.
    - Keep `one_offs`, every project's `jobs` and the top-level `events_cursor` already in the file. They are the user's own list, `job.py`'s and the event log's cursor.
@@ -113,9 +115,10 @@ If `~/.claude/project-status/config.json` is missing, do steps 1 and 2 with the 
 
 The page should never lag the work, but it is rebuilt at checkpoints, not per fact. Facts (a PR merged, a run finished, the user decided something, a reply arrived, a wait cleared) are appended to the event log as they land (`~/bin/board-event add`, see the `board` skill's "Event log"). At a checkpoint, do not gather again:
 
-1. Dispatch one one-shot sonnet publisher agent for everything since the last checkpoint. It runs `~/bin/board-event since <events_cursor>` (the top-level `events_cursor` in `projects.json`; `~/bin/board-event today` when it is missing), and edits `~/.claude/project-status/projects.json` in place, in the "Writing style" wording, by the rules below (the item's `state`, the project's `needs_me`, the matching `waiting_on` row, one new `recent_progress` line per landed fact, `progress_pct` when a milestone or ticket closed (keep `progress_basis` true), `as_of` set to now UTC; a staged milestone or job keeps its position, "chunk 2 of 4"; `job-progress` and `job-done` events through `job.py`), sets `events_cursor` to the last event id it read in the same file write, builds and publishes as in Refresh step 4, and returns the link and one line on what changed.
+1. Dispatch one one-shot sonnet publisher agent for everything since the last checkpoint. It runs `python3 ~/.claude/skills/project-status/apply_events.py ~/.claude/project-status/projects.json` first: that applies every event since the file's `events_cursor` that needs no judgment (progress lines, decisions, jobs, new asks and waits, cleared ones), moves the cursor and sets `as_of`, and prints one `unplaced <id> <kind> <key>: <text>` line per event it could not place. Then it edits `projects.json` by hand only for those unplaced lines (a `failed` is relayed, not written as progress) and the judgment fields (`progress_pct` when a milestone or ticket closed, keeping `progress_basis` true; `status`; breakdown item `state`; `summary`; `next_milestone`, keeping a staged position, "chunk 2 of 4"), in the "Writing style" wording, never touching `events_cursor`. It builds and publishes as in Refresh step 4, and returns the link and one line on what changed.
 2. The main session never opens the data file.
 3. Say what changed in one line. Do not ask first.
+4. While a publisher or gather agent is working, do not run `job.py` or `add_oneoff.py`. Those agents write the file without the lock, so a change made in that window is lost. Append an event instead; the next checkpoint applies it.
 
 Do this without being asked at every checkpoint: a sync, the wrap, when the user turns to the board, and right away for an event `add` printed as `URGENT`. No publish for a single non-urgent event. Without `~/bin/board-event`, hand the publisher the change in one line, as before. The `board` skill runs it at its checkpoints, and writes the page link as the first line of each daily row's `## Your TODOs`.
 
@@ -150,7 +153,7 @@ A job that runs for days (a backfill, a big export) shows under Running without 
 - After each progress report: `python3 ~/.claude/skills/project-status/job.py ~/.claude/project-status/projects.json set <project_id> "<label>" --done N --total N [--unit files] [--per-day N] [--eta YYYY-MM-DD]`. Only the fields given change.
 - When it finishes: `... job.py ~/.claude/project-status/projects.json done <project_id> "<label>"`. The job goes and a "Finished <label>" line lands in recent progress.
 - Then hand the publish to the one-shot publisher (Refresh step 4).
-- In a board session, append a `job-progress` or `job-done` event instead; the checkpoint's publisher runs `job.py`.
+- In a board session, append a `job-progress` or `job-done` event instead (`--field job=<label> --field done=N --field total=N`); the checkpoint's `apply_events.py` run records it through `job.py`'s own code.
 
 ## Links
 
@@ -198,7 +201,7 @@ A one-off that grows (several steps, other people, a deadline) becomes a project
 | Overwriting `one_offs` during a gather | The gather agent keeps them as they are |
 | Gathering, editing the data file or publishing in the main session | Agents do all three; the main session passes one line and relays the link |
 | Running Artifact quickstart for the status page | It exists. Publish to `artifact_url` |
-| Hand-editing `jobs` in `projects.json` | Use `job.py`, so `updated` and the finish date stay right |
+| Hand-editing `jobs` in `projects.json` | Use `job.py` (or a `job-progress` event and `apply_events.py`), so `updated` and the finish date stay right |
 | Brand colors in `page.css` | They go in the local `theme.light` and `theme.dark` |
 | A logo file in the repo | It sits next to the local `config.json`, named in `brand` |
 | Per-person stats or names in `stats.json` | Stats are aggregates for me and my team only |

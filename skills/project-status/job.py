@@ -11,10 +11,11 @@ Both set the file's `as_of`. Then rebuild the page with build.py. Exit 1 when th
 """
 import argparse
 import json
-import os
 import pathlib
 import sys
 from datetime import datetime, timezone
+
+from datafile import NoWrite, locked_json
 
 try:
     from zoneinfo import ZoneInfo
@@ -56,15 +57,47 @@ def eta_date(text):
     return text
 
 
-def write_atomic(path, data):
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-    os.replace(tmp, path)
-
-
 def find_job(jobs, label):
     want = label.strip().lower()
     return next((j for j in jobs if str(j.get("label") or "").strip().lower() == want), None)
+
+
+def set_job(project, label, fields, now):
+    """Create the job or update only the given fields (done, total, unit, per_day, eta); stamp `updated`.
+
+    Numbers go through number() and eta through eta_date(), so event fields ("2.5", "60") are stored like CLI ones.
+    A bad value raises ValueError before anything changes.
+    """
+    fields = dict(fields)
+    for k in ("done", "total", "per_day"):
+        if fields.get(k) is not None:
+            fields[k] = number(str(fields[k]))
+    if fields.get("eta") is not None:
+        fields["eta"] = eta_date(str(fields["eta"]))
+    jobs = project.setdefault("jobs", [])
+    job = find_job(jobs, label)
+    if job is None:
+        job = {"label": label}
+        jobs.append(job)
+    for k in ("done", "total", "unit", "per_day", "eta"):
+        if fields.get(k) is not None:
+            job[k] = fields[k]
+    job["updated"] = stamp(now)
+    return job
+
+
+def finish_job(project, label, now, tz, day=None):
+    """Remove the job and log "Finished <label>" dated `day` (else now in tz). The removed job, or None if gone."""
+    jobs = project.get("jobs") or []
+    job = find_job(jobs, label)
+    if job is None:
+        return None
+    jobs.remove(job)
+    row = {"date": day or now.astimezone(tz).date().isoformat(), "text": f"Finished {job.get('label')}"}
+    rows = project.setdefault("recent_progress", [])
+    if not any(r.get("date") == row["date"] and r.get("text") == row["text"] for r in rows):
+        rows.append(row)  # a replay after a cursor reset must not log it twice
+    return job
 
 
 def main(argv=None):
@@ -88,37 +121,24 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     now = parse_now(a.now)
-    path = pathlib.Path(a.data)
-    data = json.loads(path.read_text())
-    project = next((p for p in data.get("projects") or [] if p.get("id") == a.project_id), None)
-    if project is None:
-        print(f"no project with id {a.project_id!r}", file=sys.stderr)
-        return 1
-
-    if a.cmd == "set":
-        jobs = project.setdefault("jobs", [])
-        job = find_job(jobs, a.label)
-        if job is None:
-            job = {"label": a.label}
-            jobs.append(job)
-        for k, v in (("done", a.done), ("total", a.total), ("unit", a.unit), ("per_day", a.per_day), ("eta", a.eta)):
-            if v is not None:
-                job[k] = v
-        job["updated"] = stamp(now)
-        print(f"set: {job['label']} {job.get('done', '?')} of {job.get('total', '?')}")
-    else:
-        jobs = project.get("jobs") or []
-        job = find_job(jobs, a.label)
-        if job is None:
-            print(f"no job {a.label!r} in {a.project_id}", file=sys.stderr)
-            return 1
-        jobs.remove(job)
-        project.setdefault("recent_progress", []).append(
-            {"date": now.astimezone(config_tz(a.data, a.config)).date().isoformat(), "text": f"Finished {job.get('label')}"})
-        print(f"done: {job.get('label')}")
-    data["as_of"] = stamp(now)
-    write_atomic(path, data)
-    return 0
+    with locked_json(pathlib.Path(a.data)) as data:
+        project = next((p for p in data.get("projects") or [] if p.get("id") == a.project_id), None)
+        if project is None:
+            print(f"no project with id {a.project_id!r}", file=sys.stderr)
+            raise NoWrite
+        if a.cmd == "set":
+            fields = {"done": a.done, "total": a.total, "unit": a.unit, "per_day": a.per_day, "eta": a.eta}
+            job = set_job(project, a.label, fields, now)
+            print(f"set: {job['label']} {job.get('done', '?')} of {job.get('total', '?')}")
+        else:
+            job = finish_job(project, a.label, now, config_tz(a.data, a.config))
+            if job is None:
+                print(f"no job {a.label!r} in {a.project_id}", file=sys.stderr)
+                raise NoWrite
+            print(f"done: {job.get('label')}")
+        data["as_of"] = stamp(now)
+        return 0
+    return 1
 
 
 if __name__ == "__main__":

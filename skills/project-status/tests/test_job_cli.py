@@ -84,7 +84,8 @@ class JobCli(unittest.TestCase):
         d = self.data()
         self.assertEqual(list(d.keys()), ["as_of", "projects", "waiting_on", "zz_last"])
         self.assertEqual(list(d["projects"][0].keys())[:4], ["id", "name", "status", "recent_progress"])
-        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["projects.json"])
+        # the lock file stays on purpose (shared with add_oneoff.py and apply_events.py); no .tmp is left
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["projects.json", "projects.json.lock"])
 
 
 if __name__ == "__main__":
